@@ -1,6 +1,6 @@
 {
   "name": "@currentjs/gen",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "CLI code generator",
   "license": "LGPL-3.0",
   "author": "Konstantin Zavalny",
@@ -10,7 +10,13 @@
   },
   "homepage": "https://github.com/currentjs/gen",
   "bugs": "https://github.com/currentjs/gen/issues",
-  "keywords": ["currentjs", "generator", "cli", "code", "generator"],
+  "keywords": [
+    "currentjs",
+    "generator",
+    "cli",
+    "code",
+    "generator"
+  ],
   "bin": {
     "current": "dist/cli.js",
     "currentjs": "dist/cli.js"
