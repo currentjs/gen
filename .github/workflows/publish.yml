@@ -67,12 +67,10 @@ jobs:
           CHANGELOG_TEXT="${{ inputs.changelog }}"
           
           # Create a temporary file with the new entry
-          cat > /tmp/new_entry.md << EOF
-## [$VERSION] - $DATE
-
-$CHANGELOG_TEXT
-
-EOF
+          echo "## [$VERSION] - $DATE" > /tmp/new_entry.md
+          echo "" >> /tmp/new_entry.md
+          echo "$CHANGELOG_TEXT" >> /tmp/new_entry.md
+          echo "" >> /tmp/new_entry.md
           
           # Insert new entry after the header
           if grep -q "^## \[" CHANGELOG.md; then
@@ -98,10 +96,7 @@ EOF
 
       - name: Bump version
         run: |
-          CHANGELOG_TEXT="${{ inputs.changelog }}"
-          npm version ${{ inputs.bump }} -m "Release: v%s
-
-${CHANGELOG_TEXT}"
+          npm version ${{ inputs.bump }} -m "Release: v%s"
 
       - name: Push changes and tags
         run: |
