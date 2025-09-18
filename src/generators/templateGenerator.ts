@@ -18,12 +18,14 @@ type EndpointConfig = {
   action: string;
   view?: string;
   layout?: string;
+  model?: string;
 };
 
 type RoutesConfig = {
   prefix?: string;
   strategy?: string[];
   endpoints: EndpointConfig[];
+  model?: string;
 };
 
 type FieldConfig = {

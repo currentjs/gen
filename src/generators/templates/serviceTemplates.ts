@@ -24,6 +24,12 @@ export const serviceTemplates = {
     list: `const {{ENTITY_LOWER}}s = await this.{{ENTITY_LOWER}}Store.getAll(page, limit);
     return {{ENTITY_LOWER}}s;`,
     
+    get: `const {{ENTITY_LOWER}} = await this.{{ENTITY_LOWER}}Store.getById(id);
+    if (!{{ENTITY_LOWER}}) {
+      throw new Error('{{ENTITY_NAME}} not found');
+    }
+    return {{ENTITY_LOWER}};`,
+    
     getById: `const {{ENTITY_LOWER}} = await this.{{ENTITY_LOWER}}Store.getById(id);
     if (!{{ENTITY_LOWER}}) {
       throw new Error('{{ENTITY_NAME}} not found');

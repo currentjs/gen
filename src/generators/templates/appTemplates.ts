@@ -1095,6 +1095,7 @@ models:
 
 api:                                    # REST API configuration
   prefix: /api/posts                    # Base URL for API endpoints
+  model: Post                           # Optional: which model this API serves (defaults to first model)
   endpoints:
     - method: GET                       # HTTP method
       path: /                           # Relative path (becomes /api/posts/)
@@ -1114,9 +1115,11 @@ api:                                    # REST API configuration
     - method: POST                      # Custom endpoint
       path: /:id/publish
       action: publish
+      model: Post                       # Optional: override model for specific endpoint
 
 routes:                                 # Web interface configuration
   prefix: /posts                        # Base URL for web pages
+  model: Post                           # Optional: which model this route serves (defaults to first model)
   strategy: [toast, back]               # Default success strategies for forms
   endpoints:
     - path: /                           # List page
@@ -1131,41 +1134,40 @@ routes:                                 # Web interface configuration
     - path: /:id/edit                   # Edit form page
       action: get                       # Load existing data
       view: postUpdate
+      model: Post                       # Optional: override model for specific endpoint
 
 actions:                                # Business logic mapping
   list:
-    handlers: [default:list]            # Use built-in list handler
+    handlers: [Post:default:list]       # Use built-in list handler
   get:
-    handlers: [default:getById]         # Use built-in get handler
+    handlers: [Post:default:get]    # Use built-in get handler
   create:
-    handlers: [default:create]          # Built-in create
+    handlers: [Post:default:create]     # Built-in create
   update:
-    handlers: [default:update]
+    handlers: [Post:default:update]
   delete:
     handlers: [                         # Chain multiple handlers
-      service:checkCanDelete,           # Custom business logic
-      default:delete
+      Post:checkCanDelete,              # Custom business logic
+      Post:default:delete
     ]
   publish:                              # Custom action
     handlers: [
-      default:getById,                  # Fetch entity
-      service:validateForPublish,       # Custom validation
-      service:updatePublishStatus       # Custom update logic
+      Post:default:get,             # Fetch entity
+      Post:validateForPublish,          # Custom validation
+      Post:updatePublishStatus          # Custom update logic
     ]
 
 permissions:                            # Role-based access control
-  - action: list
-    roles: [all]                        # Anyone (including anonymous)
-  - action: get
-    roles: [all]                        # Anyone can view
-  - action: create
-    roles: [authenticated]              # Must be logged in
-  - action: update
-    roles: [owner, admin]              # Entity owner or admin role
-  - action: delete
-    roles: [admin]                     # Only admin role
-  - action: publish
-    roles: [owner, editor, admin]      # Multiple roles allowed
+  - role: all
+    actions: [list, get]                # Anyone (including anonymous)
+  - role: authenticated
+    actions: [create]                   # Must be logged in
+  - role: owner
+    actions: [update, publish]          # Entity owner permissions
+  - role: admin
+    actions: [update, delete, publish]  # Admin role permissions
+  - role: editor
+    actions: [publish]                  # Editor role permissions
 \`\`\`
 
 **Make sure no \`ID\`/\`owner id\`/\`is deleted\` fields are present in the model definition, since it's added automatically**
@@ -1176,17 +1178,38 @@ permissions:                            # Role-based access control
 - \`boolean\` - True/false values
 - \`datetime\` - Date and time values
 
+**🔄 Handler vs Action Architecture:**
+- **Handler**: Creates a separate service method (one handler = one service method)
+- **Action**: Virtual controller concept that calls handler methods step-by-step
+
 **Built-in Action Handlers:**
-- \`default:list\` - Returns paginated list of entities
-- \`default:getById\` - Fetches single entity by ID
-- \`default:create\` - Creates new entity with validation
-- \`default:update\` - Updates existing entity by ID
-- \`default:delete\` - Soft deletes entity
+- \`ModelName:default:list\` - Creates service method with pagination parameters
+- \`ModelName:default:get\` - Creates service method named \`get\` with ID parameter
+- \`ModelName:default:create\` - Creates service method with DTO parameter
+- \`ModelName:default:update\` - Creates service method with ID and DTO parameters
+- \`ModelName:default:delete\` - Creates service method with ID parameter
 
 **Custom Action Handlers:**
-- \`service:methodName\` - Calls custom method on service class
-- Automatically generated with proper type signatures
-- Can be chained with built-in handlers
+- \`ModelName:customMethodName\` - Creates service method that accepts \`result, context\` parameters
+- \`result\`: Result from previous handler (or \`null\` if it's the first handler)
+- \`context\`: The request context object
+- Each handler generates a separate method in the service
+- User can customize the implementation after generation
+
+**🔗 Multiple Handlers per Action:**
+When an action has multiple handlers, each handler generates a separate service method, and the controller action calls them sequentially. The action returns the result from the last handler.
+
+**Parameter Passing Rules:**
+- **Default handlers** (\`:default:\`): Receive standard parameters (id, pagination, DTO, etc.)
+- **Custom handlers**: Receive \`(result, context)\` where:
+  - \`result\`: Result from previous handler, or \`null\` if it's the first handler
+  - \`context\`: Request context object
+
+**Handler Format Examples:**
+- \`Post:default:list\` - Creates Post service method \`list(page, limit)\`
+- \`Post:default:get\` - Creates Post service method \`get(id)\`
+- \`Post:validateContent\` - Creates Post service method \`validateContent(result, context)\`
+- \`Comment:notifySubscribers\` - Creates Comment service method \`notifySubscribers(result, context)\`
 
 **Strategy Options (for forms):**
 - \`toast\` - Success toast notification
@@ -1204,13 +1227,20 @@ permissions:                            # Role-based access control
 - Multiple roles can be specified for each action
 
 **Generated Files from Configuration:**
-- Domain entity class
-- Service class
-- API controller with REST endpoints
-- Web controller with page rendering
-- Store class with database operations
+- Domain entity class (one per model)
+- Service class (one per model)
+- API controller with REST endpoints (one per model)
+- Web controller with page rendering (one per model)
+- Store class with database operations (one per model)
 - HTML templates for all views
 - TypeScript interfaces and DTOs
+
+**Multi-Model Support:**
+- Each model gets its own service, controller, and store
+- Use \`model\` parameter in \`api\` and \`routes\` to specify which model to use (defaults to first model)
+- Use \`model\` parameter on individual endpoints to override model for specific endpoints
+- Action handlers use \`modelname:action\` format to specify which model's service method to call
+- Controllers and services are generated per model, not per module
 
 ## Module Structure
 \`\`\`

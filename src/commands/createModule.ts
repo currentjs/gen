@@ -15,6 +15,7 @@ function moduleYamlTemplate(moduleName: string): string {
     ],
     api: {
       prefix: `/api/${lower}`,
+      model: entityName,
       endpoints: [
         { method: 'GET', path: '/', action: 'list' },
         { method: 'GET', path: '/:id', action: 'get' },
@@ -25,6 +26,7 @@ function moduleYamlTemplate(moduleName: string): string {
     },
     routes: {
       prefix: `/${lower}`,
+      model: entityName,
       strategy: ['back', 'toast'],
       endpoints: [
         //bug: the order of the endpoints is important (to fix it in the router)
@@ -35,11 +37,11 @@ function moduleYamlTemplate(moduleName: string): string {
       ]
     },
     actions: {
-      list: { handlers: ['default:list'] },
-      get: { handlers: ['default:getById'] },
-      create: { handlers: ['default:create'] },
-      update: { handlers: ['default:update'] },
-      delete: { handlers: ['default:delete'] }
+      list: { handlers: [`${entityName}:default:list`] },
+      get: { handlers: [`${entityName}:default:get`] },
+      create: { handlers: [`${entityName}:default:create`] },
+      update: { handlers: [`${entityName}:default:update`] },
+      delete: { handlers: [`${entityName}:default:delete`] }
     },
     permissions: [] as any[]
   };
