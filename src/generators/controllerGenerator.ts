@@ -115,7 +115,54 @@ export class ControllerGenerator {
     }
   }
 
-  private generateMethodImplementation(action: string, entityName: string, hasUserParam: boolean): string {
+  private generateMethodImplementation(
+    action: string, 
+    entityName: string, 
+    hasUserParam: boolean, 
+    actions?: Record<string, ActionConfig>
+  ): string {
+    // Check if we have a custom service handler for this action
+    if (actions && actions[action] && actions[action].handlers) {
+      const handlers = actions[action].handlers;
+      const serviceHandler = handlers.find(h => h.startsWith('service:'));
+      
+      if (serviceHandler) {
+        const methodName = serviceHandler.substring('service:'.length);
+        const userExtraction = hasUserParam ? controllerTemplates.userExtraction : '';
+        const userParam = hasUserParam ? ', user' : '';
+        
+        return `${userExtraction}
+    const result = await this.${entityName.toLowerCase()}Service.${methodName}(context${userParam});
+    return result;`;
+      }
+      
+      // Handle default handlers mapping to existing templates
+      const defaultHandler = handlers.find(h => h.startsWith('default:'));
+      if (defaultHandler) {
+        const templateAction = defaultHandler.substring('default:'.length);
+        // Map some default handlers to existing template names
+        const templateMap: Record<string, string> = {
+          'getById': 'get'
+        };
+        const mappedAction = templateMap[templateAction] || templateAction;
+        
+        const template = controllerTemplates.methodImplementations[
+          mappedAction as keyof typeof controllerTemplates.methodImplementations
+        ];
+        if (template) {
+          const userExtraction = hasUserParam ? controllerTemplates.userExtraction : '';
+          const userParam = hasUserParam ? ', user' : '';
+
+          return template
+            .replace(/{{ENTITY_NAME}}/g, entityName)
+            .replace(/{{ENTITY_LOWER}}/g, entityName.toLowerCase())
+            .replace(/{{USER_EXTRACTION}}/g, userExtraction)
+            .replace(/{{USER_PARAM}}/g, userParam);
+        }
+      }
+    }
+    
+    // Fallback to existing template lookup
     const template = controllerTemplates.methodImplementations[
       action as keyof typeof controllerTemplates.methodImplementations
     ];
@@ -149,12 +196,13 @@ export class ControllerGenerator {
     entityName: string,
     roles: string[],
     hasPermissions: boolean,
-    kind: 'api' | 'web'
+    kind: 'api' | 'web',
+    actions?: Record<string, ActionConfig>
   ): string {
     const methodName = kind === 'web' ? this.getWebMethodName(endpoint) : this.getHttpMethodName(endpoint.method, endpoint.action);
     const httpDecorator = kind === 'web' ? 'Get' : this.getHttpDecorator(endpoint.method);
     const needsUser = this.needsUserParam(roles);
-    const methodImplementation = this.generateMethodImplementation(endpoint.action, entityName, needsUser);
+    const methodImplementation = this.generateMethodImplementation(endpoint.action, entityName, needsUser, actions);
     const returnType = this.getReturnType(endpoint.action, entityName);
 
     const renderDecorator = kind === 'web' && endpoint.view
@@ -262,7 +310,7 @@ export class ControllerGenerator {
       })
       .map(endpoint => {
         const roles = actionPermissions[endpoint.action] || [];
-        return this.generateControllerMethod(endpoint, entityName, roles, hasPermissions, kind);
+        return this.generateControllerMethod(endpoint, entityName, roles, hasPermissions, kind, moduleConfig.actions);
       })
       .join('\n\n');
 
