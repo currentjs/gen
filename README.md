@@ -290,6 +290,7 @@ models:
 # this part is already generated for you!
 api:
   prefix: /api/posts
+  model: Post                          # Optional: specify which model this API serves
   endpoints:
     - method: GET
       path: /
@@ -309,6 +310,7 @@ api:
 
 routes:
   prefix: /posts
+  model: Post                          # Optional: specify which model this route serves
   strategy: [back, toast]
   endpoints:
     - path: /
@@ -326,15 +328,15 @@ routes:
 
 actions:
   list:
-    handlers: [default:list]
+    handlers: [Post:default:list]
   get:
-    handlers: [default:getById]
+    handlers: [Post:default:get]
   create:
-    handlers: [default:create]
+    handlers: [Post:default:create]
   update:
-    handlers: [default:update]
+    handlers: [Post:default:update]
   delete:
-    handlers: [default:delete]
+    handlers: [Post:default:delete]
 
 permissions: []
 ```
@@ -473,38 +475,36 @@ routes:                                 # Web interface configuration
 
 actions:                                # Business logic mapping
   list:
-    handlers: [default:list]            # Use built-in list handler
+    handlers: [Post:default:list]       # Use built-in list handler
   get:
-    handlers: [default:getById]         # Use built-in get handler
+    handlers: [Post:default:get]    # Use built-in get handler
   create:
-    handlers: [default:create]          # Built-in create
+    handlers: [Post:default:create]     # Built-in create
   update:
-    handlers: [default:update]
+    handlers: [Post:default:update]
   delete:
     handlers: [                         # Chain multiple handlers
-      service:checkCanDelete,           # Custom business logic
-      default:delete
+      Post:checkCanDelete,              # Custom business logic
+      Post:default:delete
     ]
   publish:                              # Custom action
     handlers: [
-      default:getById,                  # Fetch entity
-      service:validateForPublish,       # Custom validation
-      service:updatePublishStatus       # Custom update logic
+      Post:default:get,             # Fetch entity
+      Post:validateForPublish,          # Custom validation
+      Post:updatePublishStatus          # Custom update logic
     ]
 
 permissions:                            # Role-based access control
-  - action: list
-    roles: [all]                        # Anyone (including anonymous)
-  - action: get
-    roles: [all]                        # Anyone can view
-  - action: create
-    roles: [authenticated]              # Must be logged in
-  - action: update
-    roles: [owner, admin]              # Entity owner or admin role
-  - action: delete
-    roles: [admin]                     # Only admin role
-  - action: publish
-    roles: [owner, editor, admin]      # Multiple roles allowed
+  - role: all
+    actions: [list, get]                # Anyone (including anonymous)
+  - role: authenticated
+    actions: [create]                   # Must be logged in
+  - role: owner
+    actions: [update, publish]          # Entity owner permissions
+  - role: admin
+    actions: [update, delete, publish]  # Admin role permissions
+  - role: editor
+    actions: [publish]                  # Editor role permissions
 ```
 
 ### Field Types and Validation
@@ -540,27 +540,122 @@ models:
 
 ### Action Handlers Explained
 
-**Built-in Handlers (`default:`):**
-- `default:list` - Returns paginated list of entities
-- `default:getById` - Fetches single entity by ID
-- `default:create` - Creates new entity with validation
-- `default:update` - Updates existing entity by ID
-- `default:delete` - Soft deletes entity
+**🔄 Handler vs Action Distinction:**
+- **Handler**: Creates a separate service method (one handler = one method)
+- **Action**: Virtual controller concept that calls handler methods step-by-step
 
-**Custom Handlers (`service:`):**
-- `service:methodName` - Calls custom method on service class
-- Method name must EXACTLY match the actual method name in your service
-- Can be chained with built-in handlers
+**Built-in Handlers:**
+- `ModelName:default:list` - Creates service method with pagination parameters
+- `ModelName:default:get` - Creates service method named `get` with ID parameter
+- `ModelName:default:create` - Creates service method with DTO parameter
+- `ModelName:default:update` - Creates service method with ID and DTO parameters
+- `ModelName:default:delete` - Creates service method with ID parameter
 
-**⚠️ Critical Service Method Convention:**
-```typescript
-// If your service has this method:
-async generateInvoicePdf(id: number): Promise<Buffer> { ... }
+**Custom Handlers:**
+- `ModelName:customMethodName` - Creates service method that accepts `result, context` parameters
+- `result`: Result from previous handler (or `null` if it's the first handler)
+- `context`: The request context object
+- User can customize the implementation after generation
+- Each handler generates a separate method in the service
 
-// Use this in YAML:
-action: generatePdf
-handlers: [service:generateInvoicePdf]  # NOT service:generatePdf
+**🔗 Multiple Handlers per Action:**
+When an action has multiple handlers, each handler generates a separate service method, and the controller action calls them sequentially:
+
+```yaml
+actions:
+  get:
+    handlers: 
+      - Invoice:default:get    # Creates Invoice.get() method
+      - Invoice:enrichData         # Creates Invoice.enrichData() method
 ```
+
+**Generated Code Example:**
+```typescript
+// InvoiceService.ts
+async get(id: number): Promise<Invoice> { 
+  // Standard get implementation
+}
+async enrichData(result: any, context: any): Promise<any> { 
+  // TODO: Implement custom enrichData method
+  // result = result from previous handler (Invoice object in this case)
+  // context = request context
+}
+
+// InvoiceController.ts  
+async get(context: IContext): Promise<Invoice> {
+  const id = parseInt(context.request.parameters.id as string);
+  const result1 = await this.invoiceService.get(id);
+  const result = await this.invoiceService.enrichData(result1, context);
+  return result; // Returns result from last handler
+}
+```
+
+**Parameter Passing Rules:**
+- **Default handlers** (`:default:`): Receive standard parameters (id, pagination, DTO, etc.)
+- **Custom handlers**: Receive `(result, context)` where:
+  - `result`: Result from previous handler, or `null` if it's the first handler
+  - `context`: Request context object
+
+**Handler Format Examples:**
+```yaml
+actions:
+  list:
+    handlers: [Post:default:list]       # Single handler: list(page, limit)
+  get:
+    handlers: [Post:default:get]        # Single handler: get(id)
+  complexFlow:
+    handlers: [
+      Post:default:create,              # create(userData) - standard parameters
+      Post:sendNotification,            # sendNotification(result, context) - result from create
+      Comment:default:create            # create(userData) - standard parameters
+    ]
+  customFirst:
+    handlers: [
+      Post:validateInput,               # validateInput(null, context) - first handler
+      Post:default:create               # create(userData) - standard parameters
+    ]
+```
+
+### Multi-Model Support 🔄
+
+When you have multiple models in a single module, the system generates individual services, controllers, and stores for each model:
+
+```yaml
+models:
+  - name: Post
+    fields: [...]
+  - name: Comment
+    fields: [...]
+
+api:
+  model: Post                          # This API serves the Post model
+  prefix: /api/posts
+  endpoints: [...]
+
+# You can create separate API configs for other models
+commentApi:
+  model: Comment                       # This API serves the Comment model
+  prefix: /api/comments
+  endpoints: [...]
+
+actions:
+  createPost:
+    handlers: [Post:default:create]    # Calls PostService.create()
+  addComment:
+    handlers: [Comment:default:create] # Calls CommentService.create()
+  publishPost:
+    handlers: [
+      Post:validateContent,            # Calls PostService.validateContent()
+      Comment:notifySubscribers        # Calls CommentService.notifySubscribers()
+    ]
+```
+
+**Key Points:**
+- Each model gets its own Service, Controller, and Store classes
+- Use `model` parameter to specify which model an API/route serves (defaults to first model)
+- Use `ModelName:default:action` for built-in operations (list, create, etc.)
+- Use `ModelName:customMethod` for custom service methods
+- You can mix actions across different models in a single handler chain
 
 ### Strategy Options for Forms
 
@@ -600,14 +695,14 @@ Control who can access what actions:
 
 ```yaml
 permissions:
-  - action: create
-    roles: [authenticated]     # Any logged-in user
-  - action: update  
-    roles: [owner, admin]      # Owner of entity or admin
-  - action: delete
-    roles: [admin]             # Only admins
-  - action: list
-    roles: [all]               # Anyone (including anonymous)
+  - role: all
+    actions: [list]            # Anyone (including anonymous)
+  - role: authenticated
+    actions: [create]          # Any logged-in user
+  - role: owner
+    actions: [update]          # Owner of entity
+  - role: admin
+    actions: [update, delete]  # Admin permissions
 ```
 
 **Special Roles:**
