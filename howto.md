@@ -168,6 +168,12 @@ permissions:                            # Role-based access control
 - Automatically generated with proper type signatures
 - Can be chained with built-in handlers
 
+**⚠️ IMPORTANT: Service Method Naming Convention**
+- The method name in `service:methodName` must EXACTLY match the actual method name in your service class
+- Example: If your service has `async generatePdf()`, use `service:generatePdf` (NOT `service:generateInvoicePdf`)
+- Example: If your service has `async downloadFile()`, use `service:downloadFile` (NOT `service:downloadPdf`)
+- Mismatch will cause an unexpected errors
+
 **Strategy Options (for forms):**
 - `toast` - Success toast notification
 - `back` - Navigate back in browser history

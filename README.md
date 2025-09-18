@@ -34,6 +34,42 @@ currentjs generate
 currentjs generate Blog --yaml app.yaml
 ```
 
+## Step-by-Step Development Workflow 🔄
+
+### Basic Development Flow
+
+1. **Create an empty app**
+   ```bash
+   currentjs create app # will create an app inside the current directory
+   # or:
+   currentjs create app my-project # will create a directory "my-project" and create an app there
+   ```
+
+2. **Create a new module**
+   ```bash
+   currentjs create module Blog
+   ```
+
+3. **Define your module's configuration** in `src/modules/Blog/blog.yaml`:
+   - Define your data models
+   - Configure API routes & actions (CRUD is already configured)
+   - Set up permissions
+
+4. **Generate TypeScript files**
+   ```bash
+   currentjs generate Blog
+   ```
+
+5. **Make custom changes** (if needed) to:
+   - Business logic in models
+   - Custom actions in services
+   - HTML templates
+
+6. **Commit your changes** to preserve them
+   ```bash
+   currentjs commit
+   ```
+
 ## What Does This Actually Do? 🤔
 
 This generator takes your YAML specifications and creates:
@@ -159,35 +195,6 @@ currentjs diff Blog
 +   }
 ```
 
-#### 🎯 **registry.json Explained**
-
-The registry tracks the "fingerprint" of each generated file:
-
-```json
-{
-  "src/modules/Blog/services/PostService.ts": {
-    "hash": "a1b2c3d4...",           // Hash of the generated baseline
-    "updatedAt": "2024-01-15T10:30:00.000Z",
-    "diffFormat": "hunks-v1",       // Change tracking format
-    "diffBaseHash": "a1b2c3d4...",  // Hash of baseline this diff applies to
-    "diffHunks": [                  // Your custom changes as patches
-      {
-        "oldStart": 15,
-        "newStart": 16, 
-        "oldLines": 0,
-        "newLines": 8,
-        "oldContent": [],
-        "newContent": [
-          "  async publishPost(id: number): Promise<void> {",
-          "    const post = await this.getById(id);",
-          "    // ... your custom logic"
-        ]
-      }
-    ]
-  }
-}
-```
-
 #### 🌟 **Workflow Benefits**
 
 **For Solo Development:**
@@ -210,23 +217,6 @@ npm run build
 npm run deploy
 ```
 
-#### 🔄 **Advanced Workflows**
-
-**Evolving Your Schema:**
-```bash
-# 1. Modify your YAML files
-vim src/modules/Blog/Blog.yaml
-
-# 2. See what would change
-currentjs diff Blog
-
-# 3. Regenerate with preserved customizations
-currentjs generate --force
-
-# 4. Commit any new customizations
-currentjs commit
-```
-
 **Sharing Customizations:**
 ```bash
 # Export your modifications
@@ -237,17 +227,6 @@ git push
 # Teammates get your changes
 git pull
 currentjs generate  # Their code automatically includes your customizations
-```
-
-**Branching Strategy:**
-```bash
-# Feature branch: only track YAML changes
-git checkout -b feature/add-comments
-# Edit Blog.yaml to add Comment model
-currentjs generate
-currentjs commit  # Save any customizations
-git add src/modules/Blog/Blog.yaml registry.json
-git commit -m "Add comment system"
 ```
 
 This change management system solves the age-old problem of "generated code vs. version control" by treating your customizations as first-class citizens while keeping your repository clean and merge-friendly!
@@ -264,7 +243,6 @@ src/modules/*/application/validation/*.ts
 src/modules/*/infrastructure/controllers/*.ts
 src/modules/*/infrastructure/stores/*.ts
 src/modules/*/infrastructure/interfaces/*.ts
-src/modules/*/views/*.html
 
 # Keep these in version control
 !*.yaml
@@ -282,7 +260,7 @@ With this setup, your repository stays focused on what matters: your specificati
 
 ## Example: Building a Blog System 📝
 
-Here's how you'd create a complete blog system:
+Here's how you'd create a complete very simple blog system:
 
 ### 1. Create the app and module
 ```bash
@@ -409,157 +387,38 @@ my-app/
     └── translations.json       # i18n support
 ```
 
-## YAML Configuration Reference 📋
 
-Understanding the key configuration sections in your module YAML files:
+## Complete YAML Configuration Guide 📋
 
-### Strategy Settings 🎯
+### Module Structure Overview
 
-The `strategy` array controls what happens after successful form submissions in your web interface:
+When you create a module, you'll work primarily with the `ModuleName.yaml` file. This file defines everything about your module:
 
-```yaml
-routes:
-  prefix: /posts
-  strategy: [back, toast]  # Multiple strategies can be combined
-  endpoints:
-    # ... your routes
+```
+src/modules/YourModule/
+├── YourModule.yaml           # ← This is where you define everything
+├── domain/
+│   └── entities/             # Generated domain models
+├── application/
+│   ├── services/             # Generated business logic
+│   └── validation/           # Generated input validation
+├── infrastructure/
+│   ├── controllers/          # Generated HTTP endpoints
+│   └── stores/               # Generated data access
+└── views/                    # Generated HTML templates
 ```
 
-**Available Strategies:**
-- **`toast`** - Shows a success notification popup (most common)
-- **`back`** - Navigates back to the previous page using browser history
-- **`message`** - Displays a success message in a specific element on the page
-- **`modal`** - Shows a success message in a modal dialog
-- **`redirect`** - Redirects to a specific URL after success
-- **`refresh`** - Refreshes the current page
+### Complete Module Configuration Example
 
-**Examples:**
-```yaml
-# Show toast and go back
-strategy: [toast, back]
-
-# Just show a toast notification
-strategy: [toast]
-
-# Show message in a specific element
-strategy: [message]
-
-# Multiple feedback mechanisms
-strategy: [toast, modal, back]
-```
-
-The strategy is automatically applied to all form submissions in your generated templates (create, update forms).
-
-### Actions & Handlers 🔧
-
-The `actions` section maps logical business operations to their implementations:
-
-```yaml
-actions:
-  list:
-    handlers: [default:list]        # Built-in CRUD handler
-  get:
-    handlers: [default:getById]     # Built-in get by ID
-  create:
-    handlers: [default:create]      # Built-in create
-  update:
-    handlers: [default:update]      # Built-in update
-  delete:
-    handlers: [default:delete]      # Built-in delete
-  customAction:
-    handlers: [service:myMethod]    # Custom service method
-  complexAction:
-    handlers: [                     # Multiple handlers (executed in order)
-      default:getById,
-      service:validateData,
-      default:update
-    ]
-```
-
-**Built-in Handlers (`default:`):**
-- **`default:list`** - Returns all entities with optional filtering/pagination
-- **`default:getById`** - Fetches a single entity by ID
-- **`default:create`** - Creates a new entity with validation
-- **`default:update`** - Updates an existing entity by ID
-- **`default:delete`** - Soft or hard deletes an entity by ID
-
-**Custom Handlers (`service:`):**
-- **`service:methodName`** - Calls a custom method on your service class
-- Useful for complex business logic beyond basic CRUD
-- Methods are automatically generated with proper type signatures
-
-**Handler Chaining:**
-You can chain multiple handlers to create complex workflows:
-```yaml
-actions:
-  publish:
-    handlers: [
-      default:getById,           # First, fetch the entity
-      service:validateForPublish,  # Then, run custom validation
-      service:updatePublishStatus, # Finally, update status
-      service:sendNotification    # And send notifications
-    ]
-```
-
-### Permissions & Security 🔐
-
-The `permissions` array controls role-based access to your actions:
-
-```yaml
-permissions:
-  - action: create
-    roles: [admin, editor]        # Only admins and editors can create
-  - action: delete
-    roles: [admin]                # Only admins can delete
-  - action: list
-    roles: [all]                  # Everyone can list (including anonymous)
-  - action: update
-    roles: [admin, editor, owner] # Multiple roles allowed
-```
-
-**Special Roles:**
-- **`all`** - Any user, including anonymous (no authentication required)
-- **`authenticated`** - Any logged-in user 
-- **`owner`** - The user who owns/created the entity (automatic ownership check)
-- **`admin`**, **`editor`**, **`user`** - Custom roles from your authentication system
-
-**How It Works:**
-```typescript
-// Generated service methods automatically include permission checks
-async create(data: CreatePostDto, user?: AuthenticatedUser): Promise<Post> {
-  // Auto-generated permission check
-  if (!user || !['admin', 'editor'].includes(user.role)) {
-    throw new Error('Insufficient permissions');
-  }
-  // ... rest of create logic
-}
-```
-
-**No Permissions = Open Access:**
-```yaml
-permissions: []  # No restrictions - all actions available to everyone
-```
-
-**Ownership-Based Permissions:**
-```yaml
-permissions:
-  - action: update
-    roles: [owner, admin]  # Users can update their own posts, admins can update any
-  - action: delete
-    roles: [owner]         # Only the creator can delete their post
-```
-
-### Complete Configuration Example 🚀
-
-Here's a real-world blog module with all concepts combined:
+Here's a comprehensive example showing all available configuration options:
 
 ```yaml
 models:
-  - name: Post
+  - name: Post                          # Entity name (capitalized)
     fields:
-      - name: title
-        type: string
-        required: true
+      - name: title                     # Field name
+        type: string                    # Field type: string, number, boolean, datetime
+        required: true                  # Validation requirement
       - name: content
         type: string
         required: true
@@ -573,86 +432,208 @@ models:
         type: string
         required: true
 
-api:
-  prefix: /api/posts
+api:                                    # REST API configuration
+  prefix: /api/posts                    # Base URL for API endpoints
   endpoints:
+    - method: GET                       # HTTP method
+      path: /                           # Relative path (becomes /api/posts/)
+      action: list                      # Action name (references actions section)
     - method: GET
-      path: /
-      action: list
+      path: /:id                        # Path parameter
+      action: get
     - method: POST
       path: /
       action: create
-    - method: GET
-      path: /:id
-      action: get
     - method: PUT
       path: /:id
       action: update
     - method: DELETE
       path: /:id
       action: delete
-    - method: POST
+    - method: POST                      # Custom endpoint
       path: /:id/publish
       action: publish
 
-routes:
-  prefix: /posts
-  strategy: [toast, back]           # Show success message and navigate back
+routes:                                 # Web interface configuration
+  prefix: /posts                        # Base URL for web pages
+  strategy: [toast, back]               # Default success strategies for forms
   endpoints:
-    - path: /
+    - path: /                           # List page
       action: list
-      view: postList
-    - path: /:id
+      view: postList                    # Template name
+    - path: /:id                        # Detail page
       action: get
       view: postDetail
-    - path: /create
-      action: empty
+    - path: /create                     # Create form page
+      action: empty                     # No data loading action
       view: postCreate
-    - path: /:id/edit
-      action: get
+    - path: /:id/edit                   # Edit form page
+      action: get                       # Load existing data
       view: postUpdate
 
-actions:
+actions:                                # Business logic mapping
   list:
-    handlers: [default:list]
+    handlers: [default:list]            # Use built-in list handler
   get:
-    handlers: [default:getById]
+    handlers: [default:getById]         # Use built-in get handler
   create:
-    handlers: [
-      service:validateContent,      # Custom validation
-      default:create,               # Standard creation
-      service:sendCreationNotice    # Custom notification
-    ]
+    handlers: [default:create]          # Built-in create
   update:
     handlers: [default:update]
   delete:
-    handlers: [
-      service:checkCanDelete,       # Custom business logic
+    handlers: [                         # Chain multiple handlers
+      service:checkCanDelete,           # Custom business logic
       default:delete
     ]
-  publish:
+  publish:                              # Custom action
     handlers: [
-      default:getById,
-      service:validateForPublish,
-      service:updatePublishStatus
+      default:getById,                  # Fetch entity
+      service:validateForPublish,       # Custom validation
+      service:updatePublishStatus       # Custom update logic
     ]
 
-permissions:
+permissions:                            # Role-based access control
   - action: list
-    roles: [all]                    # Anyone can view list
+    roles: [all]                        # Anyone (including anonymous)
   - action: get
-    roles: [all]                    # Anyone can view individual posts
+    roles: [all]                        # Anyone can view
   - action: create
-    roles: [authenticated]          # Must be logged in to create
+    roles: [authenticated]              # Must be logged in
   - action: update
-    roles: [owner, admin]          # Authors and admins can edit
+    roles: [owner, admin]              # Entity owner or admin role
   - action: delete
-    roles: [admin]                 # Only admins can delete
+    roles: [admin]                     # Only admin role
   - action: publish
-    roles: [owner, admin]          # Authors and admins can publish
+    roles: [owner, editor, admin]      # Multiple roles allowed
 ```
 
-This configuration creates a sophisticated blog system with proper security, custom business logic, and user-friendly interface behaviors.
+### Field Types and Validation
+
+**Available Field Types:**
+- `string` - Text data (VARCHAR in database)
+- `number` - Numeric data (INT/DECIMAL in database)  
+- `boolean` - True/false values (BOOLEAN in database)
+- `datetime` - Date and time values (DATETIME in database)
+
+**Important Field Rules:**
+- **Never include `id`/`owner_id`/`is_deleted` fields** - these are added automatically
+- Use `required: true` for mandatory fields
+- Use `required: false` for optional fields
+
+```yaml
+models:
+  - name: User
+    fields:
+      - name: email
+        type: string
+        required: true
+      - name: age
+        type: number
+        required: false
+      - name: isActive
+        type: boolean
+        required: true
+      - name: lastLoginAt
+        type: datetime
+        required: false
+```
+
+### Action Handlers Explained
+
+**Built-in Handlers (`default:`):**
+- `default:list` - Returns paginated list of entities
+- `default:getById` - Fetches single entity by ID
+- `default:create` - Creates new entity with validation
+- `default:update` - Updates existing entity by ID
+- `default:delete` - Soft deletes entity
+
+**Custom Handlers (`service:`):**
+- `service:methodName` - Calls custom method on service class
+- Method name must EXACTLY match the actual method name in your service
+- Can be chained with built-in handlers
+
+**⚠️ Critical Service Method Convention:**
+```typescript
+// If your service has this method:
+async generateInvoicePdf(id: number): Promise<Buffer> { ... }
+
+// Use this in YAML:
+action: generatePdf
+handlers: [service:generateInvoicePdf]  # NOT service:generatePdf
+```
+
+### Strategy Options for Forms
+
+Configure what happens after successful form submissions:
+
+```yaml
+routes:
+  strategy: [toast, back]  # Show success message and go back
+```
+
+**Available Strategies:**
+- `toast` - Success toast notification (most common)
+- `back` - Navigate back in browser history
+- `message` - Inline success message
+- `modal` - Modal success dialog
+- `redirect` - Redirect to specific URL
+- `refresh` - Reload current page
+
+**Common Strategy Combinations:**
+```yaml
+# Most common: Show message and go back
+strategy: [toast, back]
+
+# Show message and stay on page
+strategy: [toast]
+
+# Show modal dialog
+strategy: [modal]
+
+# Multiple feedback
+strategy: [toast, modal, back]
+```
+
+### Permission System
+
+Control who can access what actions:
+
+```yaml
+permissions:
+  - action: create
+    roles: [authenticated]     # Any logged-in user
+  - action: update  
+    roles: [owner, admin]      # Owner of entity or admin
+  - action: delete
+    roles: [admin]             # Only admins
+  - action: list
+    roles: [all]               # Anyone (including anonymous)
+```
+
+**Special Roles:**
+- `all` - Everyone (including anonymous users)
+- `authenticated` - Any logged-in user
+- `owner` - User who created the entity
+- `admin`, `editor`, `user` - Custom roles from JWT token
+
+**How Ownership Works:**
+The system automatically adds an `owner_id` field to track who created each entity. When you use `owner` role, it checks if the current user's ID matches the entity's `owner_id`.
+
+### Code vs Configuration Guidelines
+
+**✅ Use YAML Configuration For:**
+- Basic CRUD operations
+- Standard REST endpoints
+- Simple permission rules
+- Form success strategies
+- Standard data field types
+
+**✅ Write Custom Code For:**
+- Complex business logic
+- Custom validation rules
+- Data transformations
+- Integration with external services
+- Complex database queries
 
 ## Part of the Framework Ecosystem 🌍
 
