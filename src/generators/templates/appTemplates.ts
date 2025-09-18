@@ -12,15 +12,18 @@ export const packageJsonTemplate = (appName: string) => JSON.stringify(
       start: 'node build/app.js',
       clean: 'rm -rf build',
       dev: 'ts-node src/app.ts',
-      devstand: 'npm i && npm link @currentjs/router @currentjs/templating @currentjs/provider-mysql && npm run build'
+      // uncomment this if you want to use the devstand script
+      // devstand: 'npm i && npm link @currentjs/router @currentjs/templating @currentjs/provider-mysql && npm run build'
     },
-    dependencies: {},
+    dependencies: {
+      '@currentjs/router': 'latest',
+      '@currentjs/templating': 'latest',
+      '@currentjs/provider-mysql': 'latest',
+    },
     devDependencies: {
       typescript: '^5.6.3',
       '@types/node': '^22.7.4',
       '@koz1024/path-fixer': '^0.2.1',
-      // '@currentjs/router': '^0.1.0',
-      // '@currentjs/templating': '^0.1.0'
     },
     type: 'module'
   },
