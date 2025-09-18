@@ -75,8 +75,8 @@ export class ControllerGenerator {
       actionPermissions[action] = [];
     });
 
-    moduleConfig.permissions.forEach(permission => {
-      permission.actions.forEach(action => {
+    (moduleConfig.permissions || []).forEach(permission => {
+      (permission.actions || []).forEach(action => {
         if (actionPermissions[action]) {
           actionPermissions[action].push(permission.role);
         }
