@@ -10,6 +10,8 @@ interface FieldConfig {
   required?: boolean;
   unique?: boolean;
   auto?: boolean;
+  // Relationship configuration
+  displayFields?: string[];  // Fields from foreign model to access (e.g., ['name', 'email'])
 }
 
 interface ModelConfig {
@@ -38,6 +40,8 @@ export class DomainModelGenerator {
     object: 'object'
   };
 
+  private availableModels: Set<string> = new Set();
+
   private getDefaultValue(type: string): string {
     switch (type) {
       case 'datetime':
@@ -59,7 +63,28 @@ export class DomainModelGenerator {
   }
 
   private mapType(yamlType: string): string {
+    // Check if this is a known model (relationship)
+    if (this.availableModels.has(yamlType)) {
+      return yamlType;
+    }
     return this.typeMapping[yamlType] || 'any';
+  }
+
+  private setAvailableModels(models: ModelConfig[]): void {
+    this.availableModels.clear();
+    models.forEach(model => {
+      this.availableModels.add(model.name);
+    });
+  }
+
+  private getRelatedModelImports(modelConfig: ModelConfig): string[] {
+    const imports: string[] = [];
+    modelConfig.fields.forEach(field => {
+      if (this.availableModels.has(field.type) && field.type !== modelConfig.name) {
+        imports.push(`import { ${field.type} } from './${field.type}';`);
+      }
+    });
+    return imports;
   }
 
   private generateConstructorParameter(field: FieldConfig): string {
@@ -82,6 +107,28 @@ export class DomainModelGenerator {
     return param;
   }
 
+  private isRelationshipField(field: FieldConfig): boolean {
+    return this.availableModels.has(field.type);
+  }
+
+  private getForeignKeyFieldName(field: FieldConfig): string {
+    // Convention: fieldName + 'Id' (e.g., owner -> ownerId)
+    return field.name + 'Id';
+  }
+
+  private generateForeignKeyParameter(field: FieldConfig): string {
+    const foreignKeyName = this.getForeignKeyFieldName(field);
+    const isOptional = !field.required && !field.auto;
+    
+    let param = `public ${foreignKeyName}`;
+    if (isOptional) {
+      param += '?';
+    }
+    param += ': number';
+    
+    return param;
+  }
+
   private generateSetterMethods(modelConfig: ModelConfig): string {
     const setterMethods: string[] = [];
 
@@ -89,8 +136,12 @@ export class DomainModelGenerator {
       if (!field.auto && field.name !== 'id') {
         const tsType = this.mapType(field.type);
         const methodName = `set${field.name.charAt(0).toUpperCase() + field.name.slice(1)}`;
+        
+        // For all fields (including relationships), generate simple setter
+        // Domain model doesn't care about FKs - that's infrastructure concern
+        const isOptional = !field.required && !field.auto;
         const setter = `
-    ${methodName}(${field.name}: ${tsType}): void {
+    ${methodName}(${field.name}: ${tsType}${isOptional ? ' | undefined' : ''}): void {
         this.${field.name} = ${field.name};
     }`;
         setterMethods.push(setter);
@@ -124,13 +175,19 @@ export class DomainModelGenerator {
 
     // Process other fields
     sortedFields.forEach(field => {
+      // For relationship fields, only add the relationship object (not FK)
+      // Domain model works with objects only - FK is infrastructure concern
       constructorParams.push(this.generateConstructorParameter(field));
     });
 
     const constructorParamsStr = constructorParams.join(',\n        ');
     const setterMethods = this.generateSetterMethods(modelConfig);
 
-    return `export class ${className} {
+    // Generate imports for related models
+    const imports = this.getRelatedModelImports(modelConfig);
+    const importsStr = imports.length > 0 ? imports.join('\n') + '\n\n' : '';
+
+    return `${importsStr}export class ${className} {
     public constructor(
         ${constructorParamsStr}
     ) { }
@@ -152,6 +209,8 @@ ${setterMethods}
       const app = config as { modules: Record<string, ModuleConfig> };
       Object.values(app.modules).forEach(moduleConfig => {
         if (moduleConfig.models && moduleConfig.models.length > 0) {
+          // Set available models for relationship detection
+          this.setAvailableModels(moduleConfig.models);
           moduleConfig.models.forEach(m => {
             result[m.name] = this.generateModel(m);
           });
@@ -159,6 +218,8 @@ ${setterMethods}
       });
     } else if ((config as any).models) {
       const module = config as ModuleConfig;
+      // Set available models for relationship detection
+      this.setAvailableModels(module.models);
       module.models.forEach(m => {
         result[m.name] = this.generateModel(m);
       });
@@ -173,13 +234,18 @@ ${setterMethods}
     if ((config as any).modules) {
       Object.values((config as any).modules as Record<string, ModuleConfig>).forEach(moduleConfig => {
         if (moduleConfig.models && moduleConfig.models.length > 0) {
+          // Set available models for relationship detection
+          this.setAvailableModels(moduleConfig.models);
           moduleConfig.models.forEach(m => {
             result[m.name] = this.generateModel(m);
           });
         }
       });
     } else if ((config as any).models) {
-      (config as ModuleConfig).models.forEach(m => {
+      const module = config as ModuleConfig;
+      // Set available models for relationship detection
+      this.setAvailableModels(module.models);
+      module.models.forEach(m => {
         result[m.name] = this.generateModel(m);
       });
     }

@@ -65,8 +65,11 @@ export async function handleGenerateAll(
     importAuth?: string;
     wiring: string[]; // store + service
     registration: string;
+    storeDependencies?: string[]; // Names of stores this store depends on
+    serviceDependencies?: string[]; // Names of stores this service depends on
   };
   const initsBySrcDir = new Map<string, ControllerInit[]>();
+  const moduleConfigByFolder = new Map<string, any>(); // Cache module configs by folder name
 
   // Run modules sequentially to avoid overlapping interactive prompts
   for (const moduleYamlRel of filteredModules) {
@@ -80,6 +83,12 @@ export async function handleGenerateAll(
     }
 
     const moduleDir = path.dirname(moduleYamlPath);
+    const moduleFolderName = path.basename(moduleDir);
+
+    // Parse and cache module config for dependency detection
+    const moduleYamlContent = fs.readFileSync(moduleYamlPath, 'utf8');
+    const moduleConfig = parseYaml(moduleYamlContent);
+    moduleConfigByFolder.set(moduleFolderName, moduleConfig);
 
     // Output folders inside module structure
     const domainOut = path.join(moduleDir, 'domain', 'entities');
@@ -116,6 +125,59 @@ export async function handleGenerateAll(
     if (!srcDir) continue;
 
     const list = initsBySrcDir.get(srcDir) ?? [];
+    
+    // First, add entries for all models in this module (even without controllers)
+    // This ensures dependency stores are initialized
+    if (moduleConfig && moduleConfig.models) {
+      const m = moduleYamlPath.match(/modules\/([^/]+)\//);
+      const moduleFolder = m ? m[1] : path.basename(moduleDir);
+      
+      for (const model of moduleConfig.models) {
+        const entityName = model.name;
+        const entityVar = entityName.charAt(0).toLowerCase() + entityName.slice(1);
+        
+        // Check if we already have an entry for this entity
+        if (list.find(x => x.entityName === entityName)) {
+          continue; // Skip if already added via controller
+        }
+        
+        const storeImportPath = `${PATH_PATTERNS.MODULES_RELATIVE}${moduleFolder}/${PATH_PATTERNS.INFRASTRUCTURE}/${PATH_PATTERNS.STORES}/${entityName}${GENERATOR_SUFFIXES.STORE}`;
+        const serviceImportPath = `${PATH_PATTERNS.MODULES_RELATIVE}${moduleFolder}/${PATH_PATTERNS.APPLICATION}/${PATH_PATTERNS.SERVICES}/${entityName}${GENERATOR_SUFFIXES.SERVICE}`;
+        
+        // Detect dependencies
+        const storeDeps: string[] = [];
+        const serviceDeps: string[] = [];
+        
+        if (model.fields) {
+          model.fields.forEach((field: any) => {
+            const isRelationship = moduleConfig.models.some((m: any) => m.name === field.type);
+            if (isRelationship) {
+              storeDeps.push(field.type);
+              serviceDeps.push(field.type);
+            }
+          });
+        }
+        
+        // Add a minimal init entry (no controller, just for dependency resolution)
+        const init: ControllerInit = {
+          ctrlName: '', // No controller
+          entityName,
+          entityVar,
+          importController: '',
+          importStore: `import { ${entityName}Store } from '${storeImportPath}';`,
+          importService: `import { ${entityName}Service } from '${serviceImportPath}';`,
+          importAuth: undefined,
+          wiring: [],
+          registration: '',
+          storeDependencies: storeDeps,
+          serviceDependencies: serviceDeps
+        };
+        
+        list.push(init);
+      }
+    }
+    
+    // Then process controllers
     for (const filePath of generatedControllers) {
       const rel = path
         .relative(srcDir, filePath)
@@ -137,25 +199,57 @@ export async function handleGenerateAll(
 
       const storeImportPath = `${PATH_PATTERNS.MODULES_RELATIVE}${moduleFolder}/${PATH_PATTERNS.INFRASTRUCTURE}/${PATH_PATTERNS.STORES}/${entityName}${GENERATOR_SUFFIXES.STORE}`;
       const serviceImportPath = `${PATH_PATTERNS.MODULES_RELATIVE}${moduleFolder}/${PATH_PATTERNS.APPLICATION}/${PATH_PATTERNS.SERVICES}/${entityName}${GENERATOR_SUFFIXES.SERVICE}`;
-      //const authImportPath = `./modules/${moduleFolder}/application/auth/AuthService`;
-      // const hasAuth = true;//fs.existsSync(path.join(srcDir, authImportPath + '.ts'));
+      
+      // Look up the correct module config for this controller
+      const controllerModuleConfig = moduleConfigByFolder.get(moduleFolder);
+      
+      // Detect store and service dependencies from module config
+      const storeDeps: string[] = [];
+      const serviceDeps: string[] = [];
+      
+      if (controllerModuleConfig && controllerModuleConfig.models) {
+        const model = controllerModuleConfig.models.find((m: any) => m.name === entityName);
+        if (model && model.fields) {
+          model.fields.forEach((field: any) => {
+            // Check if this field is a relationship (type is another model name)
+            const isRelationship = controllerModuleConfig.models.some((m: any) => m.name === field.type);
+            if (isRelationship) {
+              storeDeps.push(field.type);
+              serviceDeps.push(field.type);
+            }
+          });
+        }
+      }
 
-      const init: ControllerInit = {
-        ctrlName,
-        entityName,
-        entityVar,
-        importController: `import { ${ctrlName} } from '${importPath}';`,
-        importStore: `import { ${entityName}Store } from '${storeImportPath}';`,
-        importService: `import { ${entityName}Service } from '${serviceImportPath}';`,
-        importAuth: undefined, //hasAuth ? `import { AuthService } from '${authImportPath}';` : undefined,
-        wiring: [
-          `const ${entityVar}Store = new ${entityName}Store(db);`,
-          `const ${entityVar}Service = new ${entityName}Service(${entityVar}Store);`
-        ],
-        registration: `new ${ctrlName}(${entityVar}Service)`
-      };
-      // Avoid duplicates by controller (keep both Api/Web), dedupe wiring later by entityName
-      if (!list.find((x) => x.ctrlName === init.ctrlName)) list.push(init);
+      // Check if we already have a base entry for this entity (from all models)
+      const existingEntry = list.find(x => x.entityName === entityName && !x.ctrlName);
+      
+      if (existingEntry) {
+        // Update existing entry to add controller info
+        existingEntry.ctrlName = ctrlName;
+        existingEntry.importController = `import { ${ctrlName} } from '${importPath}';`;
+        existingEntry.registration = `new ${ctrlName}(${entityVar}Service)`;
+        // Keep the dependencies we already detected
+      } else {
+        // Create new entry with controller
+        const init: ControllerInit = {
+          ctrlName,
+          entityName,
+          entityVar,
+          importController: `import { ${ctrlName} } from '${importPath}';`,
+          importStore: `import { ${entityName}Store } from '${storeImportPath}';`,
+          importService: `import { ${entityName}Service } from '${serviceImportPath}';`,
+          importAuth: undefined,
+          wiring: [],
+          registration: `new ${ctrlName}(${entityVar}Service)`,
+          storeDependencies: storeDeps,
+          serviceDependencies: serviceDeps
+        };
+        
+        if (!list.find((x) => x.ctrlName === init.ctrlName)) {
+          list.push(init);
+        }
+      }
     }
     initsBySrcDir.set(srcDir, list);
     await storeGen.generateAndSaveFiles(moduleYamlPath, infraOut, { force: !!opts?.force, skipOnConflict: !!opts?.skip });
@@ -220,10 +314,16 @@ export async function handleGenerateAll(
       }
 
       for (const init of controllerInits) {
-        const maybe = [init.importController, init.importStore, init.importService];
+        const maybe = [init.importStore, init.importService];
+        // Only add controller import if entity has a controller
+        if (init.importController && init.importController.trim() !== '') {
+          maybe.push(init.importController);
+        }
         if (init.importAuth) maybe.push(init.importAuth);
         for (const line of maybe) {
-          if (!appTs.includes(line) && !importLines.includes(line)) importLines.push(line);
+          if (line && line.trim() !== '' && !appTs.includes(line) && !importLines.includes(line)) {
+            importLines.push(line);
+          }
         }
       }
       if (importLines.length) {
@@ -235,20 +335,75 @@ export async function handleGenerateAll(
         if (toAdd.length) appTs = toAdd.join('\n') + '\n' + appTs;
       }
 
-      // Compose fresh block content
+      // Compose fresh block content with dependency-aware ordering
       const wiringLines: string[] = [];
       // DB placeholder once
       wiringLines.push(ensureDbLine);
-      const wiredEntities = new Set<string>();
-      for (const init of controllerInits) {
-        if (!wiredEntities.has(init.entityName)) {
-          wiringLines.push(...init.wiring);
-          wiredEntities.add(init.entityName);
+      
+      // Deduplicate by entityName
+      const uniqueInits = Array.from(
+        new Map(controllerInits.map(init => [init.entityName, init])).values()
+      );
+      
+      // Sort entities by dependencies (entities with no deps first)
+      const sorted: ControllerInit[] = [];
+      const processed = new Set<string>();
+      
+      const addEntity = (init: ControllerInit) => {
+        if (processed.has(init.entityName)) return;
+        
+        // Process dependencies first
+        if (init.storeDependencies) {
+          for (const depName of init.storeDependencies) {
+            const depInit = uniqueInits.find(i => i.entityName === depName);
+            if (depInit && !processed.has(depName)) {
+              addEntity(depInit);
+            }
+          }
         }
+        
+        sorted.push(init);
+        processed.add(init.entityName);
+      };
+      
+      uniqueInits.forEach(init => addEntity(init));
+      
+      // Generate wiring for stores and services
+      for (const init of sorted) {
+        const entityVar = init.entityVar;
+        const entityName = init.entityName;
+        
+        // Build store constructor parameters
+        const storeParams = ['db'];
+        if (init.storeDependencies && init.storeDependencies.length > 0) {
+          init.storeDependencies.forEach(depName => {
+            const depVar = depName.charAt(0).toLowerCase() + depName.slice(1);
+            storeParams.push(`${depVar}Store`);
+          });
+        }
+        
+        // Build service constructor parameters
+        const serviceParams = [`${entityVar}Store`];
+        if (init.serviceDependencies && init.serviceDependencies.length > 0) {
+          init.serviceDependencies.forEach(depName => {
+            const depVar = depName.charAt(0).toLowerCase() + depName.slice(1);
+            serviceParams.push(`${depVar}Store`);
+          });
+        }
+        
+        wiringLines.push(`const ${entityVar}Store = new ${entityName}Store(${storeParams.join(', ')});`);
+        wiringLines.push(`const ${entityVar}Service = new ${entityName}Service(${serviceParams.join(', ')});`);
       }
-      const registrations = controllerInits.map((i) => i.registration);
+      
+      // Only include registrations for entities with controllers
+      const registrations = controllerInits
+        .filter(i => i.registration && i.registration.trim() !== '')
+        .map(i => i.registration);
+      
       wiringLines.push('const controllers = [');
-      wiringLines.push(`  ${registrations.join(',\n  ')}`);
+      if (registrations.length > 0) {
+        wiringLines.push(`  ${registrations.join(',\n  ')}`);
+      }
       wiringLines.push('];');
 
       const startMarker = GENERATOR_MARKERS.CONTROLLERS_START;

@@ -10,6 +10,7 @@ import {
   renderUpdateTemplate,
   renderDeleteTemplate,
   renderLayoutTemplate,
+  setAvailableModels,
 } from './templates/viewTemplates';
 import { colors } from '../utils/colors';
 
@@ -56,6 +57,10 @@ export class TemplateGenerator {
   private generateForModule(moduleConfig: ModuleConfig, moduleDir: string): Record<string, string> {
     const result: Record<string, string> = {};
     if (!moduleConfig.routes || !moduleConfig.models || moduleConfig.models.length === 0) return result;
+
+    // Set available models for relationship detection in view templates
+    const modelNames = moduleConfig.models.map(m => m.name);
+    setAvailableModels(modelNames);
 
     const entityName = moduleConfig.models[0].name || 'Item';
     const entityLower = entityName.toLowerCase();

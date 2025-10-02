@@ -153,6 +153,52 @@ permissions:                            # Role-based access control
 - `number` - Numeric data (integer or float)
 - `boolean` - True/false values
 - `datetime` - Date and time values
+- `ModelName` - Relationship to another model (e.g., `Owner`, `User`, `Post`)
+
+**🔗 Model Relationships:**
+
+Define relationships by using another model's name as the field type:
+
+```yaml
+models:
+  - name: Owner
+    fields:
+      - name: name
+        type: string
+        required: true
+
+  - name: Cat
+    fields:
+      - name: name
+        type: string
+        required: true
+      - name: owner
+        type: Owner        # Creates relationship with Owner model
+        required: true     # Auto-generates foreign key: ownerId
+        displayFields: [name]  # Optional: fields to show in dropdowns
+```
+
+**Generated Behavior:**
+- **Domain Model**: Rich object with `owner: Owner` (full object, not just ID)
+- **DTOs**: Use `ownerId: number` for API requests
+- **Database**: Stores `ownerId` foreign key column (references `Owner.id`)
+- **Store**: Automatically loads the related Owner object when fetching a Cat
+- **HTML Forms**: Auto-generates select dropdown with "Create New" button
+- **TypeScript**: Full type safety with proper imports
+
+**Naming Convention:**
+Foreign keys are automatically generated following the pattern `fieldName + 'Id'`:
+- `owner` → `ownerId`
+- `author` → `authorId`
+- `parentComment` → `parentCommentId`
+
+**Optional Configuration:**
+```yaml
+- name: author
+  type: User
+  required: true
+  displayFields: [name, email] # Show in dropdown (optional)
+```
 
 **🔄 Handler vs Action Architecture:**
 - **Handler**: Creates a separate service method (one handler = one service method)
