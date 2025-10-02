@@ -100,14 +100,30 @@ export class DomainModelGenerator {
     return setterMethods.join('\n');
   }
 
+  private sortFieldsByRequired(fields: FieldConfig[]): FieldConfig[] {
+    // Sort fields: required fields first, then optional fields
+    return [...fields].sort((a, b) => {
+      const aRequired = a.required !== false && !a.auto;
+      const bRequired = b.required !== false && !b.auto;
+      
+      if (aRequired === bRequired) {
+        return 0; // Keep original order if both have same required status
+      }
+      return aRequired ? -1 : 1; // Required fields come first
+    });
+  }
+
   public generateModel(modelConfig: ModelConfig): string {
     const className = modelConfig.name;
 
     // Always add id field first
     const constructorParams: string[] = ['public id: number'];
 
+    // Sort fields to put required fields before optional ones
+    const sortedFields = this.sortFieldsByRequired(modelConfig.fields);
+
     // Process other fields
-    modelConfig.fields.forEach(field => {
+    sortedFields.forEach(field => {
       constructorParams.push(this.generateConstructorParameter(field));
     });
 

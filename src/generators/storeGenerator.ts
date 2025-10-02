@@ -84,8 +84,25 @@ export class StoreGenerator {
     return updatableFields.join(', ');
   }
 
+  private sortFieldsByRequired(fields: FieldConfig[]): FieldConfig[] {
+    // Sort fields: required fields first, then optional fields
+    // This must match the order used in domainModelGenerator
+    return [...fields].sort((a, b) => {
+      const aRequired = a.required !== false && !a.auto;
+      const bRequired = b.required !== false && !b.auto;
+      
+      if (aRequired === bRequired) {
+        return 0; // Keep original order if both have same required status
+      }
+      return aRequired ? -1 : 1; // Required fields come first
+    });
+  }
+
   private generateRowToModelMapping(modelConfig: ModelConfig): string {
-    const mappings = modelConfig.fields.map(field => {
+    // Sort fields to match the constructor parameter order
+    const sortedFields = this.sortFieldsByRequired(modelConfig.fields);
+    
+    const mappings = sortedFields.map(field => {
       if (field.name === 'createdAt') {
         return '      row.created_at';
       }
