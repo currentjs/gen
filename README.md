@@ -632,12 +632,6 @@ api:
   prefix: /api/posts
   endpoints: [...]
 
-# You can create separate API configs for other models
-commentApi:
-  model: Comment                       # This API serves the Comment model
-  prefix: /api/comments
-  endpoints: [...]
-
 actions:
   createPost:
     handlers: [Post:default:create]    # Calls PostService.create()
