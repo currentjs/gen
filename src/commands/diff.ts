@@ -7,6 +7,7 @@ import { ValidationGenerator } from '../generators/validationGenerator';
 import { ServiceGenerator } from '../generators/serviceGenerator';
 import { ControllerGenerator } from '../generators/controllerGenerator';
 import { StoreGenerator } from '../generators/storeGenerator';
+import { TemplateGenerator } from '../generators/templateGenerator';
 import { computeContentHash, getStoredHash, initGenerationRegistry, loadRegistry } from '../utils/generationRegistry';
 import { computeHunks, applyHunksToBase, type DiffHunk } from '../utils/commitUtils';
 import { colors } from '../utils/colors';
@@ -44,6 +45,7 @@ export async function handleDiff(yamlPathArg?: string, moduleName?: string): Pro
   const svcGen = new ServiceGenerator();
   const ctrlGen = new ControllerGenerator();
   const storeGen = new StoreGenerator();
+  const tplGen = new TemplateGenerator();
 
   const results: Array<{ file: string; status: 'clean' | 'modified' | 'missing'; hunks?: DiffHunk[]; note?: string }> = [];
 
@@ -63,6 +65,7 @@ export async function handleDiff(yamlPathArg?: string, moduleName?: string): Pro
     const nextServices = svcGen.generateFromYamlFile(moduleYamlPath);
     const nextControllers = ctrlGen.generateFromYamlFile(moduleYamlPath);
     const nextStores = storeGen.generateFromYamlFile(moduleYamlPath);
+    const nextTemplates = tplGen.generateFromYamlFile(moduleYamlPath);
 
     const consider = (target: string, generated: string) => {
       const rel = path.relative(process.cwd(), target);
@@ -109,6 +112,7 @@ export async function handleDiff(yamlPathArg?: string, moduleName?: string): Pro
     Object.entries(nextServices).forEach(([e, code]) => consider(path.join(appOut, 'services', `${e}Service.ts`), code));
     Object.entries(nextControllers).forEach(([e, code]) => consider(path.join(infraOut, 'controllers', `${e}Controller.ts`), code));
     Object.entries(nextStores).forEach(([e, code]) => consider(path.join(infraOut, 'stores', `${e}Store.ts`), code));
+    Object.entries(nextTemplates).forEach(([, { file, contents }]) => consider(file, contents));
   }
 
   if (results.length === 0) {

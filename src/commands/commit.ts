@@ -7,6 +7,7 @@ import { ValidationGenerator } from '../generators/validationGenerator';
 import { ServiceGenerator } from '../generators/serviceGenerator';
 import { ControllerGenerator } from '../generators/controllerGenerator';
 import { StoreGenerator } from '../generators/storeGenerator';
+import { TemplateGenerator } from '../generators/templateGenerator';
 import { computeContentHash, ensureCommitsDir, getStoredHash, initGenerationRegistry, updateStoredHunks } from '../utils/generationRegistry';
 import { computeLineDiff } from '../utils/commitUtils';
 import { computeHunks, DiffHunk } from '../utils/commitUtils';
@@ -66,6 +67,7 @@ export function handleCommit(yamlPathArg?: string, files?: string[]): void {
   const svcGen = new ServiceGenerator();
   const ctrlGen = new ControllerGenerator();
   const storeGen = new StoreGenerator();
+  const tplGen = new TemplateGenerator();
 
   const diffs: DiffRecord[] = [];
 
@@ -92,6 +94,7 @@ export function handleCommit(yamlPathArg?: string, files?: string[]): void {
     const nextServices = svcGen.generateFromYamlFile(moduleYamlPath);
     const nextControllers = ctrlGen.generateFromYamlFile(moduleYamlPath);
     const nextStores = storeGen.generateFromYamlFile(moduleYamlPath);
+    const nextTemplates = tplGen.generateFromYamlFile(moduleYamlPath);
 
     // Helper to evaluate only user-changed files and compute diff vs freshly generated code
     const consider = (target: string, generated: string) => {
@@ -130,6 +133,7 @@ export function handleCommit(yamlPathArg?: string, files?: string[]): void {
       consider(path.join(infraOut, 'controllers', `${entity}Controller.ts`), code)
     );
     Object.entries(nextStores).forEach(([entity, code]) => consider(path.join(infraOut, 'stores', `${entity}Store.ts`), code));
+    Object.entries(nextTemplates).forEach(([, { file, contents }]) => consider(file, contents));
   });
 
   const commitsDir = ensureCommitsDir();
