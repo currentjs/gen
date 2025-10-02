@@ -213,7 +213,6 @@ currentjs diff Blog
 # In your deployment pipeline
 git clone your-repo
 currentjs generate  # Recreates all source code from YAML + patches
-npm run build
 npm run deploy
 ```
 
@@ -345,7 +344,6 @@ permissions: []
 ### 3. Generate everything
 ```bash
 currentjs generate
-npm run build
 npm start
 ```
 
@@ -630,12 +628,6 @@ models:
 api:
   model: Post                          # This API serves the Post model
   prefix: /api/posts
-  endpoints: [...]
-
-# You can create separate API configs for other models
-commentApi:
-  model: Comment                       # This API serves the Comment model
-  prefix: /api/comments
   endpoints: [...]
 
 actions:

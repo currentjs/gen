@@ -312,6 +312,20 @@ export class ServiceGenerator {
     }
   }
 
+  private sortFieldsByRequired(fields: any[]): any[] {
+    // Sort fields: required fields first, then optional fields
+    // This must match the order used in domainModelGenerator
+    return [...fields].sort((a, b) => {
+      const aRequired = a.required !== false && !a.auto;
+      const bRequired = b.required !== false && !b.auto;
+      
+      if (aRequired === bRequired) {
+        return 0; // Keep original order if both have same required status
+      }
+      return aRequired ? -1 : 1; // Required fields come first
+    });
+  }
+
   private generateConstructorArgs(moduleConfig: ModuleConfig, entityName: string): string {
     if (!moduleConfig.models || moduleConfig.models.length === 0) {
       return '';
@@ -321,7 +335,10 @@ export class ServiceGenerator {
     const model = moduleConfig.models.find(m => m.name === entityName) || moduleConfig.models[0];
     const entityLower = entityName.toLowerCase();
     
-    return model.fields
+    // Sort fields to match the constructor parameter order
+    const sortedFields = this.sortFieldsByRequired(model.fields);
+    
+    return sortedFields
       .filter(field => !field.auto && field.name !== 'id')
       .map(field => `${entityLower}Data.${field.name}`)
       .join(', ');
