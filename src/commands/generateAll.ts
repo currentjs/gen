@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { resolveYamlPath } from '../utils/cliUtils';
+import { resolveYamlPath, runCommand } from '../utils/cliUtils';
 import { parse as parseYaml } from 'yaml';
 import { DomainModelGenerator } from '../generators/domainModelGenerator';
 import { ValidationGenerator } from '../generators/validationGenerator';
@@ -288,5 +288,12 @@ export async function handleGenerateAll(
       console.warn(colors.yellow(`Could not update app.ts with controllers: ${e instanceof Error ? e.message : String(e)}`));
     }
   }
+
+  // Run npm run build
+  runCommand('npm run build', {
+    infoMessage: '\nBuilding...',
+    successMessage: '[v] Build completed successfully',
+    errorMessage: '[x] Build failed:'
+  });
 }
 

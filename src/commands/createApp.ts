@@ -1,6 +1,5 @@
-import * as fs from 'fs';
 import * as path from 'path';
-import { ensureDir, writeFileIfMissing, toAbsolute } from '../utils/cliUtils';
+import { ensureDir, writeFileIfMissing, toAbsolute, runCommand } from '../utils/cliUtils';
 import { 
   packageJsonTemplate,
   tsconfigTemplate,
@@ -41,4 +40,10 @@ export function handleCreateApp(rawName?: string): void {
   writeFileIfMissing(path.join(templatesDir, DEFAULT_FILES.ERROR_TEMPLATE), errorTemplate);
   writeFileIfMissing(path.join(webDir, DEFAULT_FILES.FRONTEND_SCRIPT), frontendScriptTemplate);
   writeFileIfMissing(path.join(webDir, DEFAULT_FILES.TRANSLATIONS), translationsTemplate);
+
+  // Run npm install
+  runCommand('npm install', {
+    cwd: targetRoot,
+    errorMessage: '[X] Failed to install dependencies:'
+  });
 }

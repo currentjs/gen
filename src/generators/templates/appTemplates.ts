@@ -1037,7 +1037,7 @@ This is a CurrentJS framework application using clean architecture principles wi
 current create module Modulename # Creates "Modulename" with default structure and yaml file
 \`\`\`
 \`\`\`bash
-current generate Modulename # Generates all TypeScript files based on the module's yaml
+current generate Modulename # Generates all TypeScript files based on the module's yaml, and runs "npm run build"
 current generate # Does the same as above, but for all modules
 \`\`\`
 \`\`\`bash
