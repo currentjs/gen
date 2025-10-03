@@ -1,0 +1,4 @@
+providers:
+  mysql: '@currentjs/provider-mysql'
+database: mysql
+modules: []
