@@ -147,7 +147,7 @@ export async function writeGeneratedFile(
     const applied = tryApplyCommitsToGenerated(abs, contents);
     if (applied.applied) {
       fs.writeFileSync(abs, applied.content);
-      updateStoredHash(abs, computeContentHash(applied.content));
+      updateStoredHash(abs, newHash);
       if (!silent) console.log(colors.cyan(`Updated (with commits) ${rel}`));
       return 'written';
     }
