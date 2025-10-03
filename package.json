@@ -1,6 +1,6 @@
 {
   "name": "@currentjs/gen",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "CLI code generator",
   "license": "LGPL-3.0",
   "author": "Konstantin Zavalny",
