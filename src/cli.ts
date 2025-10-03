@@ -6,6 +6,9 @@ import { handleCommit } from './commands/commit';
 import { handleDiff } from './commands/diff';
 import { colors } from './utils/colors';
 import { handleInfer } from './commands/infer';
+import { handleMigrateCommit } from './commands/migrateCommit';
+// import { handleMigratePush } from './commands/migratePush';
+// import { handleMigrateUpdate } from './commands/migrateUpdate';
 
 function printHelp() {
   const title = colors.bold(colors.brightCyan('currentjs - Clean architecture CLI'));
@@ -23,6 +26,7 @@ ${usage}
   ${cmd('currentjs commit')} ${colors.gray('[<file> ...]')} ${flag('--yaml')} ${colors.gray('app.yaml')}
   ${cmd('currentjs diff')} ${colors.gray('<module|*>')} ${flag('--yaml')} ${colors.gray('app.yaml')}
   ${cmd('currentjs infer')} ${flag('--file')} ${colors.gray('src/modules/<Module>/domain/entities/<Entity>.ts')} ${colors.gray('[')}${flag('--write')}${colors.gray(']')}
+  ${cmd('currentjs migrate commit')} ${flag('--yaml')} ${colors.gray('app.yaml')}
 
 ${options}
   ${flag('--yaml')} <path>   ${colors.gray('Path to app.yaml (default: ./app.yaml)')}
@@ -64,6 +68,9 @@ function parseArgs(argv: string[]): Args {
   }
   else if (result.command === 'infer') {
     // no subcommands
+  }
+  else if (result.command === 'migrate') {
+    result.sub = rest.shift();
   }
 
   for (let i = 0; i < rest.length; i += 1) {
@@ -124,6 +131,25 @@ async function run() {
         const fileArg = fileFlagIndex !== -1 ? process.argv[fileFlagIndex + 1] : undefined;
         const write = process.argv.includes('--write');
         handleInfer(fileArg, write);
+        return;
+      }
+      case 'migrate': {
+        if (args.sub === 'commit') {
+          handleMigrateCommit(args.yaml);
+          return;
+        }
+        if (args.sub === 'push') {
+          console.log(colors.yellow('⚠️  Not implemented yet'));
+          // await handleMigratePush(args.yaml);
+          return;
+        }
+        if (args.sub === 'update') {
+          console.log(colors.yellow('⚠️  Not implemented yet'));
+          // await handleMigrateUpdate(args.yaml);
+          return;
+        }
+        printHelp();
+        process.exitCode = 1;
         return;
       }
       default: {

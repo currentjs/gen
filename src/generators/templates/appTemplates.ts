@@ -1712,7 +1712,8 @@ export const DEFAULT_DIRECTORIES = {
   DIST: 'build', 
   WEB: 'web',
   TEMPLATES: path.join('src', 'common', 'ui', 'templates'),
-  SERVICES: path.join('src', 'common', 'services')
+  SERVICES: path.join('src', 'common', 'services'),
+  MIGRATIONS: 'migrations'
 } as const;
 
 // File names constants
