@@ -478,13 +478,13 @@ try {
 **Basic Usage:**
 ```javascript
 // Translate strings
-t('Hello World')  // Returns translated version or original
-t('Save changes')
+App.lang.t('Hello World')  // Returns translated version or original
+App.lang.t('Save changes')
 
 // Set language
-setLang('pl')     // Switch to Polish
-setLang('en')     // Switch to English
-getCurrentLanguage()  // Get current language code
+App.lang.set('pl')     // Switch to Polish
+App.lang.set('en')     // Switch to English
+App.lang.get()         // Get current language code
 ```
 
 **Translation File (web/translations.json):**
@@ -506,43 +506,35 @@ getCurrentLanguage()  // Get current language code
 
 **Toast Notifications:**
 ```javascript
-showToast('Success message', 'success')  // Green toast
-showToast('Error occurred', 'error')     // Red toast  
-showToast('Information', 'info')         // Blue toast
-showToast('Warning', 'warning')          // Yellow toast
+App.ui.showToast('Success message', 'success')  // Green toast
+App.ui.showToast('Error occurred', 'error')     // Red toast  
+App.ui.showToast('Information', 'info')         // Blue toast
+App.ui.showToast('Warning', 'warning')          // Yellow toast
 ```
 
 **Inline Messages:**
 ```javascript
-showMessage('messageId', 'Success!', 'success')
-showMessage('errorContainer', 'Validation failed', 'error')
+App.ui.showMessage('messageId', 'Success!', 'success')
+App.ui.showMessage('errorContainer', 'Validation failed', 'error')
 ```
 
 **Modal Dialogs:**
 ```javascript
-showModal('confirmModal', 'Item saved successfully', 'success')
-showModal('errorModal', 'Operation failed', 'error')
+App.ui.showModal('confirmModal', 'Item saved successfully', 'success')
+App.ui.showModal('errorModal', 'Operation failed', 'error')
 ```
 
 ### Navigation & Page Actions
 
 **Navigation Functions:**
 ```javascript
-navigateBack()              // Go back in history or to home
-redirectTo('/posts')        // Safe redirect with validation
-reloadPage()               // Reload with loading indicator
-refreshSection('#content') // Refresh specific section
-
 // SPA-style navigation
-navigateToPage('/posts/123')  // Loads via AJAX, updates #main
-```
+App.nav.go('/posts/123')  // Loads via AJAX, updates #main
 
-**Content Management:**
-```javascript
-updateContent('#results', newHtml, 'replace')  // Replace content
-updateContent('#list', itemHtml, 'append')     // Add to end
-updateContent('#list', itemHtml, 'prepend')    // Add to beginning
-removeElement('#item-123')                     // Animate and remove
+// Or use native browser APIs directly
+window.history.back()      // Go back in history
+window.location.href = '/posts'  // Full page redirect
+window.location.reload()   // Reload page
 ```
 
 ### Form Handling & Strategy System
@@ -572,52 +564,26 @@ removeElement('#item-123')                     // Animate and remove
 **Manual Form Submission:**
 ```javascript
 const form = document.querySelector('#myForm');
-submitForm(form, ['toast', 'back'], {
+App.nav.submit(form, ['toast', 'back'], {
   entityName: 'Post',
   basePath: '/posts',
   messageId: 'form-message'
 });
 ```
 
-**Success Handling:**
-```javascript
-handleFormSuccess(response, ['toast', 'back'], {
-  entityName: 'Post',
-  basePath: '/posts',
-  messageId: 'success-msg',
-  modalId: 'success-modal'
-});
-```
-
-### Form Validation & Type Conversion
-
-**Client-side Validation Setup:**
-```javascript
-setupFormValidation('#createForm');  // Adds required field validation
-```
-
-**Field Type Conversion:**
-```javascript
-// Automatic conversion based on data-field-types
-convertFieldValue('123', 'number')    // Returns 123 (number)
-convertFieldValue('true', 'boolean')  // Returns true (boolean)
-convertFieldValue('text', 'string')   // Returns 'text' (string)
-```
-
 ### Loading States & Utilities
 
 **Loading Indicators:**
 ```javascript
-showLoading('#form')      // Show spinner on form
-hideLoading('#form')      // Hide spinner
-showLoading('#main')      // Show spinner on main content
+App.ui.showLoading('#form')      // Show spinner on form
+App.ui.hideLoading('#form')      // Hide spinner
+App.ui.showLoading('#main')      // Show spinner on main content
 ```
 
 **Utility Functions:**
 ```javascript
-debounce(searchFunction, 300)  // Debounce for search inputs
-getElementSafely('#selector') // Safe element selection
-clearForm('#myForm')          // Reset form and clear validation
+App.utils.debounce(searchFunction, 300)  // Debounce for search inputs
+App.utils.$('#selector')                  // Safe element selection
 ```
 
 ### Event Handling & SPA Integration
@@ -635,12 +601,12 @@ clearForm('#myForm')          // Reset form and clear validation
 **Custom Event Listeners:**
 ```javascript
 // Re-initialize after dynamic content loading
-initializeEventListeners();
+App.utils.initializeEventListeners();
 
 // Handle specific link navigation
 document.querySelector('#myLink').addEventListener('click', (e) => {
   e.preventDefault();
-  navigateToPage('/custom/path');
+  App.nav.go('/custom/path');
 });
 ```
 
@@ -649,11 +615,33 @@ document.querySelector('#myLink').addEventListener('click', (e) => {
 **Accessing Functions:**
 ```javascript
 // All functions available under window.App
-App.showToast('Message', 'success');
-App.navigateBack();
-App.t('Translate this');
-App.setLang('pl');
-App.showLoading('#content');
+// Organized by category for better discoverability
+
+// UI Functions
+App.ui.showToast('Message', 'success');
+App.ui.showMessage('elementId', 'Success!', 'success');
+App.ui.showModal('modalId', 'Done!', 'success');
+App.ui.showLoading('#form');
+App.ui.hideLoading('#form');
+
+// Navigation Functions
+App.nav.go('/posts/123');  // SPA-style navigation with AJAX
+App.nav.submit(formElement, ['toast', 'back'], options);  // Submit form via AJAX
+
+// Translation Functions
+App.lang.t('Translate this');  // Translate string
+App.lang.set('pl');  // Set language
+App.lang.get();  // Get current language
+
+// Utility Functions
+App.utils.$('#selector');  // Safe element selection
+App.utils.debounce(fn, 300);  // Debounce function
+App.utils.initializeEventListeners();  // Re-initialize after dynamic content
+
+// Authentication Functions (JWT)
+App.auth.setAuthToken(token);  // Store JWT token
+App.auth.clearAuthToken();  // Remove JWT token
+App.auth.buildAuthHeaders(additionalHeaders);  // Build headers with auth token
 ```
 
 ### Template Data Binding

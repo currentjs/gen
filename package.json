@@ -27,7 +27,8 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && npm run copy-templates",
+    "copy-templates": "mkdir -p dist/generators/templates/data && cp src/generators/templates/data/* dist/generators/templates/data/",
     "clean": "rm -rf dist",
     "prepack": "npm run build"
   },

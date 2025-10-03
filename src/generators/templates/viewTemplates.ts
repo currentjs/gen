@@ -87,7 +87,9 @@ function generateFormInput(field: FieldConfig): string {
     // Load ${relatedModel} options
     (async () => {
       try {
-        const response = await fetch('${apiPath}');
+        const response = await fetch('${apiPath}', {
+          headers: App.auth.buildAuthHeaders()
+        });
         const data = await response.json();
         const select = document.getElementById('${foreignKeyName}');
         if (Array.isArray(data)) {
@@ -195,7 +197,9 @@ function generateUpdateFormInput(field: FieldConfig): string {
     // Load ${relatedModel} options
     (async () => {
       try {
-        const response = await fetch('${apiPath}');
+        const response = await fetch('${apiPath}', {
+          headers: App.auth.buildAuthHeaders()
+        });
         const data = await response.json();
         const select = document.getElementById('${foreignKeyName}');
         const currentValue = select.getAttribute('data-current-value');
