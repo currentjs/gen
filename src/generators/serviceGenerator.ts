@@ -6,6 +6,16 @@ import { writeGeneratedFile } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
 import { COMMON_FILES, PATH_PATTERNS } from '../utils/constants';
 
+interface FieldConfig {
+  name: string;
+  type: string;
+  required?: boolean;
+  unique?: boolean;
+  auto?: boolean;
+  // Relationship configuration
+  displayFields?: string[];
+}
+
 interface ActionConfig {
   handlers: string[];
 }
@@ -17,7 +27,7 @@ interface PermissionConfig {
 
 interface ModelConfig {
   name: string;
-  fields: any[];
+  fields: FieldConfig[];
 }
 
 type ModuleConfig = {
@@ -33,6 +43,24 @@ type AppConfig =
   | ModuleConfig;
 
 export class ServiceGenerator {
+  private availableModels: Set<string> = new Set();
+
+  private setAvailableModels(models: ModelConfig[]): void {
+    this.availableModels.clear();
+    models.forEach(model => {
+      this.availableModels.add(model.name);
+    });
+  }
+
+  private isRelationshipField(field: FieldConfig): boolean {
+    return this.availableModels.has(field.type);
+  }
+
+  private getForeignKeyFieldName(field: FieldConfig): string {
+    // Convention: fieldName + 'Id' (e.g., owner -> ownerId)
+    return field.name + 'Id';
+  }
+
   private hasPermissions(config: AppConfig): boolean {
     if ((config as any).modules) {
       return Object.values((config as any).modules as Record<string, ModuleConfig>).some(
@@ -221,13 +249,20 @@ export class ServiceGenerator {
 
               // Handle constructor args for create action
               if (actionName === 'create') {
+                const relationshipLoading = this.generateRelationshipLoading(moduleConfig, entityName);
                 const constructorArgs = this.generateConstructorArgs(moduleConfig, entityName);
+                
+                if (relationshipLoading) {
+                  // Insert relationship loading before the entity creation
+                  processedTemplate = relationshipLoading + '\n    ' + processedTemplate;
+                }
+                
                 processedTemplate = processedTemplate.replace(/{{CONSTRUCTOR_ARGS}}/g, constructorArgs);
               }
 
               // Handle setter calls for update action
               if (actionName === 'update') {
-                const setterCalls = this.generateUpdateSetterCalls(moduleConfig, entityName);
+                const setterCalls = this.generateUpdateSetterCalls(moduleConfig, entityName, true);
                 processedTemplate = processedTemplate.replace(/{{UPDATE_SETTER_CALLS}}/g, setterCalls);
               }
 
@@ -332,19 +367,62 @@ export class ServiceGenerator {
     }
     
     // Find the correct model by entityName instead of always using first model
-    const model = moduleConfig.models.find(m => m.name === entityName) || moduleConfig.models[0];
+    const model = moduleConfig.models.find((m: ModelConfig) => m.name === entityName) || moduleConfig.models[0];
     const entityLower = entityName.toLowerCase();
     
     // Sort fields to match the constructor parameter order
     const sortedFields = this.sortFieldsByRequired(model.fields);
     
-    return sortedFields
+    const args: string[] = [];
+    sortedFields
       .filter(field => !field.auto && field.name !== 'id')
-      .map(field => `${entityLower}Data.${field.name}`)
-      .join(', ');
+      .forEach(field => {
+        // For relationship fields, reference the loaded object variable
+        if (this.isRelationshipField(field)) {
+          args.push(`${field.name}Object`);
+        } else {
+          args.push(`${entityLower}Data.${field.name}`);
+        }
+      });
+    
+    return args.join(', ');
   }
 
-  private generateUpdateSetterCalls(moduleConfig: ModuleConfig, entityName: string): string {
+  private generateRelationshipLoading(moduleConfig: ModuleConfig, entityName: string): string {
+    if (!moduleConfig.models || moduleConfig.models.length === 0) {
+      return '';
+    }
+    
+    const model = moduleConfig.models.find((m: ModelConfig) => m.name === entityName) || moduleConfig.models[0];
+    const entityLower = entityName.toLowerCase();
+    const relationshipFields = model.fields.filter(f => this.isRelationshipField(f));
+    
+    if (relationshipFields.length === 0) {
+      return '';
+    }
+
+    const loadingCode = relationshipFields.map(field => {
+      const foreignKeyName = this.getForeignKeyFieldName(field);
+      const relatedModel = field.type;
+      const relatedModelLower = relatedModel.toLowerCase();
+      const varName = `${field.name}Object`;
+      
+      if (field.required) {
+        return `const ${varName} = await this.${relatedModelLower}Store.getById(${entityLower}Data.${foreignKeyName});
+    if (!${varName}) {
+      throw new Error('${relatedModel} not found with id ' + ${entityLower}Data.${foreignKeyName});
+    }`;
+      } else {
+        return `const ${varName} = ${entityLower}Data.${foreignKeyName} 
+      ? await this.${relatedModelLower}Store.getById(${entityLower}Data.${foreignKeyName})
+      : null;`;
+      }
+    }).join('\n    ');
+
+    return '    // Load relationship objects\n    ' + loadingCode;
+  }
+
+  private generateUpdateSetterCalls(moduleConfig: ModuleConfig, entityName: string, includeRelationshipLoading: boolean = false): string {
     if (!moduleConfig.models || moduleConfig.models.length === 0) {
       return '';
     }
@@ -353,15 +431,36 @@ export class ServiceGenerator {
     const model = moduleConfig.models.find(m => m.name === entityName) || moduleConfig.models[0];
     const entityLower = entityName.toLowerCase();
     
-    return model.fields
+    let code = '';
+    
+    // Add relationship loading if requested
+    if (includeRelationshipLoading) {
+      const relationshipLoading = this.generateRelationshipLoading(moduleConfig, entityName);
+      if (relationshipLoading) {
+        code = relationshipLoading + '\n    ';
+      }
+    }
+    
+    const setterCalls = model.fields
       .filter(field => !field.auto && field.name !== 'id')
       .map(field => {
-        const methodName = `set${field.name.charAt(0).toUpperCase() + field.name.slice(1)}`;
-        return `if (${entityLower}Data.${field.name} !== undefined) {
+        // For relationship fields, set the loaded object
+        if (this.isRelationshipField(field)) {
+          const foreignKeyName = this.getForeignKeyFieldName(field);
+          const methodName = `set${field.name.charAt(0).toUpperCase() + field.name.slice(1)}`;
+          return `if (${entityLower}Data.${foreignKeyName} !== undefined) {
+      existing${entityName}.${methodName}(${field.name}Object);
+    }`;
+        } else {
+          const methodName = `set${field.name.charAt(0).toUpperCase() + field.name.slice(1)}`;
+          return `if (${entityLower}Data.${field.name} !== undefined) {
       existing${entityName}.${methodName}(${entityLower}Data.${field.name});
     }`;
+        }
       })
       .join('\n    ');
+    
+    return code + setterCalls;
   }
 
   private replaceTemplateVars(template: string, variables: Record<string, string | boolean>): string {
@@ -459,13 +558,20 @@ export class ServiceGenerator {
 
         // Handle constructor args for create action
         if (actionName === 'create') {
+          const relationshipLoading = this.generateRelationshipLoading(moduleConfig, entityName);
           const constructorArgs = this.generateConstructorArgs(moduleConfig, entityName);
+          
+          if (relationshipLoading) {
+            // Insert relationship loading before the entity creation
+            methodImplementation = relationshipLoading + '\n    ' + methodImplementation;
+          }
+          
           methodImplementation = methodImplementation.replace(/{{CONSTRUCTOR_ARGS}}/g, constructorArgs);
         }
 
         // Handle setter calls for update action
         if (actionName === 'update') {
-          const setterCalls = this.generateUpdateSetterCalls(moduleConfig, entityName);
+          const setterCalls = this.generateUpdateSetterCalls(moduleConfig, entityName, true);
           methodImplementation = methodImplementation.replace(/{{UPDATE_SETTER_CALLS}}/g, setterCalls);
         }
 
@@ -540,19 +646,23 @@ export class ServiceGenerator {
       .filter(method => method) // Remove empty methods
       .join('\n\n');
 
+    // Add foreign store constructor params
+    const foreignStoreParams = this.generateForeignStoreConstructorParams(model);
+    
     const serviceClass = this.replaceTemplateVars(serviceTemplates.serviceClass, {
       ENTITY_NAME: entityName,
       ENTITY_LOWER: entityLower,
-      AUTH_SERVICE_PARAM: '',
+      AUTH_SERVICE_PARAM: foreignStoreParams,
       SERVICE_METHODS: serviceMethods
     });
 
     const customImports = this.generateCustomImports(moduleConfig);
+    const foreignStoreImports = this.generateForeignStoreImports(model);
 
     return this.replaceTemplateVars(serviceFileTemplate, {
       ENTITY_NAME: entityName,
       PERMISSIONS_IMPORT: hasPermissions ? "\nimport type { AuthenticatedUser } from '@currentjs/router';" : '',
-      CUSTOM_IMPORTS: customImports,
+      CUSTOM_IMPORTS: customImports + foreignStoreImports,
       SERVICE_CLASS: serviceClass
     });
   }
@@ -563,6 +673,37 @@ export class ServiceGenerator {
       return '';
     }
     return this.generateServiceForModel(moduleConfig.models[0], moduleName, moduleConfig, hasGlobalPermissions);
+  }
+
+  private generateForeignStoreImports(model: ModelConfig): string {
+    const relationshipFields = model.fields.filter(f => this.isRelationshipField(f));
+    
+    if (relationshipFields.length === 0) {
+      return '';
+    }
+
+    const imports = relationshipFields.map(field => {
+      const relatedModel = field.type;
+      return `import { ${relatedModel}Store } from '../../infrastructure/stores/${relatedModel}Store';`;
+    });
+    
+    return '\n' + imports.join('\n');
+  }
+
+  private generateForeignStoreConstructorParams(model: ModelConfig): string {
+    const relationshipFields = model.fields.filter(f => this.isRelationshipField(f));
+    
+    if (relationshipFields.length === 0) {
+      return '';
+    }
+
+    const params = relationshipFields.map(field => {
+      const relatedModel = field.type;
+      const relatedModelLower = relatedModel.toLowerCase();
+      return `,\n    private ${relatedModelLower}Store: ${relatedModel}Store`;
+    });
+    
+    return params.join('');
   }
 
   private generateCustomImports(moduleConfig: ModuleConfig): string {
@@ -595,6 +736,8 @@ export class ServiceGenerator {
     if ((config as any).modules) {
       Object.entries((config as any).modules as Record<string, ModuleConfig>).forEach(([moduleName, moduleConfig]) => {
         if (moduleConfig.models && moduleConfig.models.length > 0) {
+          // Set available models for relationship detection
+          this.setAvailableModels(moduleConfig.models);
           // Generate a service for each model
           moduleConfig.models.forEach(model => {
             const serviceCode = this.generateServiceForModel(model, moduleName, moduleConfig, hasGlobalPermissions);
@@ -608,6 +751,8 @@ export class ServiceGenerator {
       const moduleName = 'Module';
       const moduleConfig = config as ModuleConfig;
       if (moduleConfig.models && moduleConfig.models.length > 0) {
+        // Set available models for relationship detection
+        this.setAvailableModels(moduleConfig.models);
         // Generate a service for each model
         moduleConfig.models.forEach(model => {
           const serviceCode = this.generateServiceForModel(model, moduleName, moduleConfig, hasGlobalPermissions);

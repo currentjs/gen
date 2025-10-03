@@ -23,7 +23,7 @@ current diff [module] # Show differences between generated and current code
 ```
 
 ## The flow
-1. Create an empty app (`current create app`)
+1. Create an empty app (`current create app`) – this step is already done.
 2. Create a new module: `current create module Name`
 3. In the module's yaml file, define module's:
  - model(s)
@@ -75,6 +75,7 @@ models:
 
 api:                                    # REST API configuration
   prefix: /api/posts                    # Base URL for API endpoints
+  model: Post                           # Optional: which model this API serves (defaults to first model)
   endpoints:
     - method: GET                       # HTTP method
       path: /                           # Relative path (becomes /api/posts/)
@@ -94,9 +95,11 @@ api:                                    # REST API configuration
     - method: POST                      # Custom endpoint
       path: /:id/publish
       action: publish
+      model: Post                       # Optional: override model for specific endpoint
 
 routes:                                 # Web interface configuration
   prefix: /posts                        # Base URL for web pages
+  model: Post                           # Optional: which model this route serves (defaults to first model)
   strategy: [toast, back]               # Default success strategies for forms
   endpoints:
     - path: /                           # List page
@@ -111,6 +114,7 @@ routes:                                 # Web interface configuration
     - path: /:id/edit                   # Edit form page
       action: get                       # Load existing data
       view: postUpdate
+      model: Post                       # Optional: override model for specific endpoint
 
 actions:                                # Business logic mapping
   list:
@@ -167,7 +171,6 @@ Specify `model` on individual endpoints to override the section default:
 models:
   - name: Cat
   - name: Person
-  # do not forget to describe fields of each model
 
 routes:
   prefix: /cat
@@ -213,7 +216,7 @@ api:
 3. `api.model` or `routes.model` (section default)
 4. First model in `models[]` array (fallback)
 
-**🔗 Model Relationships:**
+**Model Relationships:**
 
 Define relationships by using another model's name as the field type:
 
@@ -245,18 +248,12 @@ models:
 - **TypeScript**: Full type safety with proper imports
 
 **Naming Convention:**
-Foreign keys are automatically generated following the pattern `fieldName + 'Id'`:
+Foreign keys are auto-generated following the pattern `fieldName + 'Id'`:
 - `owner` → `ownerId`
 - `author` → `authorId`
 - `parentComment` → `parentCommentId`
 
-**Optional Configuration:**
-```yaml
-- name: author
-  type: User
-  required: true
-  displayFields: [name, email] # Show in dropdown (optional)
-```
+The foreign key always references the `id` field of the related model.
 
 **🔄 Handler vs Action Architecture:**
 - **Handler**: Creates a separate service method (one handler = one service method)
@@ -307,13 +304,20 @@ When an action has multiple handlers, each handler generates a separate service 
 - Multiple roles can be specified for each action
 
 **Generated Files from Configuration:**
-- Domain entity class
-- Service class
-- API controller with REST endpoints
-- Web controller with page rendering
-- Store class with database operations
+- Domain entity class (one per model)
+- Service class (one per model)
+- API controller with REST endpoints (one per model)
+- Web controller with page rendering (one per model)
+- Store class with database operations (one per model)
 - HTML templates for all views
 - TypeScript interfaces and DTOs
+
+**Multi-Model Support:**
+- Each model gets its own service, controller, and store
+- Use `model` parameter in `api` and `routes` to specify which model to use (defaults to first model)
+- Use `model` parameter on individual endpoints to override model for specific endpoints
+- Action handlers use `modelname:action` format to specify which model's service method to call
+- Controllers and services are generated per model, not per module
 
 ## Module Structure
 ```
@@ -441,13 +445,13 @@ if (result.success && result.data.length > 0) {
 // Insert with auto-generated fields
 const row = { ...data, created_at: new Date(), updated_at: new Date() };
 const result = await this.db.query(
-  `INSERT INTO table_name (${fields.join(', ')}) VALUES (${placeholders})`,
+  `INSERT INTO table_name (\${fields.join(', ')}) VALUES (\${placeholders})`,
   row
 );
 const newId = result.insertId;
 
 // Update with validation
-const query = `UPDATE table_name SET ${updateFields.join(', ')}, updated_at = :updated_at WHERE id = :id`;
+const query = `UPDATE table_name SET \${updateFields.join(', ')}, updated_at = :updated_at WHERE id = :id`;
 await this.db.query(query, { ...updateData, updated_at: new Date(), id });
 
 // Soft delete
@@ -463,9 +467,9 @@ try {
   const result = await this.db.query(query, params);
 } catch (error) {
   if (error instanceof MySQLConnectionError) {
-    throw new Error(`Database connection error: ${error.message}`);
+    throw new Error(`Database connection error: \${error.message}`);
   } else if (error instanceof MySQLQueryError) {
-    throw new Error(`Query error: ${error.message}`);
+    throw new Error(`Query error: \${error.message}`);
   }
   throw error;
 }

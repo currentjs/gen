@@ -13,7 +13,9 @@ export const COMMON_FILES = {
   APP_YAML: 'app.yaml',
   APP_TS: 'app.ts',
   REGISTRY_JSON: 'registry.json',
-  STORE_INTERFACE: 'StoreInterface.ts'
+  STORE_INTERFACE: 'StoreInterface.ts',
+  SCHEMA_STATE: 'schema_state.yaml',
+  MIGRATION_LOG: 'migration_log.json'
 } as const;
 
 // Generator markers
@@ -34,7 +36,8 @@ export const PATH_PATTERNS = {
   ENTITIES: 'entities',
   STORES: 'stores',
   SERVICES: 'services',
-  CONTROLLERS: 'controllers'
+  CONTROLLERS: 'controllers',
+  MIGRATIONS: 'migrations'
 } as const;
 
 // Default values

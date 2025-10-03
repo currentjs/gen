@@ -12,6 +12,8 @@ interface FieldConfig {
   required?: boolean;
   auto?: boolean;
   unique?: boolean;
+  // Relationship configuration
+  displayFields?: string[];
 }
 
 interface ModelConfig {
@@ -32,6 +34,24 @@ type AppConfig =
   | ModuleConfig;
 
 export class ValidationGenerator {
+  private availableModels: Set<string> = new Set();
+
+  private setAvailableModels(models: ModelConfig[]): void {
+    this.availableModels.clear();
+    models.forEach(model => {
+      this.availableModels.add(model.name);
+    });
+  }
+
+  private isRelationshipField(field: FieldConfig): boolean {
+    return this.availableModels.has(field.type);
+  }
+
+  private getForeignKeyFieldName(field: FieldConfig): string {
+    // Convention: fieldName + 'Id' (e.g., owner -> ownerId)
+    return field.name + 'Id';
+  }
+
   private replaceTemplateVars(template: string, variables: Record<string, string>): string {
     let result = template;
 
@@ -48,6 +68,19 @@ export class ValidationGenerator {
   }
 
   private generateInterfaceField(field: FieldConfig, isCreate: boolean): string {
+    // For relationship fields, use the foreign key field instead
+    if (this.isRelationshipField(field)) {
+      const foreignKeyName = this.getForeignKeyFieldName(field);
+      const tsType = 'number'; // Foreign keys are always numbers
+
+      if (isCreate) {
+        const optional = !field.required ? '?' : '';
+        return `  ${foreignKeyName}${optional}: ${tsType};`;
+      } else {
+        return `  ${foreignKeyName}?: ${tsType};`;
+      }
+    }
+
     const tsType = this.getTypeScriptType(field.type);
 
     if (isCreate) {
@@ -65,6 +98,14 @@ export class ValidationGenerator {
   }
 
   private generateValidationLogic(field: FieldConfig, isCreate: boolean): string {
+    // For relationship fields, validate the foreign key
+    if (this.isRelationshipField(field)) {
+      const foreignKeyName = this.getForeignKeyFieldName(field);
+      const isRequired = isCreate && field.required;
+      const template = isRequired ? validationTemplates.requiredNumberValidation : validationTemplates.optionalNumberValidation;
+      return this.replaceTemplateVars(template, { FIELD_NAME: foreignKeyName });
+    }
+
     const fieldName = field.name;
 
     if (field.auto || field.name === 'id') {
@@ -96,6 +137,19 @@ export class ValidationGenerator {
   }
 
   private generateDtoField(field: FieldConfig, isCreate: boolean): string {
+    // For relationship fields, use the foreign key field instead
+    if (this.isRelationshipField(field)) {
+      const foreignKeyName = this.getForeignKeyFieldName(field);
+      const tsType = 'number'; // Foreign keys are always numbers
+
+      if (isCreate) {
+        const optional = !field.required ? '?' : '';
+        return `  ${foreignKeyName}${optional}: ${tsType};`;
+      } else {
+        return `  ${foreignKeyName}?: ${tsType};`;
+      }
+    }
+
     const tsType = this.getTypeScriptType(field.type);
 
     if (isCreate) {
@@ -175,6 +229,8 @@ export class ValidationGenerator {
     if ((config as any).modules) {
       Object.values((config as any).modules as Record<string, ModuleConfig>).forEach(moduleConfig => {
         if (moduleConfig.models && moduleConfig.models.length > 0) {
+          // Set available models for relationship detection
+          this.setAvailableModels(moduleConfig.models);
           moduleConfig.models.forEach(model => {
             const validationCode = this.generateValidation(model.name, model.fields);
             validations[model.name] = validationCode;
@@ -184,6 +240,8 @@ export class ValidationGenerator {
     } else if ((config as any).models) {
       const module = config as ModuleConfig;
       if (module.models) {
+        // Set available models for relationship detection
+        this.setAvailableModels(module.models);
         module.models.forEach(model => {
           const validationCode = this.generateValidation(model.name, model.fields);
           validations[model.name] = validationCode;

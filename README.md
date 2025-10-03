@@ -257,6 +257,94 @@ dist/
 
 With this setup, your repository stays focused on what matters: your specifications and customizations, not generated boilerplate!
 
+## Multi-Model Endpoint Support 🔀
+
+Working with multiple related models in a single module? CurrentJS now supports flexible endpoint configurations for multi-model scenarios.
+
+### Per-Endpoint Model Override
+
+Override the model for specific endpoints when you need to mix models within the same API or routes section:
+
+```yaml
+models:
+  - name: Cat
+    fields:
+      - name: name
+        type: string
+  - name: Person
+    fields:
+      - name: name
+        type: string
+      - name: email
+        type: string
+
+routes:
+  prefix: /cat
+  model: Cat  # Default model for this section
+  endpoints:
+    - path: /create
+      action: empty
+      view: catCreate
+      # Uses Cat model (from default)
+    
+    - path: /createOwner
+      action: empty
+      view: ownerCreate
+      model: Person  # Override to use Person model for this endpoint
+```
+
+**Result**: The `/cat/createOwner` page will generate a form with Person fields (name, email), not Cat fields.
+
+### Multiple API/Routes Sections
+
+Organize endpoints by model or functionality using arrays:
+
+```yaml
+# Multiple routes sections for different models
+routes:
+  - prefix: /cat
+    model: Cat
+    endpoints:
+      - path: /
+        action: list
+        view: catList
+      - path: /create
+        action: empty
+        view: catCreate
+  
+  - prefix: /person
+    model: Person
+    endpoints:
+      - path: /
+        action: list
+        view: personList
+      - path: /create
+        action: empty
+        view: personCreate
+```
+
+**Result**: Generates separate controllers with their own base paths and endpoints.
+
+### Automatic Model Inference
+
+If you don't specify a `model`, the system will infer it from the action handler:
+
+```yaml
+routes:
+  prefix: /cat
+  endpoints:
+    - path: /createOwner
+      action: createOwner
+      view: ownerCreate
+      # No model specified - inferred from action below
+
+actions:
+  createOwner:
+    handlers: [Person:default:create]  # Infers Person model
+```
+
+**Priority**: `endpoint.model` → inferred from handler → section `model` → first model in array
+
 ## Example: Building a Blog System 📝
 
 Here's how you'd create a complete very simple blog system:
@@ -535,6 +623,174 @@ models:
         type: datetime
         required: false
 ```
+
+### 🔗 Model Relationships
+
+You can define relationships between models by specifying another model name as the field type. The generator will automatically handle foreign keys, type checking, and UI components.
+
+**Basic Relationship Example:**
+```yaml
+models:
+  - name: Owner
+    fields:
+      - name: name
+        type: string
+        required: true
+      - name: email
+        type: string
+        required: true
+
+  - name: Cat
+    fields:
+      - name: name
+        type: string
+        required: true
+      - name: breed
+        type: string
+        required: false
+      - name: owner
+        type: Owner        # Relationship to Owner model
+        required: true
+```
+
+**Architecture: Rich Domain Models**
+
+The generator uses **Infrastructure-Level Relationship Assembly**:
+
+- **Domain Layer**: Works with full objects (no FKs)
+- **Infrastructure (Store)**: Handles FK ↔ Object conversion
+- **DTOs**: Use FKs for API transmission
+
+**What Gets Generated:**
+
+1. **Domain Model**: Pure business objects
+   ```typescript
+   import { Owner } from './Owner';
+   
+   export class Cat {
+     constructor(
+       public id: number,
+       public name: string,
+       public breed?: string,
+       public owner: Owner  // ✨ Full object, no FK!
+     ) {}
+   }
+   ```
+
+2. **DTOs**: Use foreign keys for API
+   ```typescript
+   export interface CatDTO {
+     name: string;
+     breed?: string;
+     ownerId: number;  // ✨ FK for over-the-wire
+   }
+   ```
+
+3. **Store**: Converts FK ↔ Object
+   ```typescript
+   export class CatStore {
+     constructor(
+       private db: ISqlProvider,
+       private ownerStore: OwnerStore  // ✨ Foreign store dependency
+     ) {}
+     
+     async loadRelationships(entity: Cat, row: CatRow): Promise<Cat> {
+       const owner = await this.ownerStore.getById(row.ownerId);
+       if (owner) entity.setOwner(owner);
+       return entity;
+     }
+     
+     async insert(cat: Cat): Promise<Cat> {
+       const row = {
+         name: cat.name,
+         ownerId: cat.owner?.id  // ✨ Extract FK to save
+       };
+       // ...
+     }
+   }
+   ```
+
+4. **Service**: Loads objects from FKs
+   ```typescript
+   export class CatService {
+     constructor(
+       private catStore: CatStore,
+       private ownerStore: OwnerStore  // ✨ To load relationships
+     ) {}
+     
+     async create(catData: CatDTO): Promise<Cat> {
+       // ✨ Load full owner object from FK
+       const owner = await this.ownerStore.getById(catData.ownerId);
+       const cat = new Cat(0, catData.name, catData.breed, owner);
+       return await this.catStore.insert(cat);
+     }
+   }
+   ```
+
+5. **HTML Forms**: Select dropdown with "Create New" button
+   ```html
+   <select id="ownerId" name="ownerId" required>
+     <option value="">-- Select Owner --</option>
+     <!-- Options loaded from /api/owner -->
+   </select>
+   <button onclick="window.open('/owner/create')">+ New</button>
+   ```
+
+**Relationship Naming Convention:**
+
+The generator automatically creates foreign key fields following this convention:
+- **Field name**: `owner` → **Foreign key**: `ownerId`
+- **Field name**: `author` → **Foreign key**: `authorId`
+- **Field name**: `parentComment` → **Foreign key**: `parentCommentId`
+
+The foreign key always references the `id` field of the related model.
+
+**Optional Configuration:**
+
+```yaml
+models:
+  - name: Post
+    fields:
+      - name: title
+        type: string
+        required: true
+      - name: author
+        type: User
+        required: true
+        displayFields: [name, email]  # Fields to show in dropdowns (optional)
+```
+
+**Configuration Options:**
+- `displayFields`: Array of fields from the related model to display in UI dropdowns (optional, defaults to showing the ID)
+
+**Multiple Relationships:**
+```yaml
+models:
+  - name: Comment
+    fields:
+      - name: content
+        type: string
+        required: true
+      - name: post
+        type: Post         # Creates foreign key: postId
+        required: true
+      - name: author
+        type: User         # Creates foreign key: authorId
+        required: true
+        displayFields: [username, email]
+      - name: parentComment
+        type: Comment      # Self-referential relationship
+        required: false    # Creates foreign key: parentCommentId
+```
+
+**Relationship Best Practices:**
+- ✅ Always define the foreign model first in the same module
+- ✅ Use descriptive field names for relationships (e.g., `author` instead of `user`)
+- ✅ Set appropriate `displayFields` to show meaningful data in dropdowns
+- ✅ Use `required: false` for optional relationships
+- ✅ Foreign keys are auto-generated following the pattern `fieldName + 'Id'`
+- ❌ Don't manually add foreign key fields (they're auto-generated)
+- ❌ Don't create circular dependencies between modules
 
 ### Action Handlers Explained
 

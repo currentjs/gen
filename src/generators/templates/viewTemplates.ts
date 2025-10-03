@@ -5,7 +5,40 @@ type FieldConfig = {
   auto?: boolean;
   unique?: boolean;
   enum?: string[];
+  // Relationship configuration
+  displayFields?: string[];
 };
+
+// Helper to check if a field type is a known model (relationship)
+let availableModels: Set<string> = new Set();
+
+// Context for generating relationship field paths
+type RelationshipContext = {
+  routePaths: Map<string, string>;  // modelName -> web route path for create
+  apiPaths: Map<string, string>;    // modelName -> api path for list
+};
+
+let relationshipContext: RelationshipContext = {
+  routePaths: new Map(),
+  apiPaths: new Map()
+};
+
+function setAvailableModels(models: string[]): void {
+  availableModels = new Set(models);
+}
+
+function setRelationshipContext(context: RelationshipContext): void {
+  relationshipContext = context;
+}
+
+function isRelationshipField(field: FieldConfig): boolean {
+  return availableModels.has(field.type);
+}
+
+function getForeignKeyFieldName(field: FieldConfig): string {
+  // Convention: fieldName + 'Id' (e.g., owner -> ownerId)
+  return field.name + 'Id';
+}
 
 export function toFileNameFromTemplateName(name: string): string {
   const last = (name.split('/') as string[]).pop() || 'template';
@@ -24,6 +57,54 @@ function generateFormInput(field: FieldConfig): string {
   // Skip auto fields (like auto-incrementing IDs)
   if (field.auto) {
     return '';
+  }
+  
+  // Handle relationship fields with a select dropdown
+  if (isRelationshipField(field)) {
+    const foreignKeyName = getForeignKeyFieldName(field);
+    const relatedModel = field.type;
+    const relatedModelLower = relatedModel.toLowerCase();
+    const displayField = (field.displayFields && field.displayFields.length > 0) ? field.displayFields[0] : 'name';
+    
+    // Get actual paths from context, or fallback to defaults
+    const routePath = relationshipContext.routePaths.get(relatedModel) || `/${relatedModelLower}/create`;
+    const apiPath = relationshipContext.apiPaths.get(relatedModel) || `/api/${relatedModelLower}`;
+    
+    return `  <div class="mb-3">
+    <label for="${foreignKeyName}" class="form-label">${fieldName}</label>
+    <div class="input-group">
+      <select id="${foreignKeyName}" name="${foreignKeyName}" class="form-select"${requiredAttr} data-relationship="${relatedModel}">
+        <option value="">-- Select ${fieldName} --</option>
+        <!-- Options will be populated via JavaScript from ${apiPath} -->
+      </select>
+      <button type="button" class="btn btn-outline-secondary" onclick="window.open('${routePath}', '${relatedModel}Create', 'width=600,height=400')">
+        <i class="bi bi-plus-circle"></i> New
+      </button>
+    </div>
+    <small class="form-text text-muted">Select an existing ${fieldName} or create a new one</small>
+  </div>
+  <script>
+    // Load ${relatedModel} options
+    (async () => {
+      try {
+        const response = await fetch('${apiPath}', {
+          headers: App.auth.buildAuthHeaders()
+        });
+        const data = await response.json();
+        const select = document.getElementById('${foreignKeyName}');
+        if (Array.isArray(data)) {
+          data.forEach(item => {
+            const option = document.createElement('option');
+            option.value = item.id;
+            option.textContent = item.${displayField} || item.id;
+            select.appendChild(option);
+          });
+        }
+      } catch (error) {
+        console.error('Failed to load ${relatedModel} options:', error);
+      }
+    })();
+  </script>`;
   }
   
   switch (field.type.toLowerCase()) {
@@ -88,6 +169,58 @@ function generateUpdateFormInput(field: FieldConfig): string {
     return '';
   }
   
+  // Handle relationship fields with a select dropdown
+  if (isRelationshipField(field)) {
+    const foreignKeyName = getForeignKeyFieldName(field);
+    const relatedModel = field.type;
+    const relatedModelLower = relatedModel.toLowerCase();
+    const displayField = (field.displayFields && field.displayFields.length > 0) ? field.displayFields[0] : 'name';
+    
+    // Get actual paths from context, or fallback to defaults
+    const routePath = relationshipContext.routePaths.get(relatedModel) || `/${relatedModelLower}/create`;
+    const apiPath = relationshipContext.apiPaths.get(relatedModel) || `/api/${relatedModelLower}`;
+    
+    return `  <div class="mb-3">
+    <label for="${foreignKeyName}" class="form-label">${fieldName}</label>
+    <div class="input-group">
+      <select id="${foreignKeyName}" name="${foreignKeyName}" class="form-select"${requiredAttr} data-relationship="${relatedModel}" data-current-value="{{ $root.${foreignKeyName} }}">
+        <option value="">-- Select ${fieldName} --</option>
+        <!-- Options will be populated via JavaScript from ${apiPath} -->
+      </select>
+      <button type="button" class="btn btn-outline-secondary" onclick="window.open('${routePath}', '${relatedModel}Create', 'width=600,height=400')">
+        <i class="bi bi-plus-circle"></i> New
+      </button>
+    </div>
+    <small class="form-text text-muted">Select an existing ${fieldName} or create a new one</small>
+  </div>
+  <script>
+    // Load ${relatedModel} options
+    (async () => {
+      try {
+        const response = await fetch('${apiPath}', {
+          headers: App.auth.buildAuthHeaders()
+        });
+        const data = await response.json();
+        const select = document.getElementById('${foreignKeyName}');
+        const currentValue = select.getAttribute('data-current-value');
+        if (Array.isArray(data)) {
+          data.forEach(item => {
+            const option = document.createElement('option');
+            option.value = item.id;
+            option.textContent = item.${displayField} || item.id;
+            if (currentValue && item.id == currentValue) {
+              option.selected = true;
+            }
+            select.appendChild(option);
+          });
+        }
+      } catch (error) {
+        console.error('Failed to load ${relatedModel} options:', error);
+      }
+    })();
+  </script>`;
+  }
+  
   switch (field.type.toLowerCase()) {
     case 'number':
     case 'int':
@@ -141,12 +274,24 @@ ${options}
   }
 }
 
+// Export the helper functions so TemplateGenerator can use them
+export { setAvailableModels, setRelationshipContext, isRelationshipField, getForeignKeyFieldName };
+
 export function renderListTemplate(entityName: string, templateName: string, basePath: string, fields: FieldConfig[], apiBase?: string): string {
-  const safeFields = fields.length > 0 ? fields.map(f => f.name) : ['id', 'name'];
-  const headers = ['ID', ...safeFields.filter(f => f !== 'id').map(f => f.charAt(0).toUpperCase() + f.slice(1).replace(/_/g, ' '))].map(f => `<th scope="col">${f}</th>`).join('');
+  const safeFields = fields.length > 0 ? fields : [{ name: 'id', type: 'number' }, { name: 'name', type: 'string' }];
+  const headers = ['ID', ...safeFields.filter(f => f.name !== 'id').map(f => f.name.charAt(0).toUpperCase() + f.name.slice(1).replace(/_/g, ' '))].map(f => `<th scope="col">${f}</th>`).join('');
+  
+  // Generate cells with relationship field handling
   const cells = [
     '<td>{{ row.id }}</td>',
-    ...safeFields.filter(f => f !== 'id').map(f => `<td>{{ row.${f} }}</td>`)
+    ...safeFields.filter(f => f.name !== 'id').map(f => {
+      // For relationship fields, show a specific field from the related object
+      if (isRelationshipField(f)) {
+        const displayField = (f.displayFields && f.displayFields.length > 0) ? f.displayFields[0] : 'name';
+        return `<td>{{ row.${f.name}.${displayField} }}</td>`;
+      }
+      return `<td>{{ row.${f.name} }}</td>`;
+    })
   ].join('\n      ');
   const deleteAction = apiBase ? `${apiBase}/{{ row.id }}` : `${basePath}/api/{{ row.id }}`;
   return `<!-- @template name="${templateName}" -->
@@ -203,10 +348,19 @@ export function renderListTemplate(entityName: string, templateName: string, bas
 }
 
 export function renderDetailTemplate(entityName: string, templateName: string, fields: FieldConfig[]): string {
-  const safeFields = fields.length > 0 ? fields.map(f => f.name) : ['id', 'name'];
+  const safeFields = fields.length > 0 ? fields : [{ name: 'id', type: 'number' }, { name: 'name', type: 'string' }];
   const rows = safeFields.map(f => {
-    const fieldName = f.charAt(0).toUpperCase() + f.slice(1).replace(/_/g, ' ');
-    return `    <tr><th scope="row" class="w-25">${fieldName}</th><td>{{ $root.${f} }}</td></tr>`;
+    const fieldName = f.name.charAt(0).toUpperCase() + f.name.slice(1).replace(/_/g, ' ');
+    
+    // For relationship fields, show specific fields from the related object
+    if (isRelationshipField(f)) {
+      const displayFields = (f.displayFields && f.displayFields.length > 0) ? f.displayFields : ['name'];
+      // Show all displayFields separated by comma
+      const fieldAccess = displayFields.map(df => `{{ $root.${f.name}.${df} }}`).join(', ');
+      return `    <tr><th scope="row" class="w-25">${fieldName}</th><td>${fieldAccess}</td></tr>`;
+    }
+    
+    return `    <tr><th scope="row" class="w-25">${fieldName}</th><td>{{ $root.${f.name} }}</td></tr>`;
   }).join('\n');
   return `<!-- @template name="${templateName}" -->
 <div class="container-fluid py-4">

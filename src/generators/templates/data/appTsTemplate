@@ -1,0 +1,39 @@
+import { createWebServer } from '@currentjs/router';
+import { createTemplateEngine } from '@currentjs/templating';
+import * as path from 'path';
+
+/** DO NOT CHANGE THESE LINES **/
+// currentjs:controllers:start
+// currentjs:controllers:end
+/** END OF DO NOT CHANGE THESE LINES **/
+
+export async function main() {
+  await Promise.all(Object.values(providers).map(provider => provider.init()));
+  const webDir = path.join(process.cwd(), 'web');
+  const renderEngine = createTemplateEngine({ directories: [process.cwd()] });
+  const app = createWebServer({ controllers, webDir }, { 
+    port: 3000, 
+    renderer: (template, data, layout) => {
+      try {
+        return layout ? renderEngine.renderWithLayout(layout, template, data) : renderEngine.render(template, data);
+      } catch (e) {
+        return String(e instanceof Error ? e.message : e);
+      }
+    },
+    errorTemplate: 'error'
+  });
+  await app.listen();
+  console.log('Server started on http://localhost:3000');
+
+  const handleTermination = async () => {
+    try { await app.close(); } catch {}
+    const shutdowns = Object.values(providers).map(provider => provider.shutdown ?? (() => {}));
+    await Promise.all(shutdowns);
+    process.exit(0);
+  };
+
+  process.on('SIGINT', handleTermination);
+  process.on('SIGTERM', handleTermination);
+}
+
+void main();

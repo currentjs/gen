@@ -1,0 +1,68 @@
+{
+  "ru": {
+    "error": "ошибка",
+    "success": "успешно",
+    "Reloading page...": "Перезагрузка страницы...",
+    "Request failed. Please try again.": "Запрос не выполнен. Попробуйте еще раз.",
+    "This field is required": "Это поле обязательно",
+    "An error occurred": "Произошла ошибка",
+    "saved successfully": "успешно сохранено",
+    "updated successfully": "успешно обновлено",
+    "deleted successfully": "успешно удалено"
+  },
+  "pl": {
+    "error": "błąd",
+    "success": "sukces",
+    "Reloading page...": "Przeładowywanie strony...",
+    "Request failed. Please try again.": "Żądanie nie powiodło się. Spróbuj ponownie.",
+    "This field is required": "To pole jest wymagane",
+    "An error occurred": "Wystąpił błąd",
+    "saved successfully": "zapisano pomyślnie",
+    "updated successfully": "zaktualizowano pomyślnie",
+    "deleted successfully": "usunięto pomyślnie"
+  },
+  "es": {
+    "error": "error",
+    "success": "éxito",
+    "Reloading page...": "Recargando página...",
+    "Request failed. Please try again.": "La solicitud falló. Por favor, inténtelo de nuevo.",
+    "This field is required": "Este campo es obligatorio",
+    "An error occurred": "Ha ocurrido un error",
+    "saved successfully": "guardado exitosamente",
+    "updated successfully": "actualizado exitosamente",
+    "deleted successfully": "eliminado exitosamente"
+  },
+  "de": {
+    "error": "Fehler",
+    "success": "Erfolg",
+    "Reloading page...": "Seite wird neu geladen...",
+    "Request failed. Please try again.": "Anfrage fehlgeschlagen. Bitte versuchen Sie es erneut.",
+    "This field is required": "Dieses Feld ist erforderlich",
+    "An error occurred": "Ein Fehler ist aufgetreten",
+    "saved successfully": "erfolgreich gespeichert",
+    "updated successfully": "erfolgreich aktualisiert",
+    "deleted successfully": "erfolgreich gelöscht"
+  },
+  "pt": {
+    "error": "erro",
+    "success": "sucesso",
+    "Reloading page...": "Recarregando página...",
+    "Request failed. Please try again.": "A solicitação falhou. Por favor, tente novamente.",
+    "This field is required": "Este campo é obrigatório",
+    "An error occurred": "Ocorreu um erro",
+    "saved successfully": "salvo com sucesso",
+    "updated successfully": "atualizado com sucesso",
+    "deleted successfully": "excluído com sucesso"
+  },
+  "zh": {
+    "error": "错误",
+    "success": "成功",
+    "Reloading page...": "正在重新加载页面...",
+    "Request failed. Please try again.": "请求失败。请再试一次。",
+    "This field is required": "此字段为必填项",
+    "An error occurred": "发生错误",
+    "saved successfully": "保存成功",
+    "updated successfully": "更新成功",
+    "deleted successfully": "删除成功"
+  }
+}

@@ -24,11 +24,13 @@ export function handleCreateApp(rawName?: string): void {
   const webDir = path.join(targetRoot, DEFAULT_DIRECTORIES.WEB);
   const templatesDir = path.join(targetRoot, DEFAULT_DIRECTORIES.TEMPLATES);
   const servicesDir = path.join(targetRoot, DEFAULT_DIRECTORIES.SERVICES);
+  const migrationsDir = path.join(targetRoot, DEFAULT_DIRECTORIES.MIGRATIONS);
   ensureDir(srcDir);
   ensureDir(distDir);
   ensureDir(webDir);
   ensureDir(templatesDir);
   ensureDir(servicesDir);
+  ensureDir(migrationsDir);
 
   // Files using imported templates
   writeFileIfMissing(path.join(targetRoot, DEFAULT_FILES.PACKAGE_JSON), packageJsonTemplate(path.basename(targetRoot)));
