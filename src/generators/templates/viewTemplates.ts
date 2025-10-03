@@ -12,8 +12,23 @@ type FieldConfig = {
 // Helper to check if a field type is a known model (relationship)
 let availableModels: Set<string> = new Set();
 
+// Context for generating relationship field paths
+type RelationshipContext = {
+  routePaths: Map<string, string>;  // modelName -> web route path for create
+  apiPaths: Map<string, string>;    // modelName -> api path for list
+};
+
+let relationshipContext: RelationshipContext = {
+  routePaths: new Map(),
+  apiPaths: new Map()
+};
+
 function setAvailableModels(models: string[]): void {
   availableModels = new Set(models);
+}
+
+function setRelationshipContext(context: RelationshipContext): void {
+  relationshipContext = context;
 }
 
 function isRelationshipField(field: FieldConfig): boolean {
@@ -51,14 +66,18 @@ function generateFormInput(field: FieldConfig): string {
     const relatedModelLower = relatedModel.toLowerCase();
     const displayField = (field.displayFields && field.displayFields.length > 0) ? field.displayFields[0] : 'name';
     
+    // Get actual paths from context, or fallback to defaults
+    const routePath = relationshipContext.routePaths.get(relatedModel) || `/${relatedModelLower}/create`;
+    const apiPath = relationshipContext.apiPaths.get(relatedModel) || `/api/${relatedModelLower}`;
+    
     return `  <div class="mb-3">
     <label for="${foreignKeyName}" class="form-label">${fieldName}</label>
     <div class="input-group">
       <select id="${foreignKeyName}" name="${foreignKeyName}" class="form-select"${requiredAttr} data-relationship="${relatedModel}">
         <option value="">-- Select ${fieldName} --</option>
-        <!-- Options will be populated via JavaScript from /api/${relatedModelLower} -->
+        <!-- Options will be populated via JavaScript from ${apiPath} -->
       </select>
-      <button type="button" class="btn btn-outline-secondary" onclick="window.open('/${relatedModelLower}/create', '${relatedModel}Create', 'width=600,height=400')">
+      <button type="button" class="btn btn-outline-secondary" onclick="window.open('${routePath}', '${relatedModel}Create', 'width=600,height=400')">
         <i class="bi bi-plus-circle"></i> New
       </button>
     </div>
@@ -68,7 +87,7 @@ function generateFormInput(field: FieldConfig): string {
     // Load ${relatedModel} options
     (async () => {
       try {
-        const response = await fetch('/api/${relatedModelLower}');
+        const response = await fetch('${apiPath}');
         const data = await response.json();
         const select = document.getElementById('${foreignKeyName}');
         if (Array.isArray(data)) {
@@ -155,14 +174,18 @@ function generateUpdateFormInput(field: FieldConfig): string {
     const relatedModelLower = relatedModel.toLowerCase();
     const displayField = (field.displayFields && field.displayFields.length > 0) ? field.displayFields[0] : 'name';
     
+    // Get actual paths from context, or fallback to defaults
+    const routePath = relationshipContext.routePaths.get(relatedModel) || `/${relatedModelLower}/create`;
+    const apiPath = relationshipContext.apiPaths.get(relatedModel) || `/api/${relatedModelLower}`;
+    
     return `  <div class="mb-3">
     <label for="${foreignKeyName}" class="form-label">${fieldName}</label>
     <div class="input-group">
       <select id="${foreignKeyName}" name="${foreignKeyName}" class="form-select"${requiredAttr} data-relationship="${relatedModel}" data-current-value="{{ $root.${foreignKeyName} }}">
         <option value="">-- Select ${fieldName} --</option>
-        <!-- Options will be populated via JavaScript from /api/${relatedModelLower} -->
+        <!-- Options will be populated via JavaScript from ${apiPath} -->
       </select>
-      <button type="button" class="btn btn-outline-secondary" onclick="window.open('/${relatedModelLower}/create', '${relatedModel}Create', 'width=600,height=400')">
+      <button type="button" class="btn btn-outline-secondary" onclick="window.open('${routePath}', '${relatedModel}Create', 'width=600,height=400')">
         <i class="bi bi-plus-circle"></i> New
       </button>
     </div>
@@ -172,7 +195,7 @@ function generateUpdateFormInput(field: FieldConfig): string {
     // Load ${relatedModel} options
     (async () => {
       try {
-        const response = await fetch('/api/${relatedModelLower}');
+        const response = await fetch('${apiPath}');
         const data = await response.json();
         const select = document.getElementById('${foreignKeyName}');
         const currentValue = select.getAttribute('data-current-value');
@@ -247,8 +270,8 @@ ${options}
   }
 }
 
-// Export the helper function so TemplateGenerator can use it
-export { setAvailableModels, isRelationshipField, getForeignKeyFieldName };
+// Export the helper functions so TemplateGenerator can use them
+export { setAvailableModels, setRelationshipContext, isRelationshipField, getForeignKeyFieldName };
 
 export function renderListTemplate(entityName: string, templateName: string, basePath: string, fields: FieldConfig[], apiBase?: string): string {
   const safeFields = fields.length > 0 ? fields : [{ name: 'id', type: 'number' }, { name: 'name', type: 'string' }];

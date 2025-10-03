@@ -155,6 +155,64 @@ permissions:                            # Role-based access control
 - `datetime` - Date and time values
 - `ModelName` - Relationship to another model (e.g., `Owner`, `User`, `Post`)
 
+**Multi-Model Endpoint Configuration:**
+
+When working with multiple models in a single module, you have flexible options:
+
+**Option 1: Per-Endpoint Model Override**
+
+Specify `model` on individual endpoints to override the section default:
+
+```yaml
+models:
+  - name: Cat
+  - name: Person
+  # do not forget to describe fields of each model
+
+routes:
+  prefix: /cat
+  model: Cat  # Default for this section
+  endpoints:
+    - path: /create
+      view: catCreate
+      # Uses Cat model
+    
+    - path: /createOwner
+      view: ownerCreate
+      model: Person  # Override for this endpoint
+```
+
+**Option 2: Multiple API/Routes Sections**
+
+Use arrays to organize endpoints by model:
+
+```yaml
+routes:
+  - prefix: /cat
+    model: Cat
+    endpoints: [...]
+  
+  - prefix: /person
+    model: Person
+    endpoints: [...]
+
+# Same works for api sections
+api:
+  - prefix: /api/cat
+    model: Cat
+    endpoints: [...]
+  
+  - prefix: /api/person
+    model: Person
+    endpoints: [...]
+```
+
+**Model Resolution Priority:**
+1. `endpoint.model` (explicit override)
+2. Inferred from action handler (e.g., `Person:default:create`)
+3. `api.model` or `routes.model` (section default)
+4. First model in `models[]` array (fallback)
+
 **🔗 Model Relationships:**
 
 Define relationships by using another model's name as the field type:

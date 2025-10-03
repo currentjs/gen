@@ -44,8 +44,8 @@ interface ModelConfig {
 
 type ModuleConfig = {
   models?: ModelConfig[];
-  api?: ApiConfig;
-  routes?: RoutesConfig;
+  api?: ApiConfig | ApiConfig[];
+  routes?: RoutesConfig | RoutesConfig[];
   actions?: Record<string, ActionConfig>;
   permissions?: PermissionConfig[];
 };
@@ -325,17 +325,18 @@ export class ControllerGenerator {
     }
   }
 
-  private generateControllerForModel(
+  /**
+   * Generate controller for a single config (api or routes)
+   */
+  private generateControllerForModelWithConfig(
     model: ModelConfig,
     moduleName: string,
     moduleConfig: ModuleConfig,
+    cfg: ApiConfig | RoutesConfig,
     hasGlobalPermissions: boolean,
     kind: 'api' | 'web'
   ): string {
     const isApi = kind === 'api';
-    const cfgRaw = isApi ? moduleConfig.api : moduleConfig.routes;
-    let cfg = cfgRaw;
-    
     const entityName = model.name;
     const entityLower = entityName.toLowerCase();
 
@@ -343,7 +344,7 @@ export class ControllerGenerator {
     const configModel = cfg?.model || (moduleConfig.models && moduleConfig.models[0] ? moduleConfig.models[0].name : null);
     const topLevelMatches = !configModel || configModel === entityName || configModel.toLowerCase() === entityLower;
     
-    // Also check if any endpoints specifically target this model
+    // Also check if any endpoints specifically target this model (Option A)
     const hasEndpointForThisModel = cfg?.endpoints?.some(endpoint => {
       const endpointModel = endpoint.model || configModel;
       return endpointModel === entityName || endpointModel?.toLowerCase() === entityLower;
@@ -355,33 +356,11 @@ export class ControllerGenerator {
       return '';
     }
 
-    if (!isApi) {
-      // Ensure sensible defaults for Web routes: list, detail, create (empty), edit (get)
-      if (!cfgRaw || !cfgRaw.endpoints || cfgRaw.endpoints.length === 0) {
-        cfg = {
-          prefix: `/${entityLower}`,
-          endpoints: [
-            { path: '/', action: 'list', method: 'GET', view: `${entityLower}List` },
-            { path: '/:id', action: 'get', method: 'GET', view: `${entityLower}Detail` },
-            { path: '/create', action: 'empty', method: 'GET', view: `${entityLower}Create` },
-            { path: '/:id/edit', action: 'get', method: 'GET', view: `${entityLower}Update` }
-          ]
-        } as RoutesConfig;
-      } else {
-        // Force GET for all web endpoints; forms should submit to API using custom form handling
-        cfg = {
-          prefix: cfgRaw.prefix || `/${entityLower}`,
-          endpoints: (cfgRaw.endpoints || []).map(e => ({ ...e, method: 'GET' }))
-        } as RoutesConfig;
-      }
-    }
-    if (!cfg) return '';
-
     const controllerBase = (cfg.prefix || `/${isApi ? 'api/' : ''}${entityLower}`).replace(/\/$/, '');
     const actionPermissions = this.getActionPermissions(moduleName, moduleConfig);
     const hasPermissions = hasGlobalPermissions && !!(moduleConfig.permissions && moduleConfig.permissions.length > 0);
 
-    // Filter endpoints that apply to this model
+    // Filter endpoints that apply to this model (Option A)
     const modelEndpoints = (cfg.endpoints || []).filter(endpoint => {
       const endpointModel = endpoint.model || cfg?.model || (moduleConfig.models && moduleConfig.models[0] ? moduleConfig.models[0].name : null);
       return endpointModel === entityName || endpointModel?.toLowerCase() === entityLower;
@@ -398,12 +377,77 @@ export class ControllerGenerator {
       })
       .join('\n\n');
 
+    return controllerMethods;
+  }
+
+  /**
+   * Generate controller for a model (handles both single config and array) - Option D
+   */
+  private generateControllerForModel(
+    model: ModelConfig,
+    moduleName: string,
+    moduleConfig: ModuleConfig,
+    hasGlobalPermissions: boolean,
+    kind: 'api' | 'web'
+  ): string {
+    const isApi = kind === 'api';
+    const cfgRaw = isApi ? moduleConfig.api : moduleConfig.routes;
+    
+    const entityName = model.name;
+    const entityLower = entityName.toLowerCase();
+
+    // Support both single config and array (Option D)
+    let configs: (ApiConfig | RoutesConfig)[] = [];
+    
+    if (!cfgRaw) {
+      // No config - generate defaults for web routes only
+      if (!isApi) {
+        configs = [{
+          prefix: `/${entityLower}`,
+          endpoints: [
+            { path: '/', action: 'list', method: 'GET', view: `${entityLower}List` },
+            { path: '/:id', action: 'get', method: 'GET', view: `${entityLower}Detail` },
+            { path: '/create', action: 'empty', method: 'GET', view: `${entityLower}Create` },
+            { path: '/:id/edit', action: 'get', method: 'GET', view: `${entityLower}Update` }
+          ]
+        } as RoutesConfig];
+      } else {
+        return '';
+      }
+    } else if (Array.isArray(cfgRaw)) {
+      configs = cfgRaw;
+    } else {
+      configs = [cfgRaw];
+    }
+
+    // For web routes, force GET method
+    if (!isApi) {
+      configs = configs.map(cfg => ({
+        ...cfg,
+        endpoints: (cfg.endpoints || []).map(e => ({ ...e, method: 'GET' }))
+      })) as RoutesConfig[];
+    }
+
+    // Generate methods from all configs
+    const allMethods = configs
+      .map(cfg => this.generateControllerForModelWithConfig(model, moduleName, moduleConfig, cfg, hasGlobalPermissions, kind))
+      .filter(methods => methods.trim() !== '')
+      .join('\n\n');
+
+    if (!allMethods.trim()) {
+      return '';
+    }
+
+    // Use the first config for controller base path (or default)
+    const firstConfig = configs[0];
+    const controllerBase = (firstConfig?.prefix || `/${isApi ? 'api/' : ''}${entityLower}`).replace(/\/$/, '');
+
     const controllerClass = this.replaceTemplateVars(controllerTemplates.controllerClass, {
       CONTROLLER_NAME: `${entityName}${isApi ? 'ApiController' : 'WebController'}`,
       ENTITY_NAME: entityName,
       ENTITY_LOWER: entityLower,
       CONTROLLER_BASE: controllerBase,
-      CONTROLLER_METHODS: controllerMethods
+      CONTROLLER_METHODS: allMethods
     } as any);
 
     return this.replaceTemplateVars(controllerFileTemplate, {

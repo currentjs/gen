@@ -257,6 +257,94 @@ dist/
 
 With this setup, your repository stays focused on what matters: your specifications and customizations, not generated boilerplate!
 
+## Multi-Model Endpoint Support 🔀
+
+Working with multiple related models in a single module? CurrentJS now supports flexible endpoint configurations for multi-model scenarios.
+
+### Per-Endpoint Model Override
+
+Override the model for specific endpoints when you need to mix models within the same API or routes section:
+
+```yaml
+models:
+  - name: Cat
+    fields:
+      - name: name
+        type: string
+  - name: Person
+    fields:
+      - name: name
+        type: string
+      - name: email
+        type: string
+
+routes:
+  prefix: /cat
+  model: Cat  # Default model for this section
+  endpoints:
+    - path: /create
+      action: empty
+      view: catCreate
+      # Uses Cat model (from default)
+    
+    - path: /createOwner
+      action: empty
+      view: ownerCreate
+      model: Person  # Override to use Person model for this endpoint
+```
+
+**Result**: The `/cat/createOwner` page will generate a form with Person fields (name, email), not Cat fields.
+
+### Multiple API/Routes Sections
+
+Organize endpoints by model or functionality using arrays:
+
+```yaml
+# Multiple routes sections for different models
+routes:
+  - prefix: /cat
+    model: Cat
+    endpoints:
+      - path: /
+        action: list
+        view: catList
+      - path: /create
+        action: empty
+        view: catCreate
+  
+  - prefix: /person
+    model: Person
+    endpoints:
+      - path: /
+        action: list
+        view: personList
+      - path: /create
+        action: empty
+        view: personCreate
+```
+
+**Result**: Generates separate controllers with their own base paths and endpoints.
+
+### Automatic Model Inference
+
+If you don't specify a `model`, the system will infer it from the action handler:
+
+```yaml
+routes:
+  prefix: /cat
+  endpoints:
+    - path: /createOwner
+      action: createOwner
+      view: ownerCreate
+      # No model specified - inferred from action below
+
+actions:
+  createOwner:
+    handlers: [Person:default:create]  # Infers Person model
+```
+
+**Priority**: `endpoint.model` → inferred from handler → section `model` → first model in array
+
 ## Example: Building a Blog System 📝
 
 Here's how you'd create a complete very simple blog system:
