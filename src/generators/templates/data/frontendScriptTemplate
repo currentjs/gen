@@ -394,8 +394,7 @@ window.AppConfig = {
         target.innerHTML = html;
         // Update browser history
         window.history.pushState({}, '', url);
-        // Re-initialize event listeners for new content
-        initializeEventListeners();
+        // No need to re-initialize - delegation handles new content automatically
       })
       .catch(error => {
         console.error('Navigation failed:', error);
@@ -616,56 +615,52 @@ window.AppConfig = {
   // ===== INITIALIZATION =====
 
   /**
-   * Initialize event listeners for links and forms
+   * Initialize event delegation for links and forms
+   * Uses document-level listeners that work for all current and future elements
    */
   function initializeEventListeners() {
-    // Handle internal links
-    document.querySelectorAll('a[href]').forEach(link => {
+    // Only initialize once
+    if (window._appEventListenersInitialized) return;
+    window._appEventListenersInitialized = true;
+
+    // Handle all link clicks via delegation
+    document.addEventListener('click', function(event) {
+      const link = event.target.closest('a[href]');
+      if (!link) return;
+
       const href = link.getAttribute('href');
-      
+
       // Skip external links, anchors, and special protocols
-      if (!href || 
-          href.startsWith('http://') || 
-          href.startsWith('https://') || 
-          href.startsWith('mailto:') || 
-          href.startsWith('tel:') || 
+      if (!href ||
+          href.startsWith('http://') ||
+          href.startsWith('https://') ||
+          href.startsWith('mailto:') ||
+          href.startsWith('tel:') ||
           href.startsWith('#') ||
           href.startsWith('javascript:')) {
         return;
       }
-      
-      // Remove any existing event listeners and add new one
-      link.removeEventListener('click', handleLinkClick);
-      link.addEventListener('click', handleLinkClick);
-    });
-    
-    // Handle forms with strategy
-    document.querySelectorAll('form[data-strategy]').forEach(form => {
-      // Remove any existing event listeners and add new one
-      form.removeEventListener('submit', handleFormSubmit);
-      form.addEventListener('submit', handleFormSubmit);
-    });
-  }
 
-  /**
-   * Handle link click for internal navigation
-   * @param {Event} event - Click event
-   */
-  function handleLinkClick(event) {
-    event.preventDefault();
-    const href = event.currentTarget.getAttribute('href');
-    if (href) {
+      event.preventDefault();
       navigateToPage(href);
-    }
+    });
+
+    // Handle all form submissions via delegation
+    document.addEventListener('submit', function(event) {
+      const form = event.target.closest('form[data-strategy]');
+      if (!form) return;
+
+      event.preventDefault();
+      handleFormSubmit(event, form);
+    });
   }
 
   /**
    * Handle form submission
    * @param {Event} event - Submit event
    */
-  function handleFormSubmit(event) {
-    event.preventDefault();
-    const form = event.target;
+  function handleFormSubmit(event, form) {
+    //const form = event.target.closest ? event.target.closest('form') : event.target;
     
     // Check for confirmation message
     const confirmMessage = form.getAttribute('data-confirm-message');
