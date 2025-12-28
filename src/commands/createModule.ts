@@ -6,45 +6,140 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 function moduleYamlTemplate(moduleName: string): string {
   const entityName = moduleName.charAt(0).toUpperCase() + moduleName.slice(1);
   const lower = moduleName.charAt(0).toLowerCase() + moduleName.slice(1);
+  
   const config = {
-    models: [
-      {
-        name: entityName,
-        fields: [] as any[]
+    domain: {
+      aggregates: {
+        [entityName]: {
+          root: true,
+          fields: {
+            // Add your fields here, e.g.:
+            // name: { type: 'string', required: true }
+          }
+        }
       }
-    ],
+    },
+    useCases: {
+      [entityName]: {
+        list: {
+          input: {
+            pagination: {
+              type: 'offset',
+              defaults: {
+                limit: 20,
+                maxLimit: 100
+              }
+            }
+          },
+          output: {
+            from: entityName,
+            pagination: true
+          },
+          handlers: ['default:list']
+        },
+        get: {
+          input: {
+            identifier: 'id'
+          },
+          output: {
+            from: entityName
+          },
+          handlers: ['default:get']
+        },
+        create: {
+          input: {
+            from: entityName
+          },
+          output: {
+            from: entityName
+          },
+          handlers: ['default:create']
+        },
+        update: {
+          input: {
+            identifier: 'id',
+            from: entityName,
+            partial: true
+          },
+          output: {
+            from: entityName
+          },
+          handlers: ['default:update']
+        },
+        delete: {
+          input: {
+            identifier: 'id'
+          },
+          output: 'void',
+          handlers: ['default:delete']
+        }
+      }
+    },
     api: {
-      prefix: `/api/${lower}`,
-      model: entityName,
-      endpoints: [
-        { method: 'GET', path: '/', action: 'list' },
-        { method: 'GET', path: '/:id', action: 'get' },
-        { method: 'POST', path: '/', action: 'create' },
-        { method: 'PUT', path: '/:id', action: 'update' },
-        { method: 'DELETE', path: '/:id', action: 'delete' }
-      ]
+      resources: {
+        [entityName]: {
+          prefix: `/api/${lower}`,
+          endpoints: [
+            { method: 'GET', path: '/', useCase: `${entityName}:list`, auth: 'authenticated' },
+            { method: 'GET', path: '/:id', useCase: `${entityName}:get`, auth: 'authenticated' },
+            { method: 'POST', path: '/', useCase: `${entityName}:create`, auth: 'authenticated' },
+            { method: 'PUT', path: '/:id', useCase: `${entityName}:update`, auth: 'authenticated' },
+            { method: 'DELETE', path: '/:id', useCase: `${entityName}:delete`, auth: 'authenticated' }
+          ]
+        }
+      }
     },
-    routes: {
-      prefix: `/${lower}`,
-      model: entityName,
-      strategy: ['back', 'toast'],
-      endpoints: [
-        //bug: the order of the endpoints is important (to fix it in the router)
-        { path: '/create', action: 'empty', view: `${lower}Create` },
-        { path: '/', action: 'list', view: `${lower}List` },
-        { path: '/:id', action: 'get', view: `${lower}Detail` },
-        { path: '/:id/edit', action: 'get', view: `${lower}Update` },
-      ]
-    },
-    actions: {
-      list: { handlers: [`${entityName}:default:list`] },
-      get: { handlers: [`${entityName}:default:get`] },
-      create: { handlers: [`${entityName}:default:create`] },
-      update: { handlers: [`${entityName}:default:update`] },
-      delete: { handlers: [`${entityName}:default:delete`] }
-    },
-    permissions: [] as any[]
+    web: {
+      resources: {
+        [entityName]: {
+          prefix: `/${lower}`,
+          layout: 'main_view',
+          pages: [
+            { path: '/', useCase: `${entityName}:list`, view: `${lower}List`, auth: 'authenticated' },
+            { 
+              path: '/create', 
+              method: 'GET',
+              view: `${lower}Create`, 
+              auth: 'authenticated' 
+            },
+            { 
+              path: '/create', 
+              method: 'POST',
+              useCase: `${entityName}:create`, 
+              auth: 'authenticated',
+              onSuccess: {
+                redirect: `/${lower}/:id`,
+                toast: `${entityName} created successfully`
+              },
+              onError: {
+                stay: true,
+                toast: 'error'
+              }
+            },
+            { path: '/:id', useCase: `${entityName}:get`, view: `${lower}Detail`, auth: 'authenticated' },
+            { 
+              path: '/:id/edit', 
+              method: 'GET',
+              useCase: `${entityName}:get`, 
+              view: `${lower}Edit`, 
+              auth: 'authenticated' 
+            },
+            { 
+              path: '/:id/edit', 
+              method: 'POST',
+              useCase: `${entityName}:update`, 
+              auth: 'authenticated',
+              onSuccess: {
+                back: true,
+                toast: `${entityName} updated successfully`
+              }
+            }
+          ]
+        }
+      }
+    }
   };
+  
   return stringifyYaml(config);
 }
 
@@ -56,10 +151,14 @@ export function handleCreateModule(name?: string): void {
   const moduleRoot = path.join(modulesRoot, name);
   ensureDir(toAbsolute(moduleRoot));
 
-  // Create standard subfolders
-  ensureDir(path.join(moduleRoot, 'domain'));
-  ensureDir(path.join(moduleRoot, 'application'));
-  ensureDir(path.join(moduleRoot, 'infrastructure'));
+  // Create standard subfolders for Clean Architecture
+  ensureDir(path.join(moduleRoot, 'domain', 'entities'));
+  ensureDir(path.join(moduleRoot, 'domain', 'valueObjects'));
+  ensureDir(path.join(moduleRoot, 'application', 'useCases'));
+  ensureDir(path.join(moduleRoot, 'application', 'services'));
+  ensureDir(path.join(moduleRoot, 'application', 'dto'));
+  ensureDir(path.join(moduleRoot, 'infrastructure', 'controllers'));
+  ensureDir(path.join(moduleRoot, 'infrastructure', 'stores'));
   ensureDir(path.join(moduleRoot, 'views'));
 
   // Create module yaml

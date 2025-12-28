@@ -2,11 +2,16 @@
 import { handleCreateApp } from './commands/createApp';
 import { handleCreateModule } from './commands/createModule';
 import { handleGenerateAll } from './commands/generateAll';
+import { handleNewGenerateAll } from './commands/newGenerateAll';
 import { handleCommit } from './commands/commit';
 import { handleDiff } from './commands/diff';
 import { colors } from './utils/colors';
 import { handleInfer } from './commands/infer';
 import { handleMigrateCommit } from './commands/migrateCommit';
+import { isNewModuleConfig } from './types/configTypes';
+import { parse as parseYaml } from 'yaml';
+import * as fs from 'fs';
+import * as path from 'path';
 // import { handleMigratePush } from './commands/migratePush';
 // import { handleMigrateUpdate } from './commands/migrateUpdate';
 
@@ -115,6 +120,32 @@ async function run() {
         return;
       }
       case 'generate': {
+        // Auto-detect format by checking first module
+        const appYamlPath = args.yaml || path.join(process.cwd(), 'app.yaml');
+        if (fs.existsSync(appYamlPath)) {
+          const raw = fs.readFileSync(appYamlPath, 'utf8');
+          const appConfig = parseYaml(raw) as { modules: Array<string | { module: string }>} | null;
+          const modulesList = (appConfig?.modules ?? []).map(m => (typeof m === 'string' ? m : m.module));
+          
+          if (modulesList.length > 0) {
+            const firstModulePath = path.isAbsolute(modulesList[0])
+              ? modulesList[0]
+              : path.resolve(process.cwd(), modulesList[0]);
+            
+            if (fs.existsSync(firstModulePath)) {
+              const moduleYamlContent = fs.readFileSync(firstModulePath, 'utf8');
+              const moduleConfig = parseYaml(moduleYamlContent);
+              
+              if (isNewModuleConfig(moduleConfig)) {
+                // Use new generator
+                await handleNewGenerateAll(args.yaml, args.out, args.name, { force: !!args.force, skip: !!args.skip });
+                return;
+              }
+            }
+          }
+        }
+        
+        // Use legacy generator
         await handleGenerateAll(args.yaml, args.out, args.name, { force: !!args.force, skip: !!args.skip });
         return;
       }
