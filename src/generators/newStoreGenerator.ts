@@ -3,162 +3,246 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { writeGeneratedFile } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
-import { NewModuleConfig, AggregateConfig, isNewModuleConfig } from '../types/configTypes';
+import { NewModuleConfig, AggregateConfig, AggregateFieldConfig, ValueObjectConfig, isNewModuleConfig } from '../types/configTypes';
+import { newStoreTemplates, newStoreFileTemplate } from './templates/newStoreTemplates';
 
 export class NewStoreGenerator {
-  private generateStore(modelName: string, aggregateConfig: AggregateConfig): string {
-    const storeName = `${modelName}Store`;
-    const entityLower = modelName.toLowerCase();
-    const tableName = entityLower.toLowerCase();
+  // Maps YAML types to TypeScript types for Row interface (database representation)
+  private rowTypeMapping: Record<string, string> = {
+    string: 'string',
+    number: 'number',
+    integer: 'number',
+    boolean: 'boolean',
+    datetime: 'string',  // MySQL returns datetime as string
+    date: 'string',      // MySQL returns date as string
+    json: 'string',      // JSON stored as string in MySQL
+    array: 'string',     // Arrays serialized as string
+    object: 'string'     // Objects serialized as string
+  };
 
-    // Generate field list for SQL queries
-    const fields = Object.entries(aggregateConfig.fields);
-    const fieldNames = ['id', ...fields.map(([name]) => name)];
-    // Escape backticks for use inside template string
-    const fieldNamesStr = fieldNames.map(f => `\\\`${f}\\\``).join(', ');
+  private availableValueObjects: Map<string, ValueObjectConfig> = new Map();
 
-    // Generate field mappings for rowToModel
-    const fieldMappings = fields
-      .map(([fieldName, fieldConfig]) => {
-        const tsType = fieldConfig.type;
-        if (tsType === 'datetime' || tsType === 'date') {
-          return `      row.${fieldName} ? new Date(row.${fieldName}) : undefined`;
-        } else if (tsType === 'boolean') {
-          return `      Boolean(row.${fieldName})`;
-        } else {
-          return `      row.${fieldName}`;
-        }
-      })
-      .join(',\n');
-
-    // Generate constructor args for entity creation
-    const constructorArgs = ['row.id', ...fields.map(() => '')];
-    const constructorArgsStr = `row.id,\n${fieldMappings}`;
-
-    return `import { ${modelName} } from '../../domain/entities/${modelName}';
-import type { ISqlProvider } from '@currentjs/provider-mysql';
-
-/**
- * Data access layer for ${modelName}
- */
-export class ${storeName} {
-  private tableName = '${tableName}';
-
-  constructor(private db: ISqlProvider) {}
-
-  private rowToModel(row: any): ${modelName} {
-    return new ${modelName}(
-${constructorArgsStr}
-    );
+  private capitalize(str: string): string {
+    return str.charAt(0).toUpperCase() + str.slice(1);
   }
 
-  async getAll(page: number = 1, limit: number = 20): Promise<${modelName}[]> {
-    const offset = (page - 1) * limit;
-    const result = await this.db.query(
-      \`SELECT ${fieldNamesStr} FROM \\\`\${this.tableName}\\\` WHERE deleted_at IS NULL LIMIT :limit OFFSET :offset\`,
-      { limit, offset }
-    );
-
-    if (result.success && result.data) {
-      return result.data.map(row => this.rowToModel(row));
-    }
-    return [];
+  private isValueObjectType(fieldType: string): boolean {
+    // Check if the type matches a known value object (case-insensitive)
+    const capitalizedType = this.capitalize(fieldType);
+    return this.availableValueObjects.has(capitalizedType);
   }
 
-  async count(): Promise<number> {
-    const result = await this.db.query(
-      \`SELECT COUNT(*) as count FROM \\\`\${this.tableName}\\\` WHERE deleted_at IS NULL\`,
-      {}
-    );
-
-    if (result.success && result.data && result.data.length > 0) {
-      return parseInt(result.data[0].count, 10);
-    }
-    return 0;
+  private getValueObjectName(fieldType: string): string {
+    return this.capitalize(fieldType);
   }
 
-  async getById(id: number): Promise<${modelName} | null> {
-    const result = await this.db.query(
-      \`SELECT ${fieldNamesStr} FROM \\\`\${this.tableName}\\\` WHERE id = :id AND deleted_at IS NULL\`,
-      { id }
-    );
+  private getValueObjectConfig(fieldType: string): ValueObjectConfig | undefined {
+    return this.availableValueObjects.get(this.getValueObjectName(fieldType));
+  }
 
-    if (result.success && result.data && result.data.length > 0) {
-      return this.rowToModel(result.data[0]);
+  /**
+   * Gets the type name for a value object field (for casting).
+   * For enum fields, returns the generated type name (e.g., BreedName).
+   * For other fields, returns the basic TypeScript type.
+   */
+  private getValueObjectFieldTypeName(voName: string, voConfig: ValueObjectConfig): string | null {
+    const fields = Object.entries(voConfig.fields);
+    
+    // Look for enum fields - they get generated type names
+    for (const [fieldName, fieldConfig] of fields) {
+      if (typeof fieldConfig === 'object' && 'values' in fieldConfig) {
+        // This is an enum field, return the generated type name
+        return `${voName}${this.capitalize(fieldName)}`;
+      }
     }
+    
     return null;
   }
 
-  async insert(entity: ${modelName}): Promise<${modelName}> {
-    const now = new Date();
-    const data: any = {
-${fields.map(([fieldName]) => `      ${fieldName}: entity.${fieldName}`).join(',\n')},
-      created_at: now,
-      updated_at: now
+  private mapTypeToRowType(yamlType: string): string {
+    // Value objects are stored as strings in the database
+    if (this.isValueObjectType(yamlType)) {
+      return 'string';
+    }
+    return this.rowTypeMapping[yamlType] || 'string';
+  }
+
+  private replaceTemplateVars(template: string, variables: Record<string, string>): string {
+    let result = template;
+    Object.entries(variables).forEach(([key, value]) => {
+      const regex = new RegExp(`{{${key}}}`, 'g');
+      result = result.replace(regex, value);
+    });
+    return result;
+  }
+
+  private generateRowFields(fields: [string, AggregateFieldConfig][]): string {
+    return fields
+      .map(([fieldName, fieldConfig]) => {
+        const tsType = this.mapTypeToRowType(fieldConfig.type);
+        const isOptional = !fieldConfig.required;
+        return `  ${fieldName}${isOptional ? '?' : ''}: ${tsType};`;
+      })
+      .join('\n');
+  }
+
+  private generateFieldNamesStr(fields: [string, AggregateFieldConfig][]): string {
+    const fieldNames = ['id', ...fields.map(([name]) => name)];
+    return fieldNames.map(f => `\\\`${f}\\\``).join(', ');
+  }
+
+  private generateRowToModelMapping(fields: [string, AggregateFieldConfig][]): string {
+    return fields
+      .map(([fieldName, fieldConfig]) => {
+        const fieldType = fieldConfig.type;
+        
+        // Handle datetime/date conversion
+        if (fieldType === 'datetime' || fieldType === 'date') {
+          return `      row.${fieldName} ? new Date(row.${fieldName}) : undefined`;
+        }
+        
+        // Handle boolean conversion
+        if (fieldType === 'boolean') {
+          return `      Boolean(row.${fieldName})`;
+        }
+        
+        // Handle value object conversion with proper type cast
+        if (this.isValueObjectType(fieldType)) {
+          const voName = this.getValueObjectName(fieldType);
+          const voConfig = this.getValueObjectConfig(fieldType);
+          
+          if (voConfig) {
+            const enumTypeName = this.getValueObjectFieldTypeName(voName, voConfig);
+            if (enumTypeName) {
+              // Cast to the enum type
+              return `      row.${fieldName} ? new ${voName}(row.${fieldName} as ${enumTypeName}) : undefined`;
+            }
+          }
+          
+          // Fallback without cast
+          return `      row.${fieldName} ? new ${voName}(row.${fieldName}) : undefined`;
+        }
+        
+        return `      row.${fieldName}`;
+      })
+      .join(',\n');
+  }
+
+  private generateInsertDataMapping(fields: [string, AggregateFieldConfig][]): string {
+    return fields
+      .map(([fieldName, fieldConfig]) => {
+        const fieldType = fieldConfig.type;
+        
+        // Handle datetime/date - convert Date to ISO string for MySQL
+        if (fieldType === 'datetime' || fieldType === 'date') {
+          return `      ${fieldName}: entity.${fieldName}?.toISOString()`;
+        }
+        
+        // Handle value object - extract the value
+        if (this.isValueObjectType(fieldType)) {
+          // Value objects typically have a 'name' or similar field
+          return `      ${fieldName}: entity.${fieldName}?.name`;
+        }
+        
+        return `      ${fieldName}: entity.${fieldName}`;
+      })
+      .join(',\n');
+  }
+
+  private generateUpdateDataMapping(fields: [string, AggregateFieldConfig][]): string {
+    return fields
+      .map(([fieldName, fieldConfig]) => {
+        const fieldType = fieldConfig.type;
+        
+        // Handle datetime/date - convert Date to ISO string for MySQL
+        if (fieldType === 'datetime' || fieldType === 'date') {
+          return `      ${fieldName}: entity.${fieldName}?.toISOString()`;
+        }
+        
+        // Handle value object - extract the value
+        if (this.isValueObjectType(fieldType)) {
+          return `      ${fieldName}: entity.${fieldName}?.name`;
+        }
+        
+        return `      ${fieldName}: entity.${fieldName}`;
+      })
+      .join(',\n');
+  }
+
+  private generateUpdateFieldsArray(fields: [string, AggregateFieldConfig][]): string {
+    return JSON.stringify(fields.map(([name]) => name));
+  }
+
+  private generateValueObjectImports(fields: [string, AggregateFieldConfig][]): string {
+    const imports: string[] = [];
+    
+    fields.forEach(([, fieldConfig]) => {
+      if (this.isValueObjectType(fieldConfig.type)) {
+        const voName = this.getValueObjectName(fieldConfig.type);
+        const voConfig = this.getValueObjectConfig(fieldConfig.type);
+        
+        // Import the class
+        const importItems = [voName];
+        
+        // Also import the type if it's an enum
+        if (voConfig) {
+          const enumTypeName = this.getValueObjectFieldTypeName(voName, voConfig);
+          if (enumTypeName) {
+            importItems.push(enumTypeName);
+          }
+        }
+        
+        imports.push(`import { ${importItems.join(', ')} } from '../../domain/valueObjects/${voName}';`);
+      }
+    });
+    
+    // Dedupe imports
+    const uniqueImports = [...new Set(imports)];
+    
+    if (uniqueImports.length === 0) {
+      return '';
+    }
+    
+    return '\n' + uniqueImports.join('\n');
+  }
+
+  private generateStore(modelName: string, aggregateConfig: AggregateConfig): string {
+    const tableName = modelName.toLowerCase();
+    const fields = Object.entries(aggregateConfig.fields);
+
+    const variables = {
+      ENTITY_NAME: modelName,
+      TABLE_NAME: tableName,
+      ROW_FIELDS: this.generateRowFields(fields),
+      FIELD_NAMES: this.generateFieldNamesStr(fields),
+      ROW_TO_MODEL_MAPPING: this.generateRowToModelMapping(fields),
+      INSERT_DATA_MAPPING: this.generateInsertDataMapping(fields),
+      UPDATE_DATA_MAPPING: this.generateUpdateDataMapping(fields),
+      UPDATE_FIELDS_ARRAY: this.generateUpdateFieldsArray(fields),
+      VALUE_OBJECT_IMPORTS: this.generateValueObjectImports(fields)
     };
 
-    const fieldsList = Object.keys(data).map(f => \`\\\`\${f}\\\`\`).join(', ');
-    const placeholders = Object.keys(data).map(f => \`:\${f}\`).join(', ');
+    const rowInterface = this.replaceTemplateVars(newStoreTemplates.rowInterface, variables);
+    const storeClass = this.replaceTemplateVars(newStoreTemplates.storeClass, variables);
 
-    const result = await this.db.query(
-      \`INSERT INTO \\\`\${this.tableName}\\\` (\${fieldsList}) VALUES (\${placeholders})\`,
-      data
-    );
-
-    if (result.success && result.insertId) {
-      const newId = typeof result.insertId === 'string' ? parseInt(result.insertId, 10) : result.insertId;
-      return this.getById(newId) as Promise<${modelName}>;
-    }
-
-    throw new Error('Failed to insert ${modelName}');
-  }
-
-  async update(id: number, entity: ${modelName}): Promise<${modelName}> {
-    const now = new Date();
-    const data: any = {
-${fields.map(([fieldName]) => `      ${fieldName}: entity.${fieldName}`).join(',\n')},
-      updated_at: now,
-      id
-    };
-
-    const updateFields = ${JSON.stringify(fields.map(([name]) => name))}.map(f => \`\\\`\${f}\\\` = :\${f}\`).join(', ');
-
-    const result = await this.db.query(
-      \`UPDATE \\\`\${this.tableName}\\\` SET \${updateFields}, updated_at = :updated_at WHERE id = :id\`,
-      data
-    );
-
-    if (result.success) {
-      return this.getById(id) as Promise<${modelName}>;
-    }
-
-    throw new Error('Failed to update ${modelName}');
-  }
-
-  async softDelete(id: number): Promise<boolean> {
-    const now = new Date();
-    const result = await this.db.query(
-      \`UPDATE \\\`\${this.tableName}\\\` SET deleted_at = :deleted_at WHERE id = :id\`,
-      { deleted_at: now, id }
-    );
-
-    return result.success;
-  }
-
-  async hardDelete(id: number): Promise<boolean> {
-    const result = await this.db.query(
-      \`DELETE FROM \\\`\${this.tableName}\\\` WHERE id = :id\`,
-      { id }
-    );
-
-    return result.success;
-  }
-}
-`;
+    return this.replaceTemplateVars(newStoreFileTemplate, {
+      ENTITY_NAME: modelName,
+      ROW_INTERFACE: rowInterface,
+      STORE_CLASS: storeClass,
+      VALUE_OBJECT_IMPORTS: variables.VALUE_OBJECT_IMPORTS
+    });
   }
 
   public generateFromConfig(config: NewModuleConfig): Record<string, string> {
     const result: Record<string, string> = {};
+
+    // First, collect all value object names and configs
+    this.availableValueObjects.clear();
+    if (config.domain.valueObjects) {
+      Object.entries(config.domain.valueObjects).forEach(([name, voConfig]) => {
+        this.availableValueObjects.set(name, voConfig);
+      });
+    }
 
     // Generate a store for each aggregate
     if (config.domain.aggregates) {
@@ -201,4 +285,3 @@ ${fields.map(([fieldName]) => `      ${fieldName}: entity.${fieldName}`).join(',
     console.log('\n' + colors.green('Store files generated successfully!') + '\n');
   }
 }
-

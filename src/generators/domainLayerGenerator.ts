@@ -28,14 +28,19 @@ export class DomainLayerGenerator {
   private availableAggregates: Set<string> = new Set();
   private availableValueObjects: Set<string> = new Set();
 
+  private capitalize(str: string): string {
+    return str.charAt(0).toUpperCase() + str.slice(1);
+  }
+
   private mapType(yamlType: string): string {
     // Check if this is a known aggregate
     if (this.availableAggregates.has(yamlType)) {
       return yamlType;
     }
-    // Check if this is a known value object
-    if (this.availableValueObjects.has(yamlType)) {
-      return yamlType;
+    // Check if this is a known value object (case-insensitive)
+    const capitalizedType = this.capitalize(yamlType);
+    if (this.availableValueObjects.has(capitalizedType)) {
+      return capitalizedType;
     }
     return this.typeMapping[yamlType] || 'any';
   }
@@ -66,12 +71,18 @@ export class DomainLayerGenerator {
   private generateValueObject(name: string, config: ValueObjectConfig): string {
     const fields = Object.entries(config.fields);
     
+    // Collect type definitions for enum fields
+    const typeDefinitions: string[] = [];
+    
     // Generate constructor parameters
     const constructorParams = fields.map(([fieldName, fieldConfig]) => {
       if (typeof fieldConfig === 'object' && 'values' in fieldConfig) {
-        // Enum type
-        const enumValues = fieldConfig.values.map(v => `'${v}'`).join(' | ');
-        return `public ${fieldName}: ${enumValues}`;
+        // Enum type - generate a type alias
+        const typeName = `${name}${this.capitalize(fieldName)}`;
+        const uniqueValues = [...new Set(fieldConfig.values)]; // dedupe
+        const enumValues = uniqueValues.map(v => `'${v}'`).join(' | ');
+        typeDefinitions.push(`export type ${typeName} = ${enumValues};`);
+        return `public ${fieldName}: ${typeName}`;
       } else {
         const tsType = this.mapType(fieldConfig.type);
         return `public ${fieldName}: ${tsType}`;
@@ -104,16 +115,19 @@ export class DomainLayerGenerator {
       }
       
       if (typeof fieldConfig === 'object' && 'values' in fieldConfig) {
-        const values = fieldConfig.values.map(v => `'${v}'`).join(', ');
+        const uniqueValues = [...new Set(fieldConfig.values)]; // dedupe
+        const values = uniqueValues.map(v => `'${v}'`).join(', ');
         validations.push(`    if (![${values}].includes(this.${fieldName})) {
-      throw new Error('${name}.${fieldName} must be one of: ${values}');
+      throw new Error(\`${name}.${fieldName} must be one of: ${values}\`);
     }`);
       }
     });
 
     const validationCode = validations.length > 0 ? `\n    this.validate();\n  }\n\n  private validate(): void {\n${validations.join('\n')}\n  }` : '\n  }';
 
-    return `export class ${name} {
+    const typeDefsCode = typeDefinitions.length > 0 ? typeDefinitions.join('\n') + '\n\n' : '';
+
+    return `${typeDefsCode}export class ${name} {
   public constructor(
         ${constructorParams}
     ) {${validationCode}
@@ -134,8 +148,11 @@ export class DomainLayerGenerator {
     
     // Generate imports for value objects used in fields
     const valueObjectImports = fields
-      .filter(([, fieldConfig]) => this.availableValueObjects.has(fieldConfig.type))
-      .map(([, fieldConfig]) => `import { ${fieldConfig.type} } from '../valueObjects/${fieldConfig.type}';`)
+      .filter(([, fieldConfig]) => this.availableValueObjects.has(this.capitalize(fieldConfig.type)))
+      .map(([, fieldConfig]) => {
+        const voName = this.capitalize(fieldConfig.type);
+        return `import { ${voName} } from '../valueObjects/${voName}';`;
+      })
       .filter((imp, idx, arr) => arr.indexOf(imp) === idx) // dedupe
       .join('\n');
     
