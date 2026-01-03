@@ -99,13 +99,26 @@ export interface UseCasesConfig {
   };
 }
 
+// ============= ACCESS CONTROL =============
+
+/**
+ * Auth configuration for endpoints.
+ * Can be:
+ * - 'all': Public access (no authentication required)
+ * - 'authenticated': Any logged-in user
+ * - 'owner': User must own the resource (checks owner_id field)
+ * - string (e.g., 'admin', 'editor'): User must have this role
+ * - string[] (e.g., ['owner', 'admin']): User must match ANY of these (OR logic)
+ */
+export type AuthConfig = 'all' | 'authenticated' | 'owner' | string | string[];
+
 // ============= ADAPTER LAYER - API =============
 
 export interface ApiEndpointConfig {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   path: string;
   useCase: string;
-  auth?: string;
+  auth?: AuthConfig;
 }
 
 export interface ApiResourceConfig {
@@ -124,7 +137,7 @@ export interface WebPageConfig {
   method?: 'GET' | 'POST';
   useCase?: string;
   view?: string;
-  auth?: string;
+  auth?: AuthConfig;
   onSuccess?: {
     redirect?: string;
     toast?: string;

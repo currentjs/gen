@@ -80,11 +80,14 @@ function moduleYamlTemplate(moduleName: string): string {
         [entityName]: {
           prefix: `/api/${lower}`,
           endpoints: [
-            { method: 'GET', path: '/', useCase: `${entityName}:list`, auth: 'authenticated' },
-            { method: 'GET', path: '/:id', useCase: `${entityName}:get`, auth: 'authenticated' },
+            // Public read access
+            { method: 'GET', path: '/', useCase: `${entityName}:list`, auth: 'all' },
+            { method: 'GET', path: '/:id', useCase: `${entityName}:get`, auth: 'all' },
+            // Authenticated users can create
             { method: 'POST', path: '/', useCase: `${entityName}:create`, auth: 'authenticated' },
-            { method: 'PUT', path: '/:id', useCase: `${entityName}:update`, auth: 'authenticated' },
-            { method: 'DELETE', path: '/:id', useCase: `${entityName}:delete`, auth: 'authenticated' }
+            // Owner or admin can update/delete
+            { method: 'PUT', path: '/:id', useCase: `${entityName}:update`, auth: ['owner', 'admin'] },
+            { method: 'DELETE', path: '/:id', useCase: `${entityName}:delete`, auth: ['owner', 'admin'] }
           ]
         }
       }
@@ -95,7 +98,10 @@ function moduleYamlTemplate(moduleName: string): string {
           prefix: `/${lower}`,
           layout: 'main_view',
           pages: [
-            { path: '/', useCase: `${entityName}:list`, view: `${lower}List`, auth: 'authenticated' },
+            // Public list and detail views
+            { path: '/', useCase: `${entityName}:list`, view: `${lower}List`, auth: 'all' },
+            { path: '/:id', useCase: `${entityName}:get`, view: `${lower}Detail`, auth: 'all' },
+            // Authenticated users can access create form
             { 
               path: '/create', 
               method: 'GET',
@@ -116,19 +122,19 @@ function moduleYamlTemplate(moduleName: string): string {
                 toast: 'error'
               }
             },
-            { path: '/:id', useCase: `${entityName}:get`, view: `${lower}Detail`, auth: 'authenticated' },
+            // Owner or admin can edit
             { 
               path: '/:id/edit', 
               method: 'GET',
               useCase: `${entityName}:get`, 
               view: `${lower}Edit`, 
-              auth: 'authenticated' 
+              auth: ['owner', 'admin']
             },
             { 
               path: '/:id/edit', 
               method: 'POST',
               useCase: `${entityName}:update`, 
-              auth: 'authenticated',
+              auth: ['owner', 'admin'],
               onSuccess: {
                 back: true,
                 toast: `${entityName} updated successfully`

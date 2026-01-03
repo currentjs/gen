@@ -163,6 +163,21 @@ export class DtoGenerator {
         );
       }
 
+      // For aggregate roots, add ownerId field (injected from authenticated user)
+      // This is needed for create operations to set ownership
+      const isRoot = aggregateConfig.root === true;
+      const isCreateAction = !inputConfig.identifier && !inputConfig.partial;
+      
+      if (isRoot && isCreateAction) {
+        fieldDeclarations.push(`  readonly ownerId: number;`);
+        constructorParams.push(`ownerId: number`);
+        constructorAssignments.push(`    this.ownerId = ownerId;`);
+        validationChecks.push(`    if (b.ownerId === undefined || b.ownerId === null) {
+      throw new Error('ownerId is required');
+    }`);
+        fieldTransforms.push(`      ownerId: typeof b.ownerId === 'string' ? parseInt(b.ownerId, 10) : b.ownerId as number`);
+      }
+
       // Add fields
       fieldsToInclude.forEach(([fieldName, fieldConfig]) => {
         if (fieldName === 'id' || fieldConfig.auto) return;

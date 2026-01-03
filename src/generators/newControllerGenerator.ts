@@ -7,6 +7,7 @@ import {
   NewModuleConfig,
   ApiEndpointConfig,
   WebPageConfig,
+  AuthConfig,
   isNewModuleConfig 
 } from '../types/configTypes';
 
@@ -32,37 +33,188 @@ export class NewControllerGenerator {
   }
 
   /**
-   * Generate authentication/authorization check code based on auth config
-   * @param auth - The auth requirement: 'all', 'authenticated', 'owner', or role names like 'admin'
+   * Normalize auth config to an array of roles
+   */
+  private normalizeAuth(auth?: AuthConfig): string[] {
+    if (!auth) return [];
+    if (Array.isArray(auth)) return auth;
+    return [auth];
+  }
+
+  /**
+   * Check if auth config includes owner permission
+   */
+  private hasOwnerAuth(auth?: AuthConfig): boolean {
+    const roles = this.normalizeAuth(auth);
+    return roles.includes('owner');
+  }
+
+  /**
+   * Generate pre-fetch authentication/authorization check code.
+   * This runs before fetching the entity and validates authentication and role-based access.
+   * @param auth - The auth requirement: 'all', 'authenticated', 'owner', role names, or array of roles
    * @returns Code string for the auth check, or empty string if no check needed
    */
-  private generateAuthCheck(auth?: string): string {
-    if (!auth || auth === 'all') {
-      return ''; // No check needed
+  private generateAuthCheck(auth?: AuthConfig): string {
+    const roles = this.normalizeAuth(auth);
+    
+    if (roles.length === 0 || (roles.length === 1 && roles[0] === 'all')) {
+      return ''; // No check needed - public access
     }
 
-    if (auth === 'authenticated') {
+    // If only 'authenticated' is specified
+    if (roles.length === 1 && roles[0] === 'authenticated') {
       return `if (!context.request.user) {
       throw new Error('Authentication required');
     }`;
     }
 
-    if (auth === 'owner') {
-      // Owner check requires authenticated + later ownership validation
-      // The ownership validation would need to happen after fetching the entity
+    // If only 'owner' is specified - just require authentication here
+    // (owner check happens post-fetch)
+    if (roles.length === 1 && roles[0] === 'owner') {
+      return `if (!context.request.user) {
+      throw new Error('Authentication required');
+    }`;
+    }
+
+    // Filter out 'owner' and 'all' for role checks (owner is checked post-fetch)
+    const roleChecks = roles.filter(r => r !== 'owner' && r !== 'all' && r !== 'authenticated');
+    const hasOwner = roles.includes('owner');
+    const hasAuthenticated = roles.includes('authenticated');
+    
+    // If we have role checks or owner, we need authentication
+    if (roleChecks.length > 0 || hasOwner) {
+      if (roleChecks.length === 0) {
+        // Only owner (and maybe authenticated) - just require auth
+        return `if (!context.request.user) {
+      throw new Error('Authentication required');
+    }`;
+      }
+      
+      if (roleChecks.length === 1 && !hasOwner) {
+        // Single role check
+        return `if (!context.request.user) {
+      throw new Error('Authentication required');
+    }
+    if (context.request.user.role !== '${roleChecks[0]}') {
+      throw new Error('Insufficient permissions: ${roleChecks[0]} role required');
+    }`;
+      }
+      
+      // Multiple roles OR owner - use OR logic
+      // If owner is included, we can't fully check here (post-fetch), so we just require auth
+      // and mark that owner check should happen later
+      if (hasOwner) {
+        // With owner: require auth, role check will be combined with owner check post-fetch
+        return `if (!context.request.user) {
+      throw new Error('Authentication required');
+    }`;
+      }
+      
+      // Multiple roles without owner - check if user has ANY of the roles
+      const roleConditions = roleChecks.map(r => `context.request.user.role === '${r}'`).join(' || ');
       return `if (!context.request.user) {
       throw new Error('Authentication required');
     }
-    // Note: Owner validation should be done after fetching the entity`;
+    if (!(${roleConditions})) {
+      throw new Error('Insufficient permissions: one of [${roleChecks.join(', ')}] role required');
+    }`;
     }
 
-    // Role-based auth (admin, editor, etc.)
-    return `if (!context.request.user) {
+    // Only 'authenticated' in the mix
+    if (hasAuthenticated) {
+      return `if (!context.request.user) {
       throw new Error('Authentication required');
-    }
-    if (context.request.user.role !== '${auth}') {
-      throw new Error('Insufficient permissions: ${auth} role required');
     }`;
+    }
+
+    return '';
+  }
+
+  /**
+   * Generate post-fetch authorization check for owner validation.
+   * This runs after fetching the entity and validates ownership.
+   * Used for READ operations (get, list) where we check after fetch.
+   * @param auth - The auth requirement
+   * @param resultVar - The variable name holding the fetched result
+   * @returns Code string for the owner check, or empty string if not needed
+   */
+  private generatePostFetchOwnerCheck(auth?: AuthConfig, resultVar: string = 'result'): string {
+    const roles = this.normalizeAuth(auth);
+    
+    if (!roles.includes('owner')) {
+      return ''; // No owner check needed
+    }
+
+    // Get non-owner roles for the bypass check
+    const bypassRoles = roles.filter(r => r !== 'owner' && r !== 'all' && r !== 'authenticated');
+    
+    if (bypassRoles.length === 0) {
+      // Only owner - strict ownership check
+      return `
+    // Owner validation (post-fetch for reads)
+    if (${resultVar}.ownerId !== context.request.user?.id) {
+      throw new Error('Access denied: you do not own this resource');
+    }`;
+    }
+    
+    // Owner OR other roles - bypass if user has a privileged role
+    const bypassConditions = bypassRoles.map(r => `context.request.user?.role === '${r}'`).join(' || ');
+    return `
+    // Owner validation (post-fetch for reads, bypassed for: ${bypassRoles.join(', ')})
+    const isOwner = ${resultVar}.ownerId === context.request.user?.id;
+    const hasPrivilegedRole = ${bypassConditions};
+    if (!isOwner && !hasPrivilegedRole) {
+      throw new Error('Access denied: you do not own this resource');
+    }`;
+  }
+
+  /**
+   * Generate pre-mutation authorization check for owner validation.
+   * This runs BEFORE the mutation to prevent unauthorized changes.
+   * Used for WRITE operations (update, delete).
+   * @param auth - The auth requirement
+   * @param useCaseVar - The use case variable name
+   * @returns Code string for the pre-mutation owner check, or empty string if not needed
+   */
+  private generatePreMutationOwnerCheck(auth?: AuthConfig, useCaseVar: string = 'useCase'): string {
+    const roles = this.normalizeAuth(auth);
+    
+    if (!roles.includes('owner')) {
+      return ''; // No owner check needed
+    }
+
+    // Get non-owner roles for the bypass check
+    const bypassRoles = roles.filter(r => r !== 'owner' && r !== 'all' && r !== 'authenticated');
+    
+    if (bypassRoles.length === 0) {
+      // Only owner - strict ownership check
+      return `
+    // Pre-mutation owner validation
+    const resourceOwnerId = await this.${useCaseVar}.getResourceOwner(input.id);
+    if (resourceOwnerId === null) {
+      throw new Error('Resource not found');
+    }
+    if (resourceOwnerId !== context.request.user?.id) {
+      throw new Error('Access denied: you do not own this resource');
+    }
+`;
+    }
+    
+    // Owner OR other roles - bypass if user has a privileged role
+    const bypassConditions = bypassRoles.map(r => `context.request.user?.role === '${r}'`).join(' || ');
+    return `
+    // Pre-mutation owner validation (bypassed for: ${bypassRoles.join(', ')})
+    const resourceOwnerId = await this.${useCaseVar}.getResourceOwner(input.id);
+    if (resourceOwnerId === null) {
+      throw new Error('Resource not found');
+    }
+    const isOwner = resourceOwnerId === context.request.user?.id;
+    const hasPrivilegedRole = ${bypassConditions};
+    if (!isOwner && !hasPrivilegedRole) {
+      throw new Error('Access denied: you do not own this resource');
+    }
+`;
   }
 
   private generateApiEndpointMethod(
@@ -79,23 +231,42 @@ export class NewControllerGenerator {
     const dtoImports = new Set<string>();
     dtoImports.add(`${model}${this.capitalize(action)}`);
 
-    // Generate auth check
+    // Generate auth check (pre-fetch)
     const authCheck = this.generateAuthCheck(endpoint.auth);
     const authLine = authCheck ? `\n    ${authCheck}\n` : '';
 
     // Build parsing logic
+    // For create action, inject ownerId from authenticated user (for aggregate roots)
     let parseLogic: string;
     if (action === 'list') {
       parseLogic = `const input = ${inputClass}.parse(context.request.parameters);`;
     } else if (action === 'get' || action === 'delete') {
       parseLogic = `const input = ${inputClass}.parse({ id: context.request.parameters.id });`;
     } else if (action === 'create') {
-      parseLogic = `const input = ${inputClass}.parse(context.request.body);`;
+      // Inject ownerId from authenticated user for aggregate roots
+      parseLogic = `const input = ${inputClass}.parse({ ...context.request.body, ownerId: context.request.user?.id });`;
     } else if (action === 'update') {
       parseLogic = `const input = ${inputClass}.parse({ ...context.request.body, id: context.request.parameters.id });`;
     } else {
       parseLogic = `const input = ${inputClass}.parse(context.request.body || {});`;
     }
+
+    // Generate owner checks:
+    // - For mutations (update, delete): PRE-mutation check (before operation)
+    // - For reads (get): POST-fetch check (after fetching)
+    const hasOwner = this.hasOwnerAuth(endpoint.auth);
+    const isMutation = action === 'update' || action === 'delete';
+    const isRead = action === 'get';
+    
+    // Pre-mutation owner check for write operations
+    const preMutationOwnerCheck = (hasOwner && isMutation) 
+      ? this.generatePreMutationOwnerCheck(endpoint.auth, useCaseVar) 
+      : '';
+    
+    // Post-fetch owner check for read operations only
+    const postFetchOwnerCheck = (hasOwner && isRead) 
+      ? this.generatePostFetchOwnerCheck(endpoint.auth, 'result') 
+      : '';
 
     // Generate output transformation based on action
     let outputTransform: string;
@@ -109,8 +280,8 @@ export class NewControllerGenerator {
 
     const method = `  @${decorator}('${endpoint.path}')
   async ${methodName}(context: IContext): Promise<any> {${authLine}
-    ${parseLogic}
-    const result = await this.${useCaseVar}.${action}(input);
+    ${parseLogic}${preMutationOwnerCheck}
+    const result = await this.${useCaseVar}.${action}(input);${postFetchOwnerCheck}
     ${outputTransform}
   }`;
 
@@ -141,7 +312,7 @@ export class NewControllerGenerator {
     // Append method suffix for POST to avoid duplicates
     const methodName = method === 'POST' ? `${baseMethodName}Submit` : baseMethodName;
 
-    // Generate auth check
+    // Generate auth check (pre-fetch)
     const authCheck = this.generateAuthCheck(page.auth);
     const authLine = authCheck ? `\n    ${authCheck}\n` : '';
 
@@ -165,12 +336,19 @@ export class NewControllerGenerator {
           parseLogic = `const input = ${inputClass}.parse({});`;
         }
 
+        // Generate post-fetch owner check for GET pages (reads only)
+        const hasOwner = this.hasOwnerAuth(page.auth);
+        const isReadAction = action === 'get' || action === 'list';
+        const postFetchOwnerCheck = (hasOwner && isReadAction) 
+          ? this.generatePostFetchOwnerCheck(page.auth, 'result') 
+          : '';
+
         // For web pages, we return data for the template, not transformed DTO
         const methodCode = `${renderDecorator}
   @${decorator}('${page.path}')
   async ${methodName}(context: IContext): Promise<any> {${authLine}
     ${parseLogic}
-    const result = await this.${useCaseVar}.${action}(input);
+    const result = await this.${useCaseVar}.${action}(input);${postFetchOwnerCheck}
     return result;
   }`;
 
@@ -200,6 +378,13 @@ export class NewControllerGenerator {
         parseLogic = `const input = ${inputClass}.parse(context.request.body);`;
       }
 
+      // Generate PRE-mutation owner check for update/delete actions (POST requests)
+      const hasOwner = this.hasOwnerAuth(page.auth);
+      const isMutation = action === 'update' || action === 'delete';
+      const preMutationOwnerCheck = (hasOwner && isMutation) 
+        ? this.generatePreMutationOwnerCheck(page.auth, useCaseVar) 
+        : '';
+
       // Handle onSuccess and onError strategies
       const onSuccessHandler = this.generateOnSuccessHandler(page);
       const onErrorHandler = this.generateOnErrorHandler(page);
@@ -207,7 +392,7 @@ export class NewControllerGenerator {
       const methodCode = `  @${decorator}('${page.path}')
   async ${methodName}(context: IContext): Promise<any> {${authLine}
     try {
-      ${parseLogic}
+      ${parseLogic}${preMutationOwnerCheck}
       const result = await this.${useCaseVar}.${action}(input);
       ${onSuccessHandler}
       return { success: true, data: result };

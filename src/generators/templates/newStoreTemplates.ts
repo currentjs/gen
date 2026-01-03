@@ -123,7 +123,7 @@ export class {{ENTITY_NAME}}Store {
 
     return result.success;
   }
-}`
+{{GET_RESOURCE_OWNER_METHOD}}}`
 };
 
 export const newStoreFileTemplate = `import { {{ENTITY_NAME}} } from '../../domain/entities/{{ENTITY_NAME}}';

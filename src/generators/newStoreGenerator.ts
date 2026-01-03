@@ -76,77 +76,108 @@ export class NewStoreGenerator {
     return result;
   }
 
-  private generateRowFields(fields: [string, AggregateFieldConfig][]): string {
-    return fields
-      .map(([fieldName, fieldConfig]) => {
-        const tsType = this.mapTypeToRowType(fieldConfig.type);
-        const isOptional = !fieldConfig.required;
-        return `  ${fieldName}${isOptional ? '?' : ''}: ${tsType};`;
-      })
-      .join('\n');
+  private generateRowFields(fields: [string, AggregateFieldConfig][], isRoot: boolean): string {
+    const result: string[] = [];
+    
+    // Add ownerId for aggregate roots
+    if (isRoot) {
+      result.push('  ownerId: number;');
+    }
+    
+    fields.forEach(([fieldName, fieldConfig]) => {
+      const tsType = this.mapTypeToRowType(fieldConfig.type);
+      const isOptional = !fieldConfig.required;
+      result.push(`  ${fieldName}${isOptional ? '?' : ''}: ${tsType};`);
+    });
+    
+    return result.join('\n');
   }
 
-  private generateFieldNamesStr(fields: [string, AggregateFieldConfig][]): string {
-    const fieldNames = ['id', ...fields.map(([name]) => name)];
+  private generateFieldNamesStr(fields: [string, AggregateFieldConfig][], isRoot: boolean): string {
+    const fieldNames = ['id'];
+    if (isRoot) {
+      fieldNames.push('ownerId');
+    }
+    fieldNames.push(...fields.map(([name]) => name));
     return fieldNames.map(f => `\\\`${f}\\\``).join(', ');
   }
 
-  private generateRowToModelMapping(fields: [string, AggregateFieldConfig][]): string {
-    return fields
-      .map(([fieldName, fieldConfig]) => {
-        const fieldType = fieldConfig.type;
+  private generateRowToModelMapping(fields: [string, AggregateFieldConfig][], isRoot: boolean): string {
+    const result: string[] = [];
+    
+    // Add ownerId for aggregate roots
+    if (isRoot) {
+      result.push('      row.ownerId');
+    }
+    
+    fields.forEach(([fieldName, fieldConfig]) => {
+      const fieldType = fieldConfig.type;
+      
+      // Handle datetime/date conversion
+      if (fieldType === 'datetime' || fieldType === 'date') {
+        result.push(`      row.${fieldName} ? new Date(row.${fieldName}) : undefined`);
+        return;
+      }
+      
+      // Handle boolean conversion
+      if (fieldType === 'boolean') {
+        result.push(`      Boolean(row.${fieldName})`);
+        return;
+      }
+      
+      // Handle value object conversion with proper type cast
+      if (this.isValueObjectType(fieldType)) {
+        const voName = this.getValueObjectName(fieldType);
+        const voConfig = this.getValueObjectConfig(fieldType);
         
-        // Handle datetime/date conversion
-        if (fieldType === 'datetime' || fieldType === 'date') {
-          return `      row.${fieldName} ? new Date(row.${fieldName}) : undefined`;
-        }
-        
-        // Handle boolean conversion
-        if (fieldType === 'boolean') {
-          return `      Boolean(row.${fieldName})`;
-        }
-        
-        // Handle value object conversion with proper type cast
-        if (this.isValueObjectType(fieldType)) {
-          const voName = this.getValueObjectName(fieldType);
-          const voConfig = this.getValueObjectConfig(fieldType);
-          
-          if (voConfig) {
-            const enumTypeName = this.getValueObjectFieldTypeName(voName, voConfig);
-            if (enumTypeName) {
-              // Cast to the enum type
-              return `      row.${fieldName} ? new ${voName}(row.${fieldName} as ${enumTypeName}) : undefined`;
-            }
+        if (voConfig) {
+          const enumTypeName = this.getValueObjectFieldTypeName(voName, voConfig);
+          if (enumTypeName) {
+            // Cast to the enum type
+            result.push(`      row.${fieldName} ? new ${voName}(row.${fieldName} as ${enumTypeName}) : undefined`);
+            return;
           }
-          
-          // Fallback without cast
-          return `      row.${fieldName} ? new ${voName}(row.${fieldName}) : undefined`;
         }
         
-        return `      row.${fieldName}`;
-      })
-      .join(',\n');
+        // Fallback without cast
+        result.push(`      row.${fieldName} ? new ${voName}(row.${fieldName}) : undefined`);
+        return;
+      }
+      
+      result.push(`      row.${fieldName}`);
+    });
+    
+    return result.join(',\n');
   }
 
-  private generateInsertDataMapping(fields: [string, AggregateFieldConfig][]): string {
-    return fields
-      .map(([fieldName, fieldConfig]) => {
-        const fieldType = fieldConfig.type;
-        
-        // Handle datetime/date - convert Date to ISO string for MySQL
-        if (fieldType === 'datetime' || fieldType === 'date') {
-          return `      ${fieldName}: entity.${fieldName}?.toISOString()`;
-        }
-        
-        // Handle value object - extract the value
-        if (this.isValueObjectType(fieldType)) {
-          // Value objects typically have a 'name' or similar field
-          return `      ${fieldName}: entity.${fieldName}?.name`;
-        }
-        
-        return `      ${fieldName}: entity.${fieldName}`;
-      })
-      .join(',\n');
+  private generateInsertDataMapping(fields: [string, AggregateFieldConfig][], isRoot: boolean): string {
+    const result: string[] = [];
+    
+    // Add ownerId for aggregate roots
+    if (isRoot) {
+      result.push('      ownerId: entity.ownerId');
+    }
+    
+    fields.forEach(([fieldName, fieldConfig]) => {
+      const fieldType = fieldConfig.type;
+      
+      // Handle datetime/date - convert Date to ISO string for MySQL
+      if (fieldType === 'datetime' || fieldType === 'date') {
+        result.push(`      ${fieldName}: entity.${fieldName}?.toISOString()`);
+        return;
+      }
+      
+      // Handle value object - extract the value
+      if (this.isValueObjectType(fieldType)) {
+        // Value objects typically have a 'name' or similar field
+        result.push(`      ${fieldName}: entity.${fieldName}?.name`);
+        return;
+      }
+      
+      result.push(`      ${fieldName}: entity.${fieldName}`);
+    });
+    
+    return result.join(',\n');
   }
 
   private generateUpdateDataMapping(fields: [string, AggregateFieldConfig][]): string {
@@ -206,20 +237,50 @@ export class NewStoreGenerator {
     return '\n' + uniqueImports.join('\n');
   }
 
+  /**
+   * Generate getResourceOwner method for aggregate roots.
+   * This method fetches only the ownerId for authorization checks.
+   */
+  private generateGetResourceOwnerMethod(isRoot: boolean): string {
+    if (!isRoot) {
+      return '';
+    }
+    
+    return `
+
+  /**
+   * Get the owner ID of a resource by its ID.
+   * Used for pre-mutation authorization checks.
+   */
+  async getResourceOwner(id: number): Promise<number | null> {
+    const result = await this.db.query(
+      \`SELECT ownerId FROM \\\`\${this.tableName}\\\` WHERE id = :id AND deleted_at IS NULL\`,
+      { id }
+    );
+
+    if (result.success && result.data && result.data.length > 0) {
+      return result.data[0].ownerId as number;
+    }
+    return null;
+  }`;
+  }
+
   private generateStore(modelName: string, aggregateConfig: AggregateConfig): string {
     const tableName = modelName.toLowerCase();
     const fields = Object.entries(aggregateConfig.fields);
+    const isRoot = aggregateConfig.root === true;
 
-    const variables = {
+    const variables: Record<string, string> = {
       ENTITY_NAME: modelName,
       TABLE_NAME: tableName,
-      ROW_FIELDS: this.generateRowFields(fields),
-      FIELD_NAMES: this.generateFieldNamesStr(fields),
-      ROW_TO_MODEL_MAPPING: this.generateRowToModelMapping(fields),
-      INSERT_DATA_MAPPING: this.generateInsertDataMapping(fields),
+      ROW_FIELDS: this.generateRowFields(fields, isRoot),
+      FIELD_NAMES: this.generateFieldNamesStr(fields, isRoot),
+      ROW_TO_MODEL_MAPPING: this.generateRowToModelMapping(fields, isRoot),
+      INSERT_DATA_MAPPING: this.generateInsertDataMapping(fields, isRoot),
       UPDATE_DATA_MAPPING: this.generateUpdateDataMapping(fields),
       UPDATE_FIELDS_ARRAY: this.generateUpdateFieldsArray(fields),
-      VALUE_OBJECT_IMPORTS: this.generateValueObjectImports(fields)
+      VALUE_OBJECT_IMPORTS: this.generateValueObjectImports(fields),
+      GET_RESOURCE_OWNER_METHOD: this.generateGetResourceOwnerMethod(isRoot)
     };
 
     const rowInterface = this.replaceTemplateVars(newStoreTemplates.rowInterface, variables);

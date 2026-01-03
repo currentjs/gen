@@ -159,7 +159,11 @@ export class DomainLayerGenerator {
     const imports = [entityImports, valueObjectImports].filter(Boolean).join('\n');
 
     // Generate constructor parameters
+    // Always add id, and ownerId for aggregate roots (for owner-based access control)
     const constructorParams: string[] = ['public id: number'];
+    if (config.root) {
+      constructorParams.push('public ownerId: number');
+    }
     
     // Sort fields: required first, then optional
     // Fields are required by default unless required: false

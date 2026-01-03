@@ -246,28 +246,43 @@ api:
     Invoice:
       prefix: /api/invoice
       endpoints:
+        # Public access
         - method: GET
           path: /
           useCase: Invoice:list
-          auth: owner
+          auth: all
           
+        # Any authenticated user
         - method: GET
           path: /:id
           useCase: Invoice:get
-          auth: owner
+          auth: authenticated
           
+        # Authenticated user can create
         - method: POST
           path: /
           useCase: Invoice:create
           auth: authenticated
           
-        - method: POST
-          path: /:id/items
-          useCase: Invoice:addItem
-          auth: owner
+        # Owner OR admin can update (array syntax)
+        - method: PUT
+          path: /:id
+          useCase: Invoice:update
+          auth: [owner, admin]
+          
+        # Only admin role
+        - method: DELETE
+          path: /:id
+          useCase: Invoice:delete
+          auth: admin
 ```
 
-**Auth Options**: `all`, `authenticated`, `owner`, or role names like `admin`, `editor`
+**Auth Options**:
+- `all`: Public access (no authentication required)
+- `authenticated`: Any logged-in user
+- `owner`: User must own the resource (checks `ownerId` field after fetching entity)
+- `admin`, `editor`, etc.: User must have this specific role
+- `[owner, admin]`: Array syntax - user must match ANY of these (OR logic). When `owner` is combined with roles, privileged roles bypass the ownership check.
 
 ### 3.4 Web Layer (`web`)
 
@@ -280,11 +295,13 @@ web:
       prefix: /invoice
       layout: dashboard                   # Layout template name
       pages:
+        # Public list
         - path: /
           useCase: Invoice:list
           view: invoiceList
-          auth: owner
+          auth: all
 
+        # Authenticated can access create form
         - path: /create
           method: GET
           view: invoiceCreate
@@ -300,19 +317,24 @@ web:
           onError:
             stay: true
             toast: error
-            
+        
+        # Public detail view    
         - path: /:id
           useCase: Invoice:get
           view: invoiceDetail
-          
+          auth: all
+        
+        # Owner or admin can edit
         - path: /:id/edit
           method: GET
           useCase: Invoice:get
           view: invoiceEdit
+          auth: [owner, admin]
           
         - path: /:id/edit
           method: POST
           useCase: Invoice:update
+          auth: [owner, admin]
           onSuccess:
             back: true
             toast: "Updated"
@@ -449,6 +471,11 @@ Generates Data Transfer Objects from `useCases` config.
 ### `useCaseGenerator.ts`
 Generates use case orchestrators that coordinate handlers.
 
+**Features**:
+- Orchestrates service handler calls in sequence
+- For aggregate roots: includes `getResourceOwner(id)` method (delegates to service)
+- Used by controllers for pre-mutation authorization
+
 **Generated Code**:
 ```typescript
 export class InvoiceUseCase {
@@ -460,6 +487,11 @@ export class InvoiceUseCase {
     const result = await this.invoiceService.notifyAccounting(result1, input);
     return result;
   }
+  
+  // For aggregate roots: ownership lookup for authorization
+  async getResourceOwner(id: number): Promise<number | null> {
+    return await this.invoiceService.getResourceOwner(id);
+  }
 }
 ```
 
@@ -468,6 +500,7 @@ Generates service classes with handler methods.
 
 **Default Handlers**: Full implementation for CRUD operations
 **Custom Handlers**: Empty method stubs for user implementation
+**Authorization**: `getResourceOwner(id)` method for aggregate roots
 
 ```typescript
 export class InvoiceService {
@@ -478,6 +511,9 @@ export class InvoiceService {
   async create(input: any) { /* ... */ }
   async update(id: number, input: any) { /* ... */ }
   async delete(id: number) { /* ... */ }
+  
+  // For aggregate roots: ownership lookup for authorization
+  async getResourceOwner(id: number): Promise<number | null> { /* ... */ }
   
   // Custom handlers (empty for user to implement)
   async validateInput(result: any, input: any): Promise<any> {
@@ -493,22 +529,76 @@ Generates database access layer.
 - Row interface (database representation)
 - `rowToModel()` conversion with type handling
 - `insert()`, `update()`, `getById()`, `getAll()`, `count()`, `softDelete()`
+- `getResourceOwner(id)` for aggregate roots (efficient ownership lookup)
 - Value object serialization/deserialization
 - Datetime string conversion
 
 ### `newControllerGenerator.ts`
-Generates HTTP controllers.
+Generates HTTP controllers with access control.
 
 **API Controllers**:
 - REST endpoint decorators (`@Get`, `@Post`, etc.)
 - Request parsing with DTO
 - Use case invocation
 - Response transformation
+- Pre-mutation owner checks (for update/delete)
+- Post-fetch owner checks (for get)
 
 **Web Controllers**:
 - `@Render` decorator for templates
 - Form handling with strategies
 - Success/error handling
+- Same access control as API controllers
+
+**Access Control Implementation**:
+The generator produces secure auth checks with different timing based on operation type:
+1. **Authentication check**: Always runs first to validate user identity and role
+2. **Pre-mutation owner check**: For mutations (update/delete), validates ownership BEFORE the operation
+3. **Post-fetch owner check**: For reads (get), validates ownership after fetching
+
+```typescript
+// Generated code for UPDATE with auth: [owner, admin]
+async update(context: IContext): Promise<any> {
+  // Step 1: Authentication check
+  if (!context.request.user) {
+    throw new Error('Authentication required');
+  }
+
+  const input = UpdateInput.parse({ ...context.request.body, id: context.request.parameters.id });
+  
+  // Step 2: PRE-MUTATION owner validation (prevents unauthorized changes)
+  const resourceOwnerId = await this.useCase.getResourceOwner(input.id);
+  if (resourceOwnerId === null) {
+    throw new Error('Resource not found');
+  }
+  const isOwner = resourceOwnerId === context.request.user?.id;
+  const hasPrivilegedRole = context.request.user?.role === 'admin';
+  if (!isOwner && !hasPrivilegedRole) {
+    throw new Error('Access denied: you do not own this resource');
+  }
+
+  // Step 3: Execute the operation (only after authorization passes)
+  const result = await this.useCase.update(input);
+  return Output.from(result);
+}
+
+// Generated code for GET with auth: owner
+async get(context: IContext): Promise<any> {
+  if (!context.request.user) {
+    throw new Error('Authentication required');
+  }
+
+  const input = GetInput.parse({ id: context.request.parameters.id });
+  const result = await this.useCase.get(input);
+  
+  // POST-FETCH owner validation (for reads only)
+  if (result.ownerId !== context.request.user?.id) {
+    throw new Error('Access denied: you do not own this resource');
+  }
+  
+  return Output.from(result);
+}
+```
 
 ### `newTemplateGenerator.ts`
 Generates HTML templates for web pages.
@@ -522,6 +612,46 @@ Generates HTML templates for web pages.
 ---
 
 ## 7. Important Patterns & Conventions
+
+### Access Control System
+
+The generator supports flexible role-based access control with secure owner validation:
+
+**Auth Configuration Types**:
+```yaml
+# Single values
+auth: all           # Public access (no auth)
+auth: authenticated # Any logged-in user
+auth: owner         # User must own the resource
+auth: admin         # User must have 'admin' role
+
+# Array syntax (OR logic)
+auth: [owner, admin]      # Owner OR admin
+auth: [editor, admin]     # Editor OR admin role
+auth: [owner, editor, admin]  # Any of these
+```
+
+**How It Works**:
+
+1. **Authentication checks** (before any operation):
+   - `all`: No check
+   - `authenticated`: Requires `context.request.user` to exist
+   - Role names: Requires user + matching role
+   - Arrays without `owner`: Requires user + any matching role
+
+2. **Owner validation** (depends on operation type):
+   - **For reads (get, list)**: Post-fetch check - compares `result.ownerId` with `context.request.user.id`
+   - **For mutations (update, delete)**: Pre-mutation check - calls `getResourceOwner(id)` BEFORE the operation to prevent unauthorized changes
+
+3. **getResourceOwner method** (generated for aggregate roots):
+   - Added to Store → Service → UseCase layers
+   - Fetches only `ownerId` field for efficient authorization
+   - Called by controllers before mutations when `owner` auth is specified
+
+**Entity Requirements for Owner Auth**:
+- Aggregate roots automatically have an `ownerId` field (auto-generated)
+- The field stores the ID of the user who created the resource
+- On create, `ownerId` is injected from `context.request.user.id`
 
 ### Handler Chain Execution
 Handlers execute sequentially. Each custom handler receives:

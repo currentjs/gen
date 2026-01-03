@@ -81,9 +81,15 @@ export class NewServiceGenerator {
             return aRequired ? -1 : 1;
           });
         
-        const constructorArgs = fields
+        const fieldArgs = fields
           .map(([fieldName]) => `input.${fieldName}`)
           .join(', ');
+        
+        // For aggregate roots, include ownerId as the second argument
+        const isRoot = aggregateConfig.root === true;
+        const constructorArgs = isRoot
+          ? `input.ownerId, ${fieldArgs}`
+          : fieldArgs;
 
         return `  async create(input: any): Promise<${modelName}> {
     const ${entityLower} = new ${modelName}(0, ${constructorArgs});
@@ -153,6 +159,27 @@ ${setterCalls}
     return handlers;
   }
 
+  /**
+   * Generate getResourceOwner method for aggregate roots.
+   * This method is used by the use case for pre-mutation authorization checks.
+   */
+  private generateGetResourceOwnerMethod(modelName: string, isRoot: boolean): string {
+    if (!isRoot) {
+      return '';
+    }
+    
+    const storeVar = `${modelName.toLowerCase()}Store`;
+    
+    return `
+  /**
+   * Get the owner ID of a resource by its ID.
+   * Used for pre-mutation authorization checks.
+   */
+  async getResourceOwner(id: number): Promise<number | null> {
+    return await this.${storeVar}.getResourceOwner(id);
+  }`;
+  }
+
   private generateService(
     modelName: string,
     useCases: Record<string, UseCaseDefinition>,
@@ -161,6 +188,7 @@ ${setterCalls}
     const serviceName = `${modelName}Service`;
     const storeName = `${modelName}Store`;
     const storeVar = `${modelName.toLowerCase()}Store`;
+    const isRoot = aggregateConfig.root === true;
 
     // Collect all unique handlers
     const handlers = this.collectHandlers(useCases);
@@ -176,6 +204,12 @@ ${setterCalls}
         methods.push(this.generateCustomHandlerMethod(modelName, handler));
       }
     });
+
+    // Add getResourceOwner method for aggregate roots
+    const getResourceOwnerMethod = this.generateGetResourceOwnerMethod(modelName, isRoot);
+    if (getResourceOwnerMethod) {
+      methods.push(getResourceOwnerMethod);
+    }
 
     return `import { ${modelName} } from '../../domain/entities/${modelName}';
 import { ${storeName} } from '../../infrastructure/stores/${storeName}';

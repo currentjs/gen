@@ -6,10 +6,13 @@ import { colors } from '../utils/colors';
 import { 
   NewModuleConfig, 
   UseCaseDefinition,
+  AggregateConfig,
   isNewModuleConfig 
 } from '../types/configTypes';
 
 export class UseCaseGenerator {
+  private availableAggregates: Map<string, AggregateConfig> = new Map();
+
   private capitalize(str: string): string {
     return str.charAt(0).toUpperCase() + str.slice(1);
   }
@@ -73,6 +76,27 @@ ${handlerCalls}${returnStatement}
   }`;
   }
 
+  /**
+   * Generate getResourceOwner method for aggregate roots.
+   * This is used by controllers for pre-mutation authorization checks.
+   */
+  private generateGetResourceOwnerMethod(modelName: string, isRoot: boolean): string {
+    if (!isRoot) {
+      return '';
+    }
+    
+    const serviceVar = `${modelName.toLowerCase()}Service`;
+    
+    return `
+  /**
+   * Get the owner ID of a resource by its ID.
+   * Used for pre-mutation authorization checks in controllers.
+   */
+  async getResourceOwner(id: number): Promise<number | null> {
+    return await this.${serviceVar}.getResourceOwner(id);
+  }`;
+  }
+
   private generateUseCase(
     modelName: string,
     useCases: Record<string, UseCaseDefinition>
@@ -80,6 +104,10 @@ ${handlerCalls}${returnStatement}
     const className = `${modelName}UseCase`;
     const serviceName = `${modelName}Service`;
     const serviceVar = `${modelName.toLowerCase()}Service`;
+    
+    // Check if this model is an aggregate root
+    const aggregateConfig = this.availableAggregates.get(modelName);
+    const isRoot = aggregateConfig?.root === true;
 
     // Generate imports for DTOs (only Input types since UseCases return models)
     const dtoImports = Object.keys(useCases)
@@ -96,6 +124,9 @@ ${handlerCalls}${returnStatement}
       )
       .join('\n\n');
 
+    // Add getResourceOwner method for aggregate roots
+    const getResourceOwnerMethod = this.generateGetResourceOwnerMethod(modelName, isRoot);
+
     return `import { ${modelName} } from '../../domain/entities/${modelName}';
 ${dtoImports}
 import { ${serviceName} } from '../services/${serviceName}';
@@ -109,12 +140,20 @@ export class ${className} {
     private ${serviceVar}: ${serviceName}
   ) {}
 
-${methods}
+${methods}${getResourceOwnerMethod}
 }`;
   }
 
   public generateFromConfig(config: NewModuleConfig): Record<string, string> {
     const result: Record<string, string> = {};
+
+    // Collect all aggregates to know which are roots
+    this.availableAggregates.clear();
+    if (config.domain?.aggregates) {
+      Object.entries(config.domain.aggregates).forEach(([name, aggConfig]) => {
+        this.availableAggregates.set(name, aggConfig);
+      });
+    }
 
     // Generate a UseCase file for each model
     Object.entries(config.useCases).forEach(([modelName, useCases]) => {
