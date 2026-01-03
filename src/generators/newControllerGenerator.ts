@@ -562,8 +562,8 @@ ${methods.join('\n\n')}
     const result: Record<string, string> = {};
 
     // Generate API controllers
-    if (config.api && config.api.resources) {
-      Object.entries(config.api.resources).forEach(([resourceName, resourceConfig]) => {
+    if (config.api) {
+      Object.entries(config.api).forEach(([resourceName, resourceConfig]) => {
         const code = this.generateApiController(
           resourceName,
           resourceConfig.prefix,
@@ -574,8 +574,8 @@ ${methods.join('\n\n')}
     }
 
     // Generate Web controllers
-    if (config.web && config.web.resources) {
-      Object.entries(config.web.resources).forEach(([resourceName, resourceConfig]) => {
+    if (config.web) {
+      Object.entries(config.web).forEach(([resourceName, resourceConfig]) => {
         const code = this.generateWebController(
           resourceName,
           resourceConfig.prefix,
@@ -594,7 +594,7 @@ ${methods.join('\n\n')}
     const config = parseYaml(yamlContent);
 
     if (!isNewModuleConfig(config)) {
-      throw new Error('Configuration does not match new module format. Expected api/web resources structure.');
+      throw new Error('Configuration does not match new module format. Expected domain/useCases/api/web structure.');
     }
 
     return this.generateFromConfig(config);

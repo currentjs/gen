@@ -126,9 +126,7 @@ export interface ApiResourceConfig {
   endpoints: ApiEndpointConfig[];
 }
 
-export interface ApiConfig {
-  resources: Record<string, ApiResourceConfig>;
-}
+export type ApiConfig = Record<string, ApiResourceConfig>;
 
 // ============= ADAPTER LAYER - WEB =============
 
@@ -156,9 +154,7 @@ export interface WebResourceConfig {
   pages: WebPageConfig[];
 }
 
-export interface WebConfig {
-  resources: Record<string, WebResourceConfig>;
-}
+export type WebConfig = Record<string, WebResourceConfig>;
 
 // ============= MODULE CONFIG =============
 

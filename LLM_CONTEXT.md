@@ -242,39 +242,38 @@ Defines REST API endpoints.
 
 ```yaml
 api:
-  resources:
-    Invoice:
-      prefix: /api/invoice
-      endpoints:
-        # Public access
-        - method: GET
-          path: /
-          useCase: Invoice:list
-          auth: all
-          
-        # Any authenticated user
-        - method: GET
-          path: /:id
-          useCase: Invoice:get
-          auth: authenticated
-          
-        # Authenticated user can create
-        - method: POST
-          path: /
-          useCase: Invoice:create
-          auth: authenticated
-          
-        # Owner OR admin can update (array syntax)
-        - method: PUT
-          path: /:id
-          useCase: Invoice:update
-          auth: [owner, admin]
-          
-        # Only admin role
-        - method: DELETE
-          path: /:id
-          useCase: Invoice:delete
-          auth: admin
+  Invoice:
+    prefix: /api/invoice
+    endpoints:
+      # Public access
+      - method: GET
+        path: /
+        useCase: Invoice:list
+        auth: all
+        
+      # Any authenticated user
+      - method: GET
+        path: /:id
+        useCase: Invoice:get
+        auth: authenticated
+        
+      # Authenticated user can create
+      - method: POST
+        path: /
+        useCase: Invoice:create
+        auth: authenticated
+        
+      # Owner OR admin can update (array syntax)
+      - method: PUT
+        path: /:id
+        useCase: Invoice:update
+        auth: [owner, admin]
+        
+      # Only admin role
+      - method: DELETE
+        path: /:id
+        useCase: Invoice:delete
+        auth: admin
 ```
 
 **Auth Options**:
@@ -290,54 +289,53 @@ Defines web page routes with views.
 
 ```yaml
 web:
-  resources:
-    Invoice:
-      prefix: /invoice
-      layout: dashboard                   # Layout template name
-      pages:
-        # Public list
-        - path: /
-          useCase: Invoice:list
-          view: invoiceList
-          auth: all
+  Invoice:
+    prefix: /invoice
+    layout: dashboard                   # Layout template name
+    pages:
+      # Public list
+      - path: /
+        useCase: Invoice:list
+        view: invoiceList
+        auth: all
 
-        # Authenticated can access create form
-        - path: /create
-          method: GET
-          view: invoiceCreate
-          auth: authenticated
-          
-        - path: /create
-          method: POST
-          useCase: Invoice:create
-          auth: authenticated
-          onSuccess: 
-            redirect: /invoice/:id
-            toast: "Invoice created"
-          onError:
-            stay: true
-            toast: error
+      # Authenticated can access create form
+      - path: /create
+        method: GET
+        view: invoiceCreate
+        auth: authenticated
         
-        # Public detail view    
-        - path: /:id
-          useCase: Invoice:get
-          view: invoiceDetail
-          auth: all
+      - path: /create
+        method: POST
+        useCase: Invoice:create
+        auth: authenticated
+        onSuccess: 
+          redirect: /invoice/:id
+          toast: "Invoice created"
+        onError:
+          stay: true
+          toast: error
+      
+      # Public detail view    
+      - path: /:id
+        useCase: Invoice:get
+        view: invoiceDetail
+        auth: all
+      
+      # Owner or admin can edit
+      - path: /:id/edit
+        method: GET
+        useCase: Invoice:get
+        view: invoiceEdit
+        auth: [owner, admin]
         
-        # Owner or admin can edit
-        - path: /:id/edit
-          method: GET
-          useCase: Invoice:get
-          view: invoiceEdit
-          auth: [owner, admin]
-          
-        - path: /:id/edit
-          method: POST
-          useCase: Invoice:update
-          auth: [owner, admin]
-          onSuccess:
-            back: true
-            toast: "Updated"
+      - path: /:id/edit
+        method: POST
+        useCase: Invoice:update
+        auth: [owner, admin]
+        onSuccess:
+          back: true
+          toast: "Updated"
 ```
 
 ---
@@ -366,8 +364,8 @@ For each model defined in `useCases`:
 
 | Config | Generated File | Location |
 |--------|----------------|----------|
-| `api.resources.Invoice` | `InvoiceApiController.ts` | `infrastructure/controllers/` |
-| `web.resources.Invoice` | `InvoiceWebController.ts` | `infrastructure/controllers/` |
+| `api.Invoice` | `InvoiceApiController.ts` | `infrastructure/controllers/` |
+| `web.Invoice` | `InvoiceWebController.ts` | `infrastructure/controllers/` |
 | `web.*.pages[].view` | `{viewName}.html` | `views/` |
 
 ---

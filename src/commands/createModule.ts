@@ -76,72 +76,68 @@ function moduleYamlTemplate(moduleName: string): string {
       }
     },
     api: {
-      resources: {
-        [entityName]: {
-          prefix: `/api/${lower}`,
-          endpoints: [
-            // Public read access
-            { method: 'GET', path: '/', useCase: `${entityName}:list`, auth: 'all' },
-            { method: 'GET', path: '/:id', useCase: `${entityName}:get`, auth: 'all' },
-            // Authenticated users can create
-            { method: 'POST', path: '/', useCase: `${entityName}:create`, auth: 'authenticated' },
-            // Owner or admin can update/delete
-            { method: 'PUT', path: '/:id', useCase: `${entityName}:update`, auth: ['owner', 'admin'] },
-            { method: 'DELETE', path: '/:id', useCase: `${entityName}:delete`, auth: ['owner', 'admin'] }
-          ]
-        }
+      [entityName]: {
+        prefix: `/api/${lower}`,
+        endpoints: [
+          // Public read access
+          { method: 'GET', path: '/', useCase: `${entityName}:list`, auth: 'all' },
+          { method: 'GET', path: '/:id', useCase: `${entityName}:get`, auth: 'all' },
+          // Authenticated users can create
+          { method: 'POST', path: '/', useCase: `${entityName}:create`, auth: 'authenticated' },
+          // Owner or admin can update/delete
+          { method: 'PUT', path: '/:id', useCase: `${entityName}:update`, auth: ['owner', 'admin'] },
+          { method: 'DELETE', path: '/:id', useCase: `${entityName}:delete`, auth: ['owner', 'admin'] }
+        ]
       }
     },
     web: {
-      resources: {
-        [entityName]: {
-          prefix: `/${lower}`,
-          layout: 'main_view',
-          pages: [
-            // Public list and detail views
-            { path: '/', useCase: `${entityName}:list`, view: `${lower}List`, auth: 'all' },
-            { path: '/:id', useCase: `${entityName}:get`, view: `${lower}Detail`, auth: 'all' },
-            // Authenticated users can access create form
-            { 
-              path: '/create', 
-              method: 'GET',
-              view: `${lower}Create`, 
-              auth: 'authenticated' 
+      [entityName]: {
+        prefix: `/${lower}`,
+        layout: 'main_view',
+        pages: [
+          // Public list and detail views
+          { path: '/', useCase: `${entityName}:list`, view: `${lower}List`, auth: 'all' },
+          { path: '/:id', useCase: `${entityName}:get`, view: `${lower}Detail`, auth: 'all' },
+          // Authenticated users can access create form
+          { 
+            path: '/create', 
+            method: 'GET',
+            view: `${lower}Create`, 
+            auth: 'authenticated' 
+          },
+          { 
+            path: '/create', 
+            method: 'POST',
+            useCase: `${entityName}:create`, 
+            auth: 'authenticated',
+            onSuccess: {
+              redirect: `/${lower}/:id`,
+              toast: `${entityName} created successfully`
             },
-            { 
-              path: '/create', 
-              method: 'POST',
-              useCase: `${entityName}:create`, 
-              auth: 'authenticated',
-              onSuccess: {
-                redirect: `/${lower}/:id`,
-                toast: `${entityName} created successfully`
-              },
-              onError: {
-                stay: true,
-                toast: 'error'
-              }
-            },
-            // Owner or admin can edit
-            { 
-              path: '/:id/edit', 
-              method: 'GET',
-              useCase: `${entityName}:get`, 
-              view: `${lower}Edit`, 
-              auth: ['owner', 'admin']
-            },
-            { 
-              path: '/:id/edit', 
-              method: 'POST',
-              useCase: `${entityName}:update`, 
-              auth: ['owner', 'admin'],
-              onSuccess: {
-                back: true,
-                toast: `${entityName} updated successfully`
-              }
+            onError: {
+              stay: true,
+              toast: 'error'
             }
-          ]
-        }
+          },
+          // Owner or admin can edit
+          { 
+            path: '/:id/edit', 
+            method: 'GET',
+            useCase: `${entityName}:get`, 
+            view: `${lower}Edit`, 
+            auth: ['owner', 'admin']
+          },
+          { 
+            path: '/:id/edit', 
+            method: 'POST',
+            useCase: `${entityName}:update`, 
+            auth: ['owner', 'admin'],
+            onSuccess: {
+              back: true,
+              toast: `${entityName} updated successfully`
+            }
+          }
+        ]
       }
     }
   };

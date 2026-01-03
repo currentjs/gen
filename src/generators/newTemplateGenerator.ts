@@ -194,11 +194,11 @@ ${formFields}
   public generateFromConfig(config: NewModuleConfig): Record<string, string> {
     const result: Record<string, string> = {};
 
-    if (!config.web || !config.web.resources) {
+    if (!config.web) {
       return result;
     }
 
-    Object.entries(config.web.resources).forEach(([resourceName, resourceConfig]) => {
+    Object.entries(config.web).forEach(([resourceName, resourceConfig]) => {
       const aggregate = config.domain.aggregates[resourceName];
       if (!aggregate) {
         console.warn(`Warning: No aggregate found for resource ${resourceName}`);
@@ -256,7 +256,7 @@ ${formFields}
     const config = parseYaml(yamlContent);
 
     if (!isNewModuleConfig(config)) {
-      throw new Error('Configuration does not match new module format. Expected web.resources structure.');
+      throw new Error('Configuration does not match new module format. Expected domain/useCases/web structure.');
     }
 
     return this.generateFromConfig(config);
