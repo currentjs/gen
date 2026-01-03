@@ -8,6 +8,7 @@ import {
   UseCaseInputConfig, 
   UseCaseOutputConfig,
   AggregateConfig,
+  ValueObjectConfig,
   isNewModuleConfig 
 } from '../types/configTypes';
 
@@ -28,20 +29,32 @@ export class DtoGenerator {
     money: 'Money',
     json: 'any',
     array: 'any[]',
-    object: 'object'
+    object: 'object',
+    enum: 'any'
   };
 
   private availableAggregates: Map<string, AggregateConfig> = new Map();
+  private availableValueObjects: Map<string, ValueObjectConfig> = new Map();
+
+  private capitalize(str: string): string {
+    return str.charAt(0).toUpperCase() + str.slice(1);
+  }
 
   private mapType(yamlType: string): string {
     if (this.availableAggregates.has(yamlType)) {
       return yamlType;
     }
+    // Check for value objects (case-insensitive)
+    const capitalizedType = this.capitalize(yamlType);
+    if (this.availableValueObjects.has(capitalizedType)) {
+      return capitalizedType;
+    }
     return this.typeMapping[yamlType] || 'any';
   }
 
-  private capitalize(str: string): string {
-    return str.charAt(0).toUpperCase() + str.slice(1);
+  private isValueObjectType(yamlType: string): boolean {
+    const capitalizedType = this.capitalize(yamlType);
+    return this.availableValueObjects.has(capitalizedType);
   }
 
   private getValidationCode(fieldName: string, fieldType: string, isRequired: boolean): string[] {
@@ -319,7 +332,9 @@ ${transformsStr}
         const relatedAggregate = allAggregates.get(includeConfig.from);
         
         if (relatedAggregate && includeConfig.pick && includeConfig.pick.length > 0) {
-          const pickedFields = includeConfig.pick.map(fieldName => {
+          // Filter out 'id' from picked fields since we add it separately
+          const pickedFieldsFiltered = includeConfig.pick.filter(f => f !== 'id');
+          const pickedFields = pickedFieldsFiltered.map(fieldName => {
             const fieldConfig = relatedAggregate.fields[fieldName];
             if (fieldConfig) {
               const tsType = this.mapType(fieldConfig.type);
@@ -328,8 +343,9 @@ ${transformsStr}
             return `${fieldName}: any`;
           }).join('; ');
           
-          fieldDeclarations.push(`  readonly ${includeName}?: { id: number; ${pickedFields} };`);
-          constructorParams.push(`${includeName}?: { id: number; ${pickedFields} }`);
+          const fieldsStr = pickedFields ? `id: number; ${pickedFields}` : 'id: number';
+          fieldDeclarations.push(`  readonly ${includeName}?: { ${fieldsStr} };`);
+          constructorParams.push(`${includeName}?: { ${fieldsStr} }`);
           fromMappings.push(`      ${includeName}: (entity as any).${includeName}`);
         } else {
           fieldDeclarations.push(`  readonly ${includeName}?: ${includeConfig.from};`);
@@ -416,6 +432,49 @@ ${mappingsStr}
 }`;
   }
 
+  /**
+   * Collect types that need to be imported for a use case DTO.
+   */
+  private collectRequiredImports(
+    modelName: string,
+    aggregateConfig: AggregateConfig,
+    outputConfig: UseCaseOutputConfig | 'void'
+  ): { valueObjects: Set<string>; entities: Set<string> } {
+    const valueObjects = new Set<string>();
+    const entities = new Set<string>();
+
+    // Check aggregate fields for value object types
+    if (outputConfig !== 'void' && outputConfig.from) {
+      const aggregateFields = Object.entries(aggregateConfig.fields);
+      let fieldsToCheck = aggregateFields;
+
+      // Apply pick filter if specified
+      if (outputConfig.pick && outputConfig.pick.length > 0) {
+        fieldsToCheck = fieldsToCheck.filter(([fieldName]) => 
+          outputConfig.pick!.includes(fieldName)
+        );
+      }
+
+      // Check each field for value object types
+      fieldsToCheck.forEach(([, fieldConfig]) => {
+        if (this.isValueObjectType(fieldConfig.type)) {
+          valueObjects.add(this.capitalize(fieldConfig.type));
+        }
+      });
+    }
+
+    // Check include for child entities
+    if (outputConfig !== 'void' && outputConfig.include) {
+      Object.entries(outputConfig.include).forEach(([, includeConfig]) => {
+        if (includeConfig.from && includeConfig.from !== modelName) {
+          entities.add(includeConfig.from);
+        }
+      });
+    }
+
+    return { valueObjects, entities };
+  }
+
   public generateFromConfig(config: NewModuleConfig): Record<string, string> {
     const result: Record<string, string> = {};
 
@@ -423,6 +482,13 @@ ${mappingsStr}
     if (config.domain.aggregates) {
       Object.entries(config.domain.aggregates).forEach(([name, aggConfig]) => {
         this.availableAggregates.set(name, aggConfig);
+      });
+    }
+
+    // Collect all value objects
+    if (config.domain.valueObjects) {
+      Object.entries(config.domain.valueObjects).forEach(([name, voConfig]) => {
+        this.availableValueObjects.set(name, voConfig);
       });
     }
 
@@ -453,9 +519,32 @@ ${mappingsStr}
           this.availableAggregates
         );
 
-        // Add model import for output DTOs
-        const needsImport = useCaseConfig.output !== 'void';
-        const importStatement = needsImport ? `import { ${modelName} } from '../../domain/entities/${modelName}';\n\n` : '';
+        // Collect required imports
+        const imports: string[] = [];
+        const needsModelImport = useCaseConfig.output !== 'void';
+        
+        if (needsModelImport) {
+          imports.push(`import { ${modelName} } from '../../domain/entities/${modelName}';`);
+        }
+
+        // Collect value objects and entities needed
+        const { valueObjects, entities } = this.collectRequiredImports(
+          modelName,
+          aggregateConfig,
+          useCaseConfig.output || 'void'
+        );
+
+        // Add value object imports
+        valueObjects.forEach(voName => {
+          imports.push(`import { ${voName} } from '../../domain/valueObjects/${voName}';`);
+        });
+
+        // Add entity imports for includes
+        entities.forEach(entityName => {
+          imports.push(`import { ${entityName} } from '../../domain/entities/${entityName}';`);
+        });
+
+        const importStatement = imports.length > 0 ? imports.join('\n') + '\n\n' : '';
 
         const dtoFileName = `${modelName}${this.capitalize(actionName)}`;
         result[dtoFileName] = `${importStatement}${inputDto}\n\n${outputDto}`;

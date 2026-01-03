@@ -12,12 +12,15 @@ export class NewStoreGenerator {
     string: 'string',
     number: 'number',
     integer: 'number',
+    decimal: 'number',
     boolean: 'boolean',
     datetime: 'string',  // MySQL returns datetime as string
     date: 'string',      // MySQL returns date as string
+    id: 'number',        // Foreign key references are numbers
     json: 'string',      // JSON stored as string in MySQL
     array: 'string',     // Arrays serialized as string
-    object: 'string'     // Objects serialized as string
+    object: 'string',    // Objects serialized as string
+    enum: 'string'       // Enum values stored as strings
   };
 
   private availableValueObjects: Map<string, ValueObjectConfig> = new Map();
@@ -38,6 +41,20 @@ export class NewStoreGenerator {
 
   private getValueObjectConfig(fieldType: string): ValueObjectConfig | undefined {
     return this.availableValueObjects.get(this.getValueObjectName(fieldType));
+  }
+
+  /**
+   * Sort fields the same way as the domain layer generator:
+   * Required fields first, then optional fields.
+   * This ensures rowToModel parameter order matches entity constructor.
+   */
+  private sortFieldsForConstructor(fields: [string, AggregateFieldConfig][]): [string, AggregateFieldConfig][] {
+    return [...fields].sort((a, b) => {
+      const aRequired = a[1].required !== false && !a[1].auto;
+      const bRequired = b[1].required !== false && !b[1].auto;
+      if (aRequired === bRequired) return 0;
+      return aRequired ? -1 : 1;
+    });
   }
 
   /**
@@ -125,22 +142,34 @@ export class NewStoreGenerator {
         return;
       }
       
-      // Handle value object conversion with proper type cast
+      // Handle value object conversion - deserialize from JSON
       if (this.isValueObjectType(fieldType)) {
         const voName = this.getValueObjectName(fieldType);
         const voConfig = this.getValueObjectConfig(fieldType);
         
         if (voConfig) {
-          const enumTypeName = this.getValueObjectFieldTypeName(voName, voConfig);
-          if (enumTypeName) {
-            // Cast to the enum type
-            result.push(`      row.${fieldName} ? new ${voName}(row.${fieldName} as ${enumTypeName}) : undefined`);
+          const voFields = Object.keys(voConfig.fields);
+          if (voFields.length > 1) {
+            // Multi-field value object - deserialize from JSON
+            const voArgs = voFields.map(f => `parsed.${f}`).join(', ');
+            result.push(`      row.${fieldName} ? (() => { const parsed = JSON.parse(row.${fieldName}); return new ${voName}(${voArgs}); })() : undefined`);
+            return;
+          } else if (voFields.length === 1) {
+            // Single-field value object
+            const singleFieldType = voConfig.fields[voFields[0]];
+            const hasEnumValues = typeof singleFieldType === 'object' && 'values' in singleFieldType;
+            if (hasEnumValues) {
+              const enumTypeName = this.getValueObjectFieldTypeName(voName, voConfig);
+              result.push(`      row.${fieldName} ? new ${voName}(row.${fieldName} as ${enumTypeName}) : undefined`);
+            } else {
+              result.push(`      row.${fieldName} ? new ${voName}(row.${fieldName}) : undefined`);
+            }
             return;
           }
         }
         
-        // Fallback without cast
-        result.push(`      row.${fieldName} ? new ${voName}(row.${fieldName}) : undefined`);
+        // Fallback - try to deserialize from JSON
+        result.push(`      row.${fieldName} ? new ${voName}(...Object.values(JSON.parse(row.${fieldName}))) : undefined`);
         return;
       }
       
@@ -167,10 +196,23 @@ export class NewStoreGenerator {
         return;
       }
       
-      // Handle value object - extract the value
+      // Handle value object - serialize to JSON
       if (this.isValueObjectType(fieldType)) {
-        // Value objects typically have a 'name' or similar field
-        result.push(`      ${fieldName}: entity.${fieldName}?.name`);
+        const voConfig = this.getValueObjectConfig(fieldType);
+        if (voConfig) {
+          const voFields = Object.keys(voConfig.fields);
+          if (voFields.length > 1) {
+            // Multi-field value object - serialize to JSON
+            result.push(`      ${fieldName}: entity.${fieldName} ? JSON.stringify(entity.${fieldName}) : undefined`);
+            return;
+          } else if (voFields.length === 1) {
+            // Single-field value object - extract the single field
+            result.push(`      ${fieldName}: entity.${fieldName}?.${voFields[0]}`);
+            return;
+          }
+        }
+        // Fallback - serialize to JSON
+        result.push(`      ${fieldName}: entity.${fieldName} ? JSON.stringify(entity.${fieldName}) : undefined`);
         return;
       }
       
@@ -190,9 +232,21 @@ export class NewStoreGenerator {
           return `      ${fieldName}: entity.${fieldName}?.toISOString()`;
         }
         
-        // Handle value object - extract the value
+        // Handle value object - serialize to JSON
         if (this.isValueObjectType(fieldType)) {
-          return `      ${fieldName}: entity.${fieldName}?.name`;
+          const voConfig = this.getValueObjectConfig(fieldType);
+          if (voConfig) {
+            const voFields = Object.keys(voConfig.fields);
+            if (voFields.length > 1) {
+              // Multi-field value object - serialize to JSON
+              return `      ${fieldName}: entity.${fieldName} ? JSON.stringify(entity.${fieldName}) : undefined`;
+            } else if (voFields.length === 1) {
+              // Single-field value object - extract the single field
+              return `      ${fieldName}: entity.${fieldName}?.${voFields[0]}`;
+            }
+          }
+          // Fallback - serialize to JSON
+          return `      ${fieldName}: entity.${fieldName} ? JSON.stringify(entity.${fieldName}) : undefined`;
         }
         
         return `      ${fieldName}: entity.${fieldName}`;
@@ -269,13 +323,16 @@ export class NewStoreGenerator {
     const tableName = modelName.toLowerCase();
     const fields = Object.entries(aggregateConfig.fields);
     const isRoot = aggregateConfig.root === true;
+    
+    // Sort fields for rowToModel to match entity constructor order (required first, optional second)
+    const sortedFields = this.sortFieldsForConstructor(fields);
 
     const variables: Record<string, string> = {
       ENTITY_NAME: modelName,
       TABLE_NAME: tableName,
       ROW_FIELDS: this.generateRowFields(fields, isRoot),
       FIELD_NAMES: this.generateFieldNamesStr(fields, isRoot),
-      ROW_TO_MODEL_MAPPING: this.generateRowToModelMapping(fields, isRoot),
+      ROW_TO_MODEL_MAPPING: this.generateRowToModelMapping(sortedFields, isRoot),
       INSERT_DATA_MAPPING: this.generateInsertDataMapping(fields, isRoot),
       UPDATE_DATA_MAPPING: this.generateUpdateDataMapping(fields),
       UPDATE_FIELDS_ARRAY: this.generateUpdateFieldsArray(fields),
