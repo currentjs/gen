@@ -30,7 +30,7 @@ export class DtoGenerator {
     json: 'any',
     array: 'any[]',
     object: 'object',
-    enum: 'any'
+    enum: 'string'
   };
 
   private availableAggregates: Map<string, AggregateConfig> = new Map();

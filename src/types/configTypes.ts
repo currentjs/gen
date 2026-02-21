@@ -23,6 +23,7 @@ export interface AggregateFieldConfig {
   required?: boolean;
   unique?: boolean;
   auto?: boolean;
+  values?: string[];
 }
 
 export interface AggregateConfig {

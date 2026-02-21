@@ -546,7 +546,7 @@ export function renderLayoutTemplate(layoutName: string): string {
     <title>${layoutName}</title>
   </head>
   <body>
-    {{ content }}
+    {{{ content }}}
   </body>
   </html>
 `;

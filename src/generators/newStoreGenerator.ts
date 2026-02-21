@@ -190,9 +190,9 @@ export class NewStoreGenerator {
     fields.forEach(([fieldName, fieldConfig]) => {
       const fieldType = fieldConfig.type;
       
-      // Handle datetime/date - convert Date to ISO string for MySQL
+      // Handle datetime/date - convert Date to MySQL DATETIME format
       if (fieldType === 'datetime' || fieldType === 'date') {
-        result.push(`      ${fieldName}: entity.${fieldName}?.toISOString()`);
+        result.push(`      ${fieldName}: entity.${fieldName} ? this.toMySQLDatetime(entity.${fieldName}) : undefined`);
         return;
       }
       
@@ -227,9 +227,9 @@ export class NewStoreGenerator {
       .map(([fieldName, fieldConfig]) => {
         const fieldType = fieldConfig.type;
         
-        // Handle datetime/date - convert Date to ISO string for MySQL
+        // Handle datetime/date - convert Date to MySQL DATETIME format
         if (fieldType === 'datetime' || fieldType === 'date') {
-          return `      ${fieldName}: entity.${fieldName}?.toISOString()`;
+          return `      ${fieldName}: entity.${fieldName} ? this.toMySQLDatetime(entity.${fieldName}) : undefined`;
         }
         
         // Handle value object - serialize to JSON

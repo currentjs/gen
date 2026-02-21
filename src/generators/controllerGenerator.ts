@@ -360,8 +360,15 @@ export class ControllerGenerator {
     const actionPermissions = this.getActionPermissions(moduleName, moduleConfig);
     const hasPermissions = hasGlobalPermissions && !!(moduleConfig.permissions && moduleConfig.permissions.length > 0);
 
+    // Sort endpoints so static paths are registered before parameterized ones
+    const sortedEndpoints = [...(cfg.endpoints || [])].sort((a, b) => {
+      const aParams = a.path.split('/').filter(s => s.startsWith(':')).length;
+      const bParams = b.path.split('/').filter(s => s.startsWith(':')).length;
+      return aParams - bParams;
+    });
+
     // Filter endpoints that apply to this model (Option A)
-    const modelEndpoints = (cfg.endpoints || []).filter(endpoint => {
+    const modelEndpoints = sortedEndpoints.filter(endpoint => {
       const endpointModel = endpoint.model || cfg?.model || (moduleConfig.models && moduleConfig.models[0] ? moduleConfig.models[0].name : null);
       return endpointModel === entityName || endpointModel?.toLowerCase() === entityLower;
     });
@@ -406,8 +413,8 @@ export class ControllerGenerator {
           prefix: `/${entityLower}`,
           endpoints: [
             { path: '/', action: 'list', method: 'GET', view: `${entityLower}List` },
-            { path: '/:id', action: 'get', method: 'GET', view: `${entityLower}Detail` },
             { path: '/create', action: 'empty', method: 'GET', view: `${entityLower}Create` },
+            { path: '/:id', action: 'get', method: 'GET', view: `${entityLower}Detail` },
             { path: '/:id/edit', action: 'get', method: 'GET', view: `${entityLower}Update` }
           ]
         } as RoutesConfig];

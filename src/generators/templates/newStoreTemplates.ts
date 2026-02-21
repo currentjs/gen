@@ -15,6 +15,10 @@ export class {{ENTITY_NAME}}Store {
 
   constructor(private db: ISqlProvider) {}
 
+  private toMySQLDatetime(date: Date): string {
+    return date.toISOString().slice(0, 19).replace('T', ' ');
+  }
+
   private rowToModel(row: {{ENTITY_NAME}}Row): {{ENTITY_NAME}} {
     return new {{ENTITY_NAME}}(
       row.id,
@@ -26,7 +30,7 @@ export class {{ENTITY_NAME}}Store {
     const offset = (page - 1) * limit;
     const result = await this.db.query(
       \`SELECT {{FIELD_NAMES}} FROM \\\`\${this.tableName}\\\` WHERE deleted_at IS NULL LIMIT :limit OFFSET :offset\`,
-      { limit, offset }
+      { limit: String(limit), offset: String(offset) }
     );
 
     if (result.success && result.data) {
@@ -63,8 +67,8 @@ export class {{ENTITY_NAME}}Store {
     const now = new Date();
     const data: Partial<{{ENTITY_NAME}}Row> = {
 {{INSERT_DATA_MAPPING}},
-      created_at: now.toISOString(),
-      updated_at: now.toISOString()
+      created_at: this.toMySQLDatetime(now),
+      updated_at: this.toMySQLDatetime(now)
     };
 
     const fieldsList = Object.keys(data).map(f => \`\\\`\${f}\\\`\`).join(', ');
@@ -87,7 +91,7 @@ export class {{ENTITY_NAME}}Store {
     const now = new Date();
     const data: Partial<{{ENTITY_NAME}}Row> & { id: number } = {
 {{UPDATE_DATA_MAPPING}},
-      updated_at: now.toISOString(),
+      updated_at: this.toMySQLDatetime(now),
       id
     };
 
@@ -109,7 +113,7 @@ export class {{ENTITY_NAME}}Store {
     const now = new Date();
     const result = await this.db.query(
       \`UPDATE \\\`\${this.tableName}\\\` SET deleted_at = :deleted_at WHERE id = :id\`,
-      { deleted_at: now.toISOString(), id }
+      { deleted_at: this.toMySQLDatetime(now), id }
     );
 
     return result.success;

@@ -374,6 +374,8 @@ export class NewControllerGenerator {
       let parseLogic: string;
       if (page.path.includes(':id')) {
         parseLogic = `const input = ${inputClass}.parse({ ...context.request.body, id: context.request.parameters.id });`;
+      } else if (action === 'create') {
+        parseLogic = `const input = ${inputClass}.parse({ ...context.request.body, ownerId: context.request.user?.id });`;
       } else {
         parseLogic = `const input = ${inputClass}.parse(context.request.body);`;
       }
@@ -451,6 +453,21 @@ export class NewControllerGenerator {
     return handlers.join('\n      ') || '// Error occurred';
   }
 
+  /**
+   * Sort routes so static paths are registered before parameterized ones.
+   * This prevents parameterized routes (e.g. /:id) from catching requests
+   * meant for static routes (e.g. /create).
+   */
+  private sortRoutesBySpecificity<T extends { path: string }>(routes: T[]): T[] {
+    return [...routes].sort((a, b) => {
+      const aSegments = a.path.split('/').filter(Boolean);
+      const bSegments = b.path.split('/').filter(Boolean);
+      const aParamCount = aSegments.filter(s => s.startsWith(':')).length;
+      const bParamCount = bSegments.filter(s => s.startsWith(':')).length;
+      return aParamCount - bParamCount;
+    });
+  }
+
   private generateApiController(
     resourceName: string,
     prefix: string,
@@ -463,7 +480,8 @@ export class NewControllerGenerator {
     const allDtoImports = new Set<string>();
     const methods: string[] = [];
 
-    endpoints.forEach(endpoint => {
+    const sortedEndpoints = this.sortRoutesBySpecificity(endpoints);
+    sortedEndpoints.forEach(endpoint => {
       const { model } = this.parseUseCase(endpoint.useCase);
       useCaseModels.add(model);
       
@@ -513,7 +531,8 @@ ${methods.join('\n\n')}
     const allDtoImports = new Set<string>();
     const methods: string[] = [];
 
-    pages.forEach((page, index) => {
+    const sortedPages = this.sortRoutesBySpecificity(pages);
+    sortedPages.forEach((page, index) => {
       if (page.useCase) {
         const { model } = this.parseUseCase(page.useCase);
         useCaseModels.add(model);

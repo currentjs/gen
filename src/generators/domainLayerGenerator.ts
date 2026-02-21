@@ -22,7 +22,8 @@ export class DomainLayerGenerator {
     money: 'Money',
     json: 'any',
     array: 'any[]',
-    object: 'object'
+    object: 'object',
+    enum: 'string'
   };
 
   private availableAggregates: Set<string> = new Set();
@@ -174,8 +175,21 @@ export class DomainLayerGenerator {
       return aRequired ? -1 : 1;
     });
 
+    const enumTypeDefinitions: string[] = [];
+    const enumTypeNames: Record<string, string> = {};
+
     sortedFields.forEach(([fieldName, fieldConfig]) => {
-      const tsType = this.mapType(fieldConfig.type);
+      if (fieldConfig.type === 'enum' && fieldConfig.values && fieldConfig.values.length > 0) {
+        const typeName = `${name}${this.capitalize(fieldName)}`;
+        const uniqueValues = [...new Set(fieldConfig.values)];
+        const enumValues = uniqueValues.map(v => `'${v}'`).join(' | ');
+        enumTypeDefinitions.push(`export type ${typeName} = ${enumValues};`);
+        enumTypeNames[fieldName] = typeName;
+      }
+    });
+
+    sortedFields.forEach(([fieldName, fieldConfig]) => {
+      const tsType = enumTypeNames[fieldName] || this.mapType(fieldConfig.type);
       // Fields are required by default, only optional if explicitly set to required: false
       const isOptional = fieldConfig.required === false;
       const hasDefault = fieldConfig.auto;
@@ -201,7 +215,7 @@ export class DomainLayerGenerator {
     const setterMethods = sortedFields
       .filter(([fieldName, fieldConfig]) => !fieldConfig.auto && fieldName !== 'id')
       .map(([fieldName, fieldConfig]) => {
-        const tsType = this.mapType(fieldConfig.type);
+        const tsType = enumTypeNames[fieldName] || this.mapType(fieldConfig.type);
         const methodName = `set${fieldName.charAt(0).toUpperCase() + fieldName.slice(1)}`;
         // Fields are required by default, only optional if explicitly set to required: false
         const isOptional = fieldConfig.required === false;
@@ -214,8 +228,9 @@ export class DomainLayerGenerator {
       .join('\n');
 
     const rootComment = config.root ? '// Aggregate Root\n' : '';
+    const enumTypeDefsCode = enumTypeDefinitions.length > 0 ? enumTypeDefinitions.join('\n') + '\n\n' : '';
 
-    return `${imports ? imports + '\n\n' : ''}${rootComment}export class ${name} {
+    return `${imports ? imports + '\n\n' : ''}${enumTypeDefsCode}${rootComment}export class ${name} {
     public constructor(
         ${constructorParamsStr}
     ) { }
