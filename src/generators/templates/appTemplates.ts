@@ -67,5 +67,5 @@ export const DEFAULT_FILES = {
   ERROR_TEMPLATE: 'error.html',
   FRONTEND_SCRIPT: 'app.js',
   TRANSLATIONS: 'translations.json',
-  CURSOR_RULES: '.cursorrules'
+  CURSOR_RULES: 'AGENTS.md'
 } as const;
