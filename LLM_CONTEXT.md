@@ -100,7 +100,7 @@ domain:
       fields:
         number: { type: string }
         date: { type: datetime }
-        amount: { type: money }           # Uses Money value object
+        amount: { type: Money }           # Value object (define in valueObjects)
       entities:
         - InvoiceItem                     # Child entities
       
@@ -108,7 +108,7 @@ domain:
       fields:
         productId: { type: id }
         quantity: { type: integer }
-        price: { type: money }
+        price: { type: Money }
 
   valueObjects:
     Money:
@@ -117,7 +117,7 @@ domain:
         currency: { type: enum, values: ['USD', 'EUR', 'PLN'] }
 ```
 
-**Field Types**: `string`, `number`, `integer`, `decimal`, `boolean`, `datetime`, `date`, `id`, `money`, `json`, `array`, `object`, `enum`
+**Field Types**: `string`, `number`, `integer`, `decimal`, `boolean`, `datetime`, `date`, `id`, `json`, `array`, `object`, `enum`
 
 **Constraints**: `min`, `max`, `pattern`, `unique`
 
@@ -658,12 +658,11 @@ number → number → INT/DECIMAL
 boolean → boolean → BOOLEAN
 datetime → Date → DATETIME (stored as string in MySQL)
 id → number → INT (foreign key)
-money → Money (value object) → Stored as JSON or separate columns
 ```
 
 ### Value Object Handling
-- Domain: Full value object (`amount: Money`)
-- DTO: Flattened (`amount: number`, `currency: string`)
+- Domain: Full value object (e.g. `amount: Money` when type is a value object name)
+- DTO: Flattened or as value object depending on use case
 - Store: Serialized to/from database format
 
 ### Registry System

@@ -14,7 +14,7 @@ domain:
           type: datetime
           required: false
         amount:
-          type: money
+          type: Money
           required: true
         status:
           type: enum
@@ -49,7 +49,7 @@ domain:
           type: integer
           required: true
         price:
-          type: money
+          type: Money
           required: true
         description:
           type: string

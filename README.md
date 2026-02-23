@@ -683,7 +683,6 @@ useCases:
 - `datetime` - Date and time values (DATETIME in database)
 - `date` - Date values (DATE in database)
 - `id` - Foreign key reference (INT in database)
-- `money` - Money value object (stored as JSON or separate columns)
 - `json` - JSON data
 - `enum` - Enumerated values (use with `values: [...]`)
 

@@ -299,7 +299,6 @@ ${formFields}
       case 'integer':
       case 'float':
       case 'decimal':
-      case 'money':
       case 'id': return 'number';
       case 'datetime':
       case 'date': return 'datetime-local';

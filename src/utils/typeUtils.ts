@@ -16,7 +16,6 @@ export const TYPE_MAPPING: Record<string, string> = {
   datetime: 'Date',
   date: 'Date',
   id: 'number',
-  money: 'Money',
   json: 'any',
   array: 'any[]',
   object: 'object',

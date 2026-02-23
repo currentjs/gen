@@ -11,7 +11,7 @@ domain:
           required: true
           unique: true
         price:
-          type: money
+          type: Money
           required: true
         stock:
           type: integer
