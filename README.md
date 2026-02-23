@@ -51,9 +51,9 @@ currentjs generate Blog --yaml app.yaml
    ```
 
 3. **Define your module's configuration** in `src/modules/Blog/blog.yaml`:
-   - Define your data models
-   - Configure API routes & actions (CRUD is already configured)
-   - Set up permissions
+   - Define your domain (aggregates and value objects)
+   - Configure use cases (CRUD is already configured)
+   - Set up API and web endpoints with auth
 
 4. **Generate TypeScript files**
    ```bash
@@ -237,11 +237,12 @@ For the cleanest repository experience, add this to your `.gitignore`:
 ```gitignore
 # Generated source code (will be recreated from YAML + registry)
 src/modules/*/domain/entities/*.ts
+src/modules/*/domain/valueObjects/*.ts
+src/modules/*/application/useCases/*.ts
 src/modules/*/application/services/*.ts
-src/modules/*/application/validation/*.ts
+src/modules/*/application/dto/*.ts
 src/modules/*/infrastructure/controllers/*.ts
 src/modules/*/infrastructure/stores/*.ts
-src/modules/*/infrastructure/interfaces/*.ts
 
 # Keep these in version control
 !*.yaml
@@ -259,91 +260,81 @@ With this setup, your repository stays focused on what matters: your specificati
 
 ## Multi-Model Endpoint Support 🔀
 
-Working with multiple related models in a single module? CurrentJS now supports flexible endpoint configurations for multi-model scenarios.
-
-### Per-Endpoint Model Override
-
-Override the model for specific endpoints when you need to mix models within the same API or routes section:
+Working with multiple related models in a single module? In the current YAML format, each model gets its own section in `api` and `web`, keyed by model name:
 
 ```yaml
-models:
-  - name: Cat
-    fields:
-      - name: name
-        type: string
-  - name: Person
-    fields:
-      - name: name
-        type: string
-      - name: email
-        type: string
+domain:
+  aggregates:
+    Cat:
+      root: true
+      fields:
+        name: { type: string, required: true }
+    Person:
+      root: true
+      fields:
+        name: { type: string, required: true }
+        email: { type: string, required: true }
 
-routes:
-  prefix: /cat
-  model: Cat  # Default model for this section
-  endpoints:
-    - path: /create
-      action: empty
-      view: catCreate
-      # Uses Cat model (from default)
-    
-    - path: /createOwner
-      action: empty
-      view: ownerCreate
-      model: Person  # Override to use Person model for this endpoint
-```
+useCases:
+  Cat:
+    list:
+      handlers: [default:list]
+    create:
+      input: { from: Cat }
+      output: { from: Cat }
+      handlers: [default:create]
+  Person:
+    list:
+      handlers: [default:list]
+    create:
+      input: { from: Person }
+      output: { from: Person }
+      handlers: [default:create]
 
-**Result**: The `/cat/createOwner` page will generate a form with Person fields (name, email), not Cat fields.
-
-### Multiple API/Routes Sections
-
-Organize endpoints by model or functionality using arrays:
-
-```yaml
-# Multiple routes sections for different models
-routes:
-  - prefix: /cat
-    model: Cat
+api:
+  Cat:
+    prefix: /api/cat
     endpoints:
+      - method: GET
+        path: /
+        useCase: Cat:list
+        auth: all
+  Person:
+    prefix: /api/person
+    endpoints:
+      - method: GET
+        path: /
+        useCase: Person:list
+        auth: all
+
+web:
+  Cat:
+    prefix: /cat
+    layout: main_view
+    pages:
       - path: /
-        action: list
+        useCase: Cat:list
         view: catList
+        auth: all
       - path: /create
-        action: empty
+        method: GET
         view: catCreate
-  
-  - prefix: /person
-    model: Person
-    endpoints:
+        auth: authenticated
+  Person:
+    prefix: /person
+    layout: main_view
+    pages:
       - path: /
-        action: list
+        useCase: Person:list
         view: personList
+        auth: all
       - path: /create
-        action: empty
+        method: GET
         view: personCreate
+        auth: authenticated
 ```
 
-**Result**: Generates separate controllers with their own base paths and endpoints.
-
-### Automatic Model Inference
-
-If you don't specify a `model`, the system will infer it from the action handler:
-
-```yaml
-routes:
-  prefix: /cat
-  endpoints:
-    - path: /createOwner
-      action: createOwner
-      view: ownerCreate
-      # No model specified - inferred from action below
-
-actions:
-  createOwner:
-    handlers: [Person:default:create]  # Infers Person model
-```
-
-**Priority**: `endpoint.model` → inferred from handler → section `model` → first model in array
+**Result**: Generates separate controllers, services, use cases, and stores for each model, each with their own base paths and endpoints.
 
 ## Example: Building a Blog System 📝
 
@@ -358,76 +349,109 @@ currentjs create module Blog
 
 ### 2. Define your data model
 ```yaml
-# src/modules/Blog/Blog.yaml
-models:
-  - name: Post
-    fields:
-      - name: title
-        type: string
-        required: true
-      - name: content
-        type: string
-        required: true
-      - name: authorEmail
-        type: string
-        required: true
-      - name: publishedAt
-        type: datetime
-        required: false
-# this part is already generated for you!
+# src/modules/Blog/blog.yaml
+# Only the domain fields need to be customized - the rest is auto-generated!
+domain:
+  aggregates:
+    Post:
+      root: true
+      fields:
+        title: { type: string, required: true }
+        content: { type: string, required: true }
+        authorEmail: { type: string, required: true }
+        publishedAt: { type: datetime }
+
+# Everything below is already generated for you by `currentjs create module`!
+useCases:
+  Post:
+    list:
+      input:
+        pagination: { type: offset, defaults: { limit: 20, maxLimit: 100 } }
+      output: { from: Post, pagination: true }
+      handlers: [default:list]
+    get:
+      input: { identifier: id }
+      output: { from: Post }
+      handlers: [default:get]
+    create:
+      input: { from: Post }
+      output: { from: Post }
+      handlers: [default:create]
+    update:
+      input: { identifier: id, from: Post, partial: true }
+      output: { from: Post }
+      handlers: [default:update]
+    delete:
+      input: { identifier: id }
+      output: void
+      handlers: [default:delete]
+
 api:
-  prefix: /api/posts
-  model: Post                          # Optional: specify which model this API serves
-  endpoints:
-    - method: GET
-      path: /
-      action: list
-    - method: POST
-      path: /
-      action: create
-    - method: GET
-      path: /:id
-      action: get
-    - method: PUT
-      path: /:id
-      action: update
-    - method: DELETE
-      path: /:id
-      action: delete
+  Post:
+    prefix: /api/posts
+    endpoints:
+      - method: GET
+        path: /
+        useCase: Post:list
+        auth: all
+      - method: GET
+        path: /:id
+        useCase: Post:get
+        auth: all
+      - method: POST
+        path: /
+        useCase: Post:create
+        auth: authenticated
+      - method: PUT
+        path: /:id
+        useCase: Post:update
+        auth: [owner, admin]
+      - method: DELETE
+        path: /:id
+        useCase: Post:delete
+        auth: [owner, admin]
 
-routes:
-  prefix: /posts
-  model: Post                          # Optional: specify which model this route serves
-  strategy: [back, toast]
-  endpoints:
-    - path: /
-      action: list
-      view: postList
-    - path: /:id
-      action: get
-      view: postDetail
-    - path: /create
-      action: empty
-      view: postCreate
-    - path: /:id/edit
-      action: get
-      view: postUpdate
-
-actions:
-  list:
-    handlers: [Post:default:list]
-  get:
-    handlers: [Post:default:get]
-  create:
-    handlers: [Post:default:create]
-  update:
-    handlers: [Post:default:update]
-  delete:
-    handlers: [Post:default:delete]
-
-permissions: []
+web:
+  Post:
+    prefix: /posts
+    layout: main_view
+    pages:
+      - path: /
+        useCase: Post:list
+        view: postList
+        auth: all
+      - path: /:id
+        useCase: Post:get
+        view: postDetail
+        auth: all
+      - path: /create
+        method: GET
+        view: postCreate
+        auth: authenticated
+      - path: /create
+        method: POST
+        useCase: Post:create
+        auth: authenticated
+        onSuccess:
+          redirect: /posts/:id
+          toast: "Post created successfully"
+        onError:
+          stay: true
+          toast: error
+      - path: /:id/edit
+        method: GET
+        useCase: Post:get
+        view: postEdit
+        auth: [owner, admin]
+      - path: /:id/edit
+        method: POST
+        useCase: Post:update
+        auth: [owner, admin]
+        onSuccess:
+          back: true
+          toast: "Post updated successfully"
 ```
-> **Note**: All CRUD routes and configurations are automatically generated when you run `currentjs create module Blog`. The only thing is left for you is your data model.
+> **Note**: All CRUD use cases, API endpoints, and web pages are automatically generated when you run `currentjs create module Blog`. The only thing left for you is your domain fields.
 
 ### 3. Generate everything
 ```bash
@@ -459,14 +483,16 @@ my-app/
 │   │           └── error.html        # Error page template
 │   └── modules/                # Your business modules
 │       └── YourModule/
-│           ├── YourModule.yaml           # Module specification
+│           ├── yourmodule.yaml           # Module specification
 │           ├── domain/
-│           │   └── entities/             # Domain models
+│           │   ├── entities/             # Domain models (aggregates)
+│           │   └── valueObjects/         # Value objects
 │           ├── application/
-│           │   ├── services/             # Business logic
-│           │   └── validation/           # Input validation
+│           │   ├── useCases/             # Use case orchestrators
+│           │   ├── services/             # Business logic handlers
+│           │   └── dto/                  # Input/Output DTOs
 │           ├── infrastructure/
-│           │   ├── controllers/          # HTTP endpoints
+│           │   ├── controllers/          # HTTP endpoints (API + Web)
 │           │   └── stores/               # Data access
 │           └── views/                    # HTML templates
 ├── build/                      # Compiled JavaScript
@@ -480,18 +506,20 @@ my-app/
 
 ### Module Structure Overview
 
-When you create a module, you'll work primarily with the `ModuleName.yaml` file. This file defines everything about your module:
+When you create a module, you'll work primarily with the `modulename.yaml` file. This file defines everything about your module:
 
 ```
 src/modules/YourModule/
-├── YourModule.yaml           # ← This is where you define everything
+├── yourmodule.yaml           # ← This is where you define everything
 ├── domain/
-│   └── entities/             # Generated domain models
+│   ├── entities/             # Generated domain models (aggregates)
+│   └── valueObjects/         # Generated value objects
 ├── application/
-│   ├── services/             # Generated business logic
-│   └── validation/           # Generated input validation
+│   ├── useCases/             # Generated use case orchestrators
+│   ├── services/             # Generated business logic handlers
+│   └── dto/                  # Generated Input/Output DTOs
 ├── infrastructure/
-│   ├── controllers/          # Generated HTTP endpoints
+│   ├── controllers/          # Generated HTTP endpoints (API + Web)
 │   └── stores/               # Generated data access
 └── views/                    # Generated HTML templates
 ```
@@ -501,96 +529,120 @@ src/modules/YourModule/
 Here's a comprehensive example showing all available configuration options:
 
 ```yaml
-models:
-  - name: Post                          # Entity name (capitalized)
-    fields:
-      - name: title                     # Field name
-        type: string                    # Field type: string, number, boolean, datetime
-        required: true                  # Validation requirement
-      - name: content
-        type: string
-        required: true
-      - name: authorId
-        type: number
-        required: true
-      - name: publishedAt
-        type: datetime
-        required: false
-      - name: status
-        type: string
-        required: true
+domain:
+  aggregates:
+    Post:
+      root: true                          # Marks as aggregate root
+      fields:
+        title: { type: string, required: true }
+        content: { type: string, required: true }
+        authorId: { type: id, required: true }
+        publishedAt: { type: datetime }
+        status: { type: string, required: true }
 
-api:                                    # REST API configuration
-  prefix: /api/posts                    # Base URL for API endpoints
-  endpoints:
-    - method: GET                       # HTTP method
-      path: /                           # Relative path (becomes /api/posts/)
-      action: list                      # Action name (references actions section)
-    - method: GET
-      path: /:id                        # Path parameter
-      action: get
-    - method: POST
-      path: /
-      action: create
-    - method: PUT
-      path: /:id
-      action: update
-    - method: DELETE
-      path: /:id
-      action: delete
-    - method: POST                      # Custom endpoint
-      path: /:id/publish
-      action: publish
+useCases:
+  Post:
+    list:
+      input:
+        pagination: { type: offset, defaults: { limit: 20, maxLimit: 100 } }
+      output: { from: Post, pagination: true }
+      handlers: [default:list]            # Built-in list handler
+    get:
+      input: { identifier: id }
+      output: { from: Post }
+      handlers: [default:get]             # Built-in get handler
+    create:
+      input: { from: Post }
+      output: { from: Post }
+      handlers: [default:create]
+    update:
+      input: { identifier: id, from: Post, partial: true }
+      output: { from: Post }
+      handlers: [default:update]
+    delete:
+      input: { identifier: id }
+      output: void
+      handlers: [                         # Chain multiple handlers
+        checkCanDelete,                   # Custom → PostService.checkCanDelete(result, input)
+        default:delete                    # Built-in delete
+      ]
+    publish:                              # Custom action
+      input: { identifier: id }
+      output: { from: Post }
+      handlers: [
+        default:get,                      # Fetch entity
+        validateForPublish,               # Custom → PostService.validateForPublish(result, input)
+        updatePublishStatus               # Custom → PostService.updatePublishStatus(result, input)
+      ]
 
-routes:                                 # Web interface configuration
-  prefix: /posts                        # Base URL for web pages
-  strategy: [toast, back]               # Default success strategies for forms
-  endpoints:
-    - path: /                           # List page
-      action: list
-      view: postList                    # Template name
-    - path: /:id                        # Detail page
-      action: get
-      view: postDetail
-    - path: /create                     # Create form page
-      action: empty                     # No data loading action
-      view: postCreate
-    - path: /:id/edit                   # Edit form page
-      action: get                       # Load existing data
-      view: postUpdate
+api:                                      # REST API configuration
+  Post:                                   # Keyed by model name
+    prefix: /api/posts
+    endpoints:
+      - method: GET
+        path: /
+        useCase: Post:list                # References useCases.Post.list
+        auth: all                         # Public access
+      - method: GET
+        path: /:id
+        useCase: Post:get
+        auth: all
+      - method: POST
+        path: /
+        useCase: Post:create
+        auth: authenticated               # Must be logged in
+      - method: PUT
+        path: /:id
+        useCase: Post:update
+        auth: [owner, admin]              # Owner OR admin (OR logic)
+      - method: DELETE
+        path: /:id
+        useCase: Post:delete
+        auth: [owner, admin]
+      - method: POST                      # Custom endpoint
+        path: /:id/publish
+        useCase: Post:publish
+        auth: [owner, editor, admin]
 
-actions:                                # Business logic mapping
-  list:
-    handlers: [Post:default:list]       # Use built-in list handler
-  get:
-    handlers: [Post:default:get]    # Use built-in get handler
-  create:
-    handlers: [Post:default:create]     # Built-in create
-  update:
-    handlers: [Post:default:update]
-  delete:
-    handlers: [                         # Chain multiple handlers
-      Post:checkCanDelete,              # Custom business logic
-      Post:default:delete
-    ]
-  publish:                              # Custom action
-    handlers: [
-      Post:default:get,             # Fetch entity
-      Post:validateForPublish,          # Custom validation
-      Post:updatePublishStatus          # Custom update logic
-    ]
-
-permissions:                            # Role-based access control
-  - role: all
-    actions: [list, get]                # Anyone (including anonymous)
-  - role: authenticated
-    actions: [create]                   # Must be logged in
-  - role: owner
-    actions: [update, publish]          # Entity owner permissions
-  - role: admin
-    actions: [update, delete, publish]  # Admin role permissions
-  - role: editor
-    actions: [publish]                  # Editor role permissions
+web:                                      # Web interface configuration
+  Post:                                   # Keyed by model name
+    prefix: /posts
+    layout: main_view
+    pages:
+      - path: /                           # List page
+        useCase: Post:list
+        view: postList
+        auth: all
+      - path: /:id                        # Detail page
+        useCase: Post:get
+        view: postDetail
+        auth: all
+      - path: /create                     # Create form (GET = show form)
+        method: GET
+        view: postCreate
+        auth: authenticated
+      - path: /create                     # Create form (POST = submit)
+        method: POST
+        useCase: Post:create
+        auth: authenticated
+        onSuccess:
+          redirect: /posts/:id
+          toast: "Post created successfully"
+        onError:
+          stay: true
+          toast: error
+      - path: /:id/edit                   # Edit form (GET = show form)
+        method: GET
+        useCase: Post:get
+        view: postUpdate
+        auth: [owner, admin]
+      - path: /:id/edit                   # Edit form (POST = submit)
+        method: POST
+        useCase: Post:update
+        auth: [owner, admin]
+        onSuccess:
+          back: true
+          toast: "Post updated successfully"
 ```
 
 ### Displaying child entities on root pages (withChild)
@@ -612,43 +664,44 @@ useCases:
       input:
         pagination: { type: offset, defaults: { limit: 20, maxLimit: 100 } }
       output: { from: Invoice, pagination: true }
-      handlers: ['default:list']
+      handlers: [default:list]
     get:
       withChild: true    # Shows child entities table on detail page
       input: { identifier: id }
       output: { from: Invoice }
-      handlers: ['default:get']
+      handlers: [default:get]
 ```
 
 ### Field Types and Validation
 
 **Available Field Types:**
 - `string` - Text data (VARCHAR in database)
-- `number` - Numeric data (INT/DECIMAL in database)  
+- `number` - Numeric data (INT/DECIMAL in database)
+- `integer` - Integer data (INT in database)
+- `decimal` - Decimal data (DECIMAL in database)
 - `boolean` - True/false values (BOOLEAN in database)
 - `datetime` - Date and time values (DATETIME in database)
+- `date` - Date values (DATE in database)
+- `id` - Foreign key reference (INT in database)
+- `money` - Money value object (stored as JSON or separate columns)
+- `json` - JSON data
+- `enum` - Enumerated values (use with `values: [...]`)
 
 **Important Field Rules:**
-- **Never include `id`/`owner_id`/`is_deleted` fields** - these are added automatically
+- **Never include `id`/`owner_id`/`created_at`/`updated_at`/`deleted_at` fields** - these are added automatically
 - Use `required: true` for mandatory fields
-- Use `required: false` for optional fields
+- Fields without `required` are optional
 
 ```yaml
-models:
-  - name: User
-    fields:
-      - name: email
-        type: string
-        required: true
-      - name: age
-        type: number
-        required: false
-      - name: isActive
-        type: boolean
-        required: true
-      - name: lastLoginAt
-        type: datetime
-        required: false
+domain:
+  aggregates:
+    User:
+      root: true
+      fields:
+        email: { type: string, required: true }
+        age: { type: number }
+        isActive: { type: boolean, required: true }
+        lastLoginAt: { type: datetime }
 ```
 
 ### 🔗 Model Relationships
@@ -657,27 +710,20 @@ You can define relationships between models by specifying another model name as 
 
 **Basic Relationship Example:**
 ```yaml
-models:
-  - name: Owner
-    fields:
-      - name: name
-        type: string
-        required: true
-      - name: email
-        type: string
-        required: true
+domain:
+  aggregates:
+    Owner:
+      root: true
+      fields:
+        name: { type: string, required: true }
+        email: { type: string, required: true }
 
-  - name: Cat
-    fields:
-      - name: name
-        type: string
-        required: true
-      - name: breed
-        type: string
-        required: false
-      - name: owner
-        type: Owner        # Relationship to Owner model
-        required: true
+    Cat:
+      root: true
+      fields:
+        name: { type: string, required: true }
+        breed: { type: string }
+        owner: { type: Owner, required: true }  # Relationship to Owner model
 ```
 
 **Architecture: Rich Domain Models**
@@ -772,42 +818,17 @@ The generator automatically creates foreign key fields following this convention
 
 The foreign key always references the `id` field of the related model.
 
-**Optional Configuration:**
-
-```yaml
-models:
-  - name: Post
-    fields:
-      - name: title
-        type: string
-        required: true
-      - name: author
-        type: User
-        required: true
-        displayFields: [name, email]  # Fields to show in dropdowns (optional)
-```
-
-**Configuration Options:**
-- `displayFields`: Array of fields from the related model to display in UI dropdowns (optional, defaults to showing the ID)
-
 **Multiple Relationships:**
 ```yaml
-models:
-  - name: Comment
-    fields:
-      - name: content
-        type: string
-        required: true
-      - name: post
-        type: Post         # Creates foreign key: postId
-        required: true
-      - name: author
-        type: User         # Creates foreign key: authorId
-        required: true
-        displayFields: [username, email]
-      - name: parentComment
-        type: Comment      # Self-referential relationship
-        required: false    # Creates foreign key: parentCommentId
+domain:
+  aggregates:
+    Comment:
+      root: true
+      fields:
+        content: { type: string, required: true }
+        post: { type: Post, required: true }         # Creates foreign key: postId
+        author: { type: User, required: true }        # Creates foreign key: authorId
+        parentComment: { type: Comment }               # Self-referential, optional
 ```
 
 **Relationship Best Practices:**
@@ -819,35 +840,41 @@ models:
 - ❌ Don't manually add foreign key fields (they're auto-generated)
 - ❌ Don't create circular dependencies between modules
 
-### Action Handlers Explained
+### Use Case Handlers Explained
 
-**🔄 Handler vs Action Distinction:**
+**🔄 Handler vs Use Case Distinction:**
 - **Handler**: Creates a separate service method (one handler = one method)
-- **Action**: Virtual controller concept that calls handler methods step-by-step
+- **Use Case**: Defined under `useCases.ModelName.actionName`, orchestrates handler calls step-by-step
+- **UseCase reference**: Used in `api`/`web` endpoints as `ModelName:actionName` (e.g., `Post:list`)
 
-**Built-in Handlers:**
-- `ModelName:default:list` - Creates service method with pagination parameters
-- `ModelName:default:get` - Creates service method named `get` with ID parameter
-- `ModelName:default:create` - Creates service method with DTO parameter
-- `ModelName:default:update` - Creates service method with ID and DTO parameters
-- `ModelName:default:delete` - Creates service method with ID parameter
+**Built-in Handlers (inside `useCases.*.*.handlers`):**
+- `default:list` - Creates service method with pagination parameters
+- `default:get` - Creates service method named `get` with ID parameter
+- `default:create` - Creates service method with DTO parameter
+- `default:update` - Creates service method with ID and DTO parameters
+- `default:delete` - Creates service method with ID parameter
+
+Note: Handlers within `useCases` do NOT need a model prefix because the model is already the key.
 
 **Custom Handlers:**
-- `ModelName:customMethodName` - Creates service method that accepts `result, context` parameters
+- `customMethodName` - Creates service method that accepts `(result, input)` parameters
 - `result`: Result from previous handler (or `null` if it's the first handler)
-- `context`: The request context object
+- `input`: The parsed input DTO
 - User can customize the implementation after generation
 - Each handler generates a separate method in the service
 
-**🔗 Multiple Handlers per Action:**
-When an action has multiple handlers, each handler generates a separate service method, and the controller action calls them sequentially:
+**🔗 Multiple Handlers per Use Case:**
+When a use case has multiple handlers, each handler generates a separate service method, and the use case orchestrator calls them sequentially:
 
 ```yaml
-actions:
-  get:
-    handlers: 
-      - Invoice:default:get    # Creates Invoice.get() method
-      - Invoice:enrichData         # Creates Invoice.enrichData() method
+useCases:
+  Invoice:
+    get:
+      input: { identifier: id }
+      output: { from: Invoice }
+      handlers: 
+        - default:get          # Creates InvoiceService.get() method
+        - enrichData           # Creates InvoiceService.enrichData() method
 ```
 
 **Generated Code Example:**
@@ -856,138 +883,187 @@ actions:
 async get(id: number): Promise<Invoice> { 
   // Standard get implementation
 }
-async enrichData(result: any, context: any): Promise<any> { 
+async enrichData(result: any, input: any): Promise<any> { 
   // TODO: Implement custom enrichData method
   // result = result from previous handler (Invoice object in this case)
-  // context = request context
+  // input = parsed input DTO
 }
 
-// InvoiceController.ts  
-async get(context: IContext): Promise<Invoice> {
-  const id = parseInt(context.request.parameters.id as string);
-  const result1 = await this.invoiceService.get(id);
-  const result = await this.invoiceService.enrichData(result1, context);
+// InvoiceUseCase.ts  
+async get(input: InvoiceGetInput): Promise<Invoice> {
+  const result0 = await this.invoiceService.get(input.id);
+  const result = await this.invoiceService.enrichData(result0, input);
   return result; // Returns result from last handler
 }
 ```
 
 **Parameter Passing Rules:**
-- **Default handlers** (`:default:`): Receive standard parameters (id, pagination, DTO, etc.)
-- **Custom handlers**: Receive `(result, context)` where:
+- **Default handlers** (`default:*`): Receive standard parameters (id, pagination, DTO, etc.)
+- **Custom handlers**: Receive `(result, input)` where:
   - `result`: Result from previous handler, or `null` if it's the first handler
-  - `context`: Request context object
+  - `input`: Parsed input DTO
 
 **Handler Format Examples:**
 ```yaml
-actions:
-  list:
-    handlers: [Post:default:list]       # Single handler: list(page, limit)
-  get:
-    handlers: [Post:default:get]        # Single handler: get(id)
-  complexFlow:
-    handlers: [
-      Post:default:create,              # create(userData) - standard parameters
-      Post:sendNotification,            # sendNotification(result, context) - result from create
-      Comment:default:create            # create(userData) - standard parameters
-    ]
-  customFirst:
-    handlers: [
-      Post:validateInput,               # validateInput(null, context) - first handler
-      Post:default:create               # create(userData) - standard parameters
-    ]
+useCases:
+  Post:
+    list:
+      handlers: [default:list]           # Single handler: list(page, limit)
+    get:
+      handlers: [default:get]            # Single handler: get(id)
+    complexFlow:
+      handlers: [
+        default:create,                  # create(input) - standard parameters
+        sendNotification                 # sendNotification(result, input) - result from create
+      ]
+    customFirst:
+      handlers: [
+        validateInput,                   # validateInput(null, input) - first handler
+        default:create                   # create(input) - standard parameters
+      ]
 ```
 
 ### Multi-Model Support 🔄
 
-When you have multiple models in a single module, the system generates individual services, controllers, and stores for each model:
+When you have multiple models in a single module, the system generates individual services, use cases, controllers, and stores for each model:
 
 ```yaml
-models:
-  - name: Post
-    fields: [...]
-  - name: Comment
-    fields: [...]
+domain:
+  aggregates:
+    Post:
+      root: true
+      fields:
+        title: { type: string, required: true }
+    Comment:
+      root: true
+      fields:
+        content: { type: string, required: true }
+        post: { type: Post, required: true }
+
+useCases:
+  Post:
+    list:
+      handlers: [default:list]
+    create:
+      input: { from: Post }
+      output: { from: Post }
+      handlers: [default:create]
+  Comment:
+    create:
+      input: { from: Comment }
+      output: { from: Comment }
+      handlers: [default:create]
 
 api:
-  model: Post                          # This API serves the Post model
-  prefix: /api/posts
-  endpoints: [...]
-
-actions:
-  createPost:
-    handlers: [Post:default:create]    # Calls PostService.create()
-  addComment:
-    handlers: [Comment:default:create] # Calls CommentService.create()
-  publishPost:
-    handlers: [
-      Post:validateContent,            # Calls PostService.validateContent()
-      Comment:notifySubscribers        # Calls CommentService.notifySubscribers()
-    ]
+  Post:
+    prefix: /api/posts
+    endpoints:
+      - method: GET
+        path: /
+        useCase: Post:list
+        auth: all
+      - method: POST
+        path: /
+        useCase: Post:create
+        auth: authenticated
+  Comment:
+    prefix: /api/comments
+    endpoints:
+      - method: POST
+        path: /
+        useCase: Comment:create
+        auth: authenticated
 ```
 
 **Key Points:**
-- Each model gets its own Service, Controller, and Store classes
-- Use `model` parameter to specify which model an API/route serves (defaults to first model)
-- Use `ModelName:default:action` for built-in operations (list, create, etc.)
-- Use `ModelName:customMethod` for custom service methods
-- You can mix actions across different models in a single handler chain
+- Each model gets its own Service, UseCase, Controller, and Store classes
+- In `api`/`web`, each model is a separate key (e.g., `api.Post`, `api.Comment`)
+- UseCase references use `ModelName:actionName` format (e.g., `Post:list`, `Comment:create`)
+- Handlers within `useCases` do not need a model prefix (model is already the key)
 
-### Strategy Options for Forms
+### Form Success/Error Handling
 
-Configure what happens after successful form submissions:
-
-```yaml
-routes:
-  strategy: [toast, back]  # Show success message and go back
-```
-
-**Available Strategies:**
-- `toast` - Success toast notification (most common)
-- `back` - Navigate back in browser history
-- `message` - Inline success message
-- `modal` - Modal success dialog
-- `redirect` - Redirect to specific URL
-- `refresh` - Reload current page
-
-**Common Strategy Combinations:**
-```yaml
-# Most common: Show message and go back
-strategy: [toast, back]
-
-# Show message and stay on page
-strategy: [toast]
-
-# Show modal dialog
-strategy: [modal]
-
-# Multiple feedback
-strategy: [toast, modal, back]
-```
-
-### Permission System
-
-Control who can access what actions:
+Configure what happens after successful form submissions using `onSuccess` and `onError` on web page endpoints:
 
 ```yaml
-permissions:
-  - role: all
-    actions: [list]            # Anyone (including anonymous)
-  - role: authenticated
-    actions: [create]          # Any logged-in user
-  - role: owner
-    actions: [update]          # Owner of entity
-  - role: admin
-    actions: [update, delete]  # Admin permissions
+web:
+  Post:
+    prefix: /posts
+    pages:
+      - path: /create
+        method: POST
+        useCase: Post:create
+        auth: authenticated
+        onSuccess:
+          redirect: /posts/:id
+          toast: "Post created successfully"
+        onError:
+          stay: true
+          toast: error
 ```
 
-**Special Roles:**
+**Available `onSuccess` Options:**
+- `toast: "message"` - Show toast notification with custom message
+- `back: true` - Navigate back in browser history
+- `redirect: /path` - Redirect to specific URL
+- `stay: true` - Stay on current page
+
+**Available `onError` Options:**
+- `stay: true` - Stay on current page (re-render form with errors)
+- `toast: error` - Show error toast notification
+
+**Common Combinations:**
+```yaml
+# Show message and go back
+onSuccess: { toast: "Saved!", back: true }
+
+# Redirect after creation
+onSuccess: { redirect: /posts/:id, toast: "Created!" }
+
+# Stay on page with toast
+onSuccess: { stay: true, toast: "Updated!" }
+```
+
+The template generator converts `onSuccess` options into `data-strategy` attributes on HTML forms for the frontend JavaScript to handle.
+
+### Auth System
+
+Control who can access what using the `auth` property on each endpoint in `api` and `web`:
+
+```yaml
+api:
+  Post:
+    prefix: /api/posts
+    endpoints:
+      - method: GET
+        path: /
+        useCase: Post:list
+        auth: all                    # Anyone (including anonymous)
+      - method: POST
+        path: /
+        useCase: Post:create
+        auth: authenticated          # Any logged-in user
+      - method: PUT
+        path: /:id
+        useCase: Post:update
+        auth: [owner, admin]         # Owner OR admin (OR logic)
+      - method: DELETE
+        path: /:id
+        useCase: Post:delete
+        auth: admin                  # Only admin role
+```
+
+**Auth Options:**
 - `all` - Everyone (including anonymous users)
 - `authenticated` - Any logged-in user
 - `owner` - User who created the entity
 - `admin`, `editor`, `user` - Custom roles from JWT token
+- `[owner, admin]` - Array syntax: user must match ANY (OR logic). Privileged roles bypass ownership check.
 
 **How Ownership Works:**
-The system automatically adds an `owner_id` field to track who created each entity. When you use `owner` role, it checks if the current user's ID matches the entity's `owner_id`.
+The system automatically adds an `owner_id` field to aggregate roots to track who created each entity. When `owner` auth is specified:
+- **For reads (get)**: Post-fetch check compares `result.ownerId` with `context.request.user.id`
+- **For mutations (update/delete)**: Pre-mutation check calls `getResourceOwner(id)` before the operation to prevent unauthorized changes
 
 ### Code vs Configuration Guidelines
 
@@ -1016,14 +1092,14 @@ This generator is the foundation of the `currentjs` framework:
 ## Notes
 
 - `currentjs create app` scaffolds complete app structure with TypeScript configs and dependencies
-- `currentjs generate` creates domain entities, services, controllers, stores, and templates
+- `currentjs generate` creates domain entities, value objects, use cases, services, DTOs, controllers, stores, and templates
 - Generated code follows clean architecture: domain/application/infrastructure layers
 - Supports both API endpoints and web page routes in the same module
 - Includes change tracking system for safely modifying generated code
 
 ## Authorship & Contribution
 
-Vibecoded with `claude-4-sonnet` (mostly) by Konstantin Zavalny. Yes, it is a vibecoded solution, really.
+Vibecoded mostly with `claude` models by Konstantin Zavalny. Yes, it is a vibecoded solution, really.
 
 Any contributions such as bugfixes, improvements, etc are very welcome.
 
