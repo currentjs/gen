@@ -4,12 +4,12 @@ import * as path from 'path';
 import { writeGeneratedFile } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
 import { 
-  NewModuleConfig, 
+  ModuleConfig, 
   UseCaseInputConfig, 
   UseCaseOutputConfig,
   AggregateConfig,
   ValueObjectConfig,
-  isNewModuleConfig 
+  isValidModuleConfig 
 } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
 
@@ -510,7 +510,7 @@ ${mappingsStr}
     return { valueObjects, entities };
   }
 
-  public generateFromConfig(config: NewModuleConfig): Record<string, string> {
+  public generateFromConfig(config: ModuleConfig): Record<string, string> {
     const result: Record<string, string> = {};
 
     // Collect all aggregates
@@ -598,7 +598,7 @@ ${mappingsStr}
     const yamlContent = fs.readFileSync(yamlFilePath, 'utf8');
     const config = parseYaml(yamlContent);
 
-    if (!isNewModuleConfig(config)) {
+    if (!isValidModuleConfig(config)) {
       throw new Error('Configuration does not match new module format. Expected useCases structure.');
     }
 

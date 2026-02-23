@@ -4,10 +4,10 @@ import * as path from 'path';
 import { writeGeneratedFile } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
 import { 
-  NewModuleConfig, 
+  ModuleConfig, 
   UseCaseDefinition,
   AggregateConfig,
-  isNewModuleConfig 
+  isValidModuleConfig 
 } from '../types/configTypes';
 
 export class UseCaseGenerator {
@@ -133,7 +133,7 @@ ${methods}${getResourceOwnerMethod}
 }`;
   }
 
-  public generateFromConfig(config: NewModuleConfig): Record<string, string> {
+  public generateFromConfig(config: ModuleConfig): Record<string, string> {
     const result: Record<string, string> = {};
 
     // Collect all aggregates to know which are roots
@@ -156,7 +156,7 @@ ${methods}${getResourceOwnerMethod}
     const yamlContent = fs.readFileSync(yamlFilePath, 'utf8');
     const config = parseYaml(yamlContent);
 
-    if (!isNewModuleConfig(config)) {
+    if (!isValidModuleConfig(config)) {
       throw new Error('Configuration does not match new module format. Expected useCases structure.');
     }
 

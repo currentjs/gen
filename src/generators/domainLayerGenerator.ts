@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { writeGeneratedFile } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
-import { NewModuleConfig, AggregateConfig, ValueObjectConfig, isNewModuleConfig } from '../types/configTypes';
+import { ModuleConfig, AggregateConfig, ValueObjectConfig, isValidModuleConfig } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
 
 interface TypeMapping {
@@ -245,7 +245,7 @@ ${setterMethods}
 }`;
   }
 
-  public generateFromConfig(config: NewModuleConfig): Record<string, { code: string; type: 'entity' | 'valueObject' }> {
+  public generateFromConfig(config: ModuleConfig): Record<string, { code: string; type: 'entity' | 'valueObject' }> {
     const result: Record<string, { code: string; type: 'entity' | 'valueObject' }> = {};
     
     // First pass: collect all aggregate and value object names
@@ -290,7 +290,7 @@ ${setterMethods}
     const yamlContent = fs.readFileSync(yamlFilePath, 'utf8');
     const config = parseYaml(yamlContent);
 
-    if (!isNewModuleConfig(config)) {
+    if (!isValidModuleConfig(config)) {
       throw new Error('Configuration does not match new module format. Expected domain.aggregates structure.');
     }
 

@@ -11,13 +11,7 @@
 - **Infrastructure Layer**: Controllers (API + Web), Stores (Database Access)
 - **Presentation Layer**: HTML Templates
 
-The tool temporary supports two YAML configuration formats:
-1. **Legacy Format**: Uses `models`, `api`, `routes`, `actions`, `permissions` sections
-2. **New Format (v0.5+)**: Uses `domain`, `useCases`, `api`, `web` sections with Clean Architecture patterns
-
-**Format Detection**: The CLI automatically detects the format by checking for `domain` + `useCases` keys in the module YAML. **As soon as v0.5 is ready, legacy support will be removed**
-
-**Any changes must be done with new format (if the opposite is not specified)**
+The tool uses a single YAML configuration format with `domain`, `useCases`, `api`, and `web` sections following Clean Architecture patterns.
 
 ---
 
@@ -63,20 +57,19 @@ packages/gen/
 │   ├── commands/                 # CLI command handlers
 │   │   ├── createApp.ts          # `currentjs create app`
 │   │   ├── createModule.ts       # `currentjs create module`
-│   │   ├── generateAll.ts        # Legacy format generator
-│   │   ├── newGenerateAll.ts     # New format generator (v0.5+)
+│   │   ├── generateAll.ts        # Generate from YAML (domain/useCases/api/web)
 │   │   ├── commit.ts             # `currentjs commit`
 │   │   ├── diff.ts               # `currentjs diff`
 │   │   ├── infer.ts              # `currentjs infer`
 │   │   └── migrateCommit.ts      # `currentjs migrate commit`
 │   ├── generators/               # Code generation logic
-│   │   ├── domainLayerGenerator.ts   # Entities + Value Objects (new format)
+│   │   ├── domainLayerGenerator.ts   # Entities + Value Objects
 │   │   ├── dtoGenerator.ts           # DTOs for use cases
 │   │   ├── useCaseGenerator.ts       # Use Case orchestrators
-│   │   ├── newServiceGenerator.ts    # Services with handlers
-│   │   ├── newStoreGenerator.ts      # Database stores
-│   │   ├── newControllerGenerator.ts # API + Web controllers
-│   │   ├── newTemplateGenerator.ts   # HTML templates
+│   │   ├── serviceGenerator.ts       # Services with handlers
+│   │   ├── storeGenerator.ts         # Database stores
+│   │   ├── controllerGenerator.ts    # API + Web controllers
+│   │   ├── templateGenerator.ts      # HTML templates
 │   │   └── templates/                # Code templates
 │   ├── types/
 │   │   └── configTypes.ts        # TypeScript interfaces for YAML config
@@ -91,7 +84,7 @@ packages/gen/
 
 ---
 
-## 3. Module YAML Configuration (New Format v0.5+)
+## 3. Module YAML Configuration
 
 The new YAML format follows Clean Architecture with four main sections:
 
@@ -393,12 +386,11 @@ Creates a new module with:
 - Updates `app.yaml` to include the module
 
 ### `currentjs generate [module] [--force] [--skip]`
-**Files**: `src/commands/newGenerateAll.ts` (new format), `src/commands/generateAll.ts` (legacy)
+**File**: `src/commands/generateAll.ts`
 
 Generates all TypeScript files from YAML:
 1. Reads `app.yaml` to find modules
-2. Detects format (new vs legacy)
-3. Generates files for each layer
+2. For each module (with `domain` + `useCases`), generates files for each layer
 4. Updates `src/app.ts` with wiring code
 5. Runs `npm run build`
 
@@ -493,7 +485,7 @@ export class InvoiceUseCase {
 }
 ```
 
-### `newServiceGenerator.ts`
+### `serviceGenerator.ts`
 Generates service classes with handler methods.
 
 **Default Handlers**: Full implementation for CRUD operations
@@ -520,7 +512,7 @@ export class InvoiceService {
 }
 ```
 
-### `newStoreGenerator.ts`
+### `storeGenerator.ts`
 Generates database access layer.
 
 **Features**:
@@ -531,7 +523,7 @@ Generates database access layer.
 - Value object serialization/deserialization
 - Datetime string conversion
 
-### `newControllerGenerator.ts`
+### `controllerGenerator.ts`
 Generates HTTP controllers with access control.
 
 **API Controllers**:
@@ -598,7 +590,7 @@ async get(context: IContext): Promise<any> {
 }
 ```
 
-### `newTemplateGenerator.ts`
+### `templateGenerator.ts`
 Generates HTML templates for web pages.
 
 **Template Types**:
@@ -694,11 +686,9 @@ const controllers = [new InvoiceApiController(...)];
 
 ### When Modifying Generators
 
-1. **Preserve backward compatibility**: Check both legacy and new format handling
-2. **Update type definitions**: Modify `src/types/configTypes.ts` for new YAML options
-3. **Test with both formats**: Some generators support both legacy and new formats
-4. **Maintain template consistency**: Use existing patterns in `templates/` folder
-5. **Update this document**: if there's an mismatch with this document after modifying, you have to update this document respectively
+1. **Update type definitions**: Modify `src/types/configTypes.ts` for new YAML options
+2. **Maintain template consistency**: Use existing patterns in `templates/` folder
+3. **Update this document**: if there's a mismatch with this document after modifying, you have to update this document respectively
 
 ### When Adding New Features
 
@@ -776,23 +766,7 @@ currentjs commit                      # Save modifications
 currentjs infer --file path.ts        # Reverse engineer
 ```
 
-### Config Format Detection (tmp)
-
-```typescript
-// From cli.ts - auto-detects format
-if (isNewModuleConfig(moduleConfig)) {
-  await handleNewGenerateAll(...);  // domain + useCases
-} else {
-  await handleGenerateAll(...);     // models + actions
-}
-```
-
----
-
 ## 10. Version History
 
-- **v0.5+**: New Clean Architecture format with `domain`, `useCases`, `api`, `web`
-- **v0.4 and below**: Legacy format with `models`, `actions`, `routes`, `permissions`
-
-The CLI auto-detects and uses the appropriate generators based on YAML structure.
+- **v0.5+**: Single Clean Architecture format with `domain`, `useCases`, `api`, `web`. Modules must use this YAML structure.
 

@@ -1,4 +1,4 @@
-import { NewModuleConfig, AggregateFieldConfig } from '../types/configTypes';
+import { ModuleConfig, AggregateFieldConfig } from '../types/configTypes';
 
 export interface ChildEntityInfo {
   parentEntityName: string;
@@ -13,7 +13,7 @@ export interface ParentChildInfo {
   childWebPrefix?: string;
 }
 
-export function buildChildEntityMap(config: NewModuleConfig): Map<string, ChildEntityInfo> {
+export function buildChildEntityMap(config: ModuleConfig): Map<string, ChildEntityInfo> {
   const map = new Map<string, ChildEntityInfo>();
 
   if (!config.domain?.aggregates || !config.useCases) {
@@ -60,7 +60,7 @@ export function buildChildEntityMap(config: NewModuleConfig): Map<string, ChildE
  * Used by template and controller generators when withChild is true.
  */
 export function getChildrenOfParent(
-  config: NewModuleConfig,
+  config: ModuleConfig,
   parentName: string
 ): ParentChildInfo[] {
   const result: ParentChildInfo[] = [];

@@ -1,390 +1,432 @@
 import { parse as parseYaml } from 'yaml';
 import * as fs from 'fs';
 import * as path from 'path';
-import { storeTemplates, fileTemplates } from './templates/storeTemplates';
 import { writeGeneratedFile } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
-import { COMMON_FILES, PATH_PATTERNS } from '../utils/constants';
-
-interface FieldConfig {
-  name: string;
-  type: string;
-  required?: boolean;
-  unique?: boolean;
-  auto?: boolean;
-  // Relationship configuration
-  displayFields?: string[];  // Fields from foreign model to access (e.g., ['name', 'email'])
-}
-
-interface ModelConfig {
-  name: string;
-  fields: FieldConfig[];
-}
-
-type ModuleConfig = {
-  models: ModelConfig[];
-};
-
-type AppConfig =
-  | {
-      modules: Record<string, ModuleConfig>;
-    }
-  | ModuleConfig;
+import { ModuleConfig, AggregateConfig, AggregateFieldConfig, ValueObjectConfig, isValidModuleConfig } from '../types/configTypes';
+import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
+import { storeTemplates, storeFileTemplate } from './templates/storeTemplates';
 
 export class StoreGenerator {
-  private typeMapping: Record<string, string> = {
+  // Maps YAML types to TypeScript types for Row interface (database representation)
+  private rowTypeMapping: Record<string, string> = {
     string: 'string',
     number: 'number',
+    integer: 'number',
+    decimal: 'number',
     boolean: 'boolean',
-    datetime: 'Date',
-    json: 'any',
-    array: 'any[]',
-    object: 'object'
+    datetime: 'string',  // MySQL returns datetime as string
+    date: 'string',      // MySQL returns date as string
+    id: 'number',       // Foreign key references are numbers
+    json: 'string',     // JSON stored as string in MySQL
+    array: 'string',    // Arrays serialized as string
+    object: 'string',   // Objects serialized as string
+    enum: 'string'      // Enum values stored as strings
   };
 
-  private availableModels: Set<string> = new Set();
+  private availableValueObjects: Map<string, ValueObjectConfig> = new Map();
 
-  private mapType(yamlType: string, isRelationship: boolean = false): string {
-    // For relationships, we store the foreign key (number) in the database
-    if (isRelationship) {
-      return 'number';
-    }
-    // Check if this is a known model (relationship) - should use foreign key type
-    if (this.availableModels.has(yamlType)) {
-      return 'number'; // Foreign keys are numbers
-    }
-    return this.typeMapping[yamlType] || 'any';
+  private capitalize(str: string): string {
+    return str.charAt(0).toUpperCase() + str.slice(1);
   }
 
-  private setAvailableModels(models: ModelConfig[]): void {
-    this.availableModels.clear();
-    models.forEach(model => {
-      this.availableModels.add(model.name);
-    });
+  private isValueObjectType(fieldType: string): boolean {
+    // Check if the type matches a known value object (case-insensitive)
+    const capitalizedType = this.capitalize(fieldType);
+    return this.availableValueObjects.has(capitalizedType);
   }
 
-  private isRelationshipField(field: FieldConfig): boolean {
-    return this.availableModels.has(field.type);
+  private getValueObjectName(fieldType: string): string {
+    return this.capitalize(fieldType);
   }
 
-  private getForeignKeyFieldName(field: FieldConfig): string {
-    // Convention: fieldName + 'Id' (e.g., owner -> ownerId)
-    return field.name + 'Id';
+  private getValueObjectConfig(fieldType: string): ValueObjectConfig | undefined {
+    return this.availableValueObjects.get(this.getValueObjectName(fieldType));
   }
 
-  private generateRowFields(modelConfig: ModelConfig): string {
-    const fields: string[] = [];
-
-    modelConfig.fields.forEach(field => {
-      if (field.name === 'createdAt') {
-        return;
-      }
-      
-      // For relationship fields, store the foreign key instead
-      if (this.isRelationshipField(field)) {
-        const foreignKeyName = this.getForeignKeyFieldName(field);
-        const tsType = 'number'; // Foreign keys are always numbers
-        const isOptional = !field.required && !field.auto;
-        const fieldDef = `  ${foreignKeyName}${isOptional ? '?' : ''}: ${tsType};`;
-        fields.push(fieldDef);
-      } else {
-        const tsType = this.mapType(field.type);
-        const isOptional = !field.required && !field.auto;
-        const fieldDef = `  ${field.name}${isOptional ? '?' : ''}: ${tsType};`;
-        fields.push(fieldDef);
-      }
-    });
-
-    return fields.join('\n');
-  }
-
-  private generateFilterableFields(modelConfig: ModelConfig): string {
-    const filterableFields = modelConfig.fields
-      .filter(field => ['string', 'number', 'boolean'].includes(field.type))
-      .map(field => `'${field.name}'`);
-
-    return filterableFields.join(' | ');
-  }
-
-  private generateFilterableFieldsArray(modelConfig: ModelConfig): string {
-    const filterableFields = modelConfig.fields
-      .filter(field => ['string', 'number', 'boolean'].includes(field.type))
-      .map(field => `'${field.name}'`);
-
-    return filterableFields.join(', ');
-  }
-
-  private generateUpdatableFieldsArray(modelConfig: ModelConfig): string {
-    const updatableFields = modelConfig.fields
-      .filter(field => field.name !== 'id' && field.name !== 'createdAt')
-      .map(field => `'${field.name}'`);
-
-    return updatableFields.join(', ');
-  }
-
-  private sortFieldsByRequired(fields: FieldConfig[]): FieldConfig[] {
-    // Sort fields: required fields first, then optional fields
-    // This must match the order used in domainModelGenerator
+  /**
+   * Sort fields the same way as the domain layer generator:
+   * Required fields first, then optional fields.
+   * This ensures rowToModel parameter order matches entity constructor.
+   */
+  private sortFieldsForConstructor(fields: [string, AggregateFieldConfig][]): [string, AggregateFieldConfig][] {
     return [...fields].sort((a, b) => {
-      const aRequired = a.required !== false && !a.auto;
-      const bRequired = b.required !== false && !b.auto;
-      
-      if (aRequired === bRequired) {
-        return 0; // Keep original order if both have same required status
-      }
-      return aRequired ? -1 : 1; // Required fields come first
+      const aRequired = a[1].required !== false && !a[1].auto;
+      const bRequired = b[1].required !== false && !b[1].auto;
+      if (aRequired === bRequired) return 0;
+      return aRequired ? -1 : 1;
     });
   }
 
-  private generateRowToModelMapping(modelConfig: ModelConfig): string {
-    // Sort fields to match the constructor parameter order
-    const sortedFields = this.sortFieldsByRequired(modelConfig.fields);
+  /**
+   * Gets the type name for a value object field (for casting).
+   * For enum fields, returns the generated type name (e.g., BreedName).
+   * For other fields, returns the basic TypeScript type.
+   */
+  private getValueObjectFieldTypeName(voName: string, voConfig: ValueObjectConfig): string | null {
+    const fields = Object.entries(voConfig.fields);
     
-    const mappings = sortedFields.map(field => {
-      if (field.name === 'createdAt') {
-        return '      row.created_at';
+    // Look for enum fields - they get generated type names
+    for (const [fieldName, fieldConfig] of fields) {
+      if (typeof fieldConfig === 'object' && 'values' in fieldConfig) {
+        // This is an enum field, return the generated type name
+        return `${voName}${this.capitalize(fieldName)}`;
       }
-      
-      // For relationship fields, we pass null - will be loaded separately
-      if (this.isRelationshipField(field)) {
-        return '      null as any'; // Placeholder, loaded via loadRelationships
-      }
-      
-      return `      row.${field.name}`;
-    });
-
-    return mappings.join(',\n');
+    }
+    
+    return null;
   }
 
-  private generateModelToRowMapping(modelConfig: ModelConfig): string {
-    const mappings = modelConfig.fields.map(field => {
-      if (field.name === 'createdAt') {
-        return '      created_at: model.createdAt';
-      }
-      
-      // For relationship fields, extract ID from the object to store as FK
-      if (this.isRelationshipField(field)) {
-        const foreignKeyName = this.getForeignKeyFieldName(field);
-        return `      ${foreignKeyName}: model.${field.name}?.id`;
-      }
-      
-      return `      ${field.name}: model.${field.name}`;
-    });
-
-    return mappings.join(',\n');
+  private mapTypeToRowType(yamlType: string): string {
+    // Value objects are stored as strings in the database
+    if (this.isValueObjectType(yamlType)) {
+      return 'string';
+    }
+    return this.rowTypeMapping[yamlType] || 'string';
   }
 
   private replaceTemplateVars(template: string, variables: Record<string, string>): string {
     let result = template;
-
     Object.entries(variables).forEach(([key, value]) => {
       const regex = new RegExp(`{{${key}}}`, 'g');
       result = result.replace(regex, value);
     });
-
     return result;
   }
 
-  public generateStoreInterface(): string {
-    return fileTemplates.storeInterface;
-  }
-
-  private generateRelationshipMethods(modelConfig: ModelConfig): string {
-    const relationshipFields = modelConfig.fields.filter(f => this.isRelationshipField(f));
+  private generateRowFields(fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
+    const result: string[] = [];
     
-    if (relationshipFields.length === 0) {
-      return '';
-    }
-
-    const entityName = modelConfig.name;
-    const methods: string[] = [];
-
-    // Generate loadRelationships method
-    const loadCalls = relationshipFields.map(field => {
-      const foreignKeyName = this.getForeignKeyFieldName(field);
-      const relatedModel = field.type;
-      const relatedModelLower = relatedModel.toLowerCase();
-      
-      return `    if (entity.${field.name} === null && row.${foreignKeyName}) {
-      const ${field.name} = await this.${relatedModelLower}Store.getById(row.${foreignKeyName});
-      if (${field.name}) {
-        entity.set${field.name.charAt(0).toUpperCase() + field.name.slice(1)}(${field.name});
-      }
-    }`;
-    }).join('\n');
-
-    methods.push(`
-  async loadRelationships(entity: ${entityName}, row: ${entityName}Row): Promise<${entityName}> {
-${loadCalls}
-    return entity;
-  }`);
-
-    // Generate getByIdWithRelationships method
-    methods.push(`
-  async getByIdWithRelationships(id: number): Promise<${entityName} | null> {
-    try {
-      const query = 'SELECT * FROM ${entityName.toLowerCase()}s WHERE id = :id AND deleted_at IS NULL';
-      const result = await this.db.query(query, { id });
-      
-      if (!result.success || result.data.length === 0) {
-        return null;
-      }
-      
-      const row = result.data[0] as ${entityName}Row;
-      const entity = ${entityName}Store.rowToModel(row);
-      return await this.loadRelationships(entity, row);
-    } catch (error) {
-      if (error instanceof MySQLConnectionError) {
-        throw new Error(\`Database connection error while fetching ${entityName} with id \${id}: \${error.message}\`);
-      } else if (error instanceof MySQLQueryError) {
-        throw new Error(\`Query error while fetching ${entityName} with id \${id}: \${error.message}\`);
-      }
-      throw error;
-    }
-  }`);
-
-    return methods.join('\n');
-  }
-
-  private generateStoreConstructorParams(modelConfig: ModelConfig): string {
-    const relationshipFields = modelConfig.fields.filter(f => this.isRelationshipField(f));
+    const ownerOrParentField = childInfo ? childInfo.parentIdField : 'ownerId';
+    result.push(`  ${ownerOrParentField}: number;`);
     
-    const params = ['private db: ISqlProvider'];
-    
-    relationshipFields.forEach(field => {
-      const relatedModel = field.type;
-      const relatedModelLower = relatedModel.toLowerCase();
-      params.push(`private ${relatedModelLower}Store: ${relatedModel}Store`);
+    fields.forEach(([fieldName, fieldConfig]) => {
+      const tsType = this.mapTypeToRowType(fieldConfig.type);
+      const isOptional = !fieldConfig.required;
+      result.push(`  ${fieldName}${isOptional ? '?' : ''}: ${tsType};`);
     });
     
-    return params.join(', ');
+    return result.join('\n');
   }
 
-  private generateRelationshipImports(modelConfig: ModelConfig): string {
-    const relationshipFields = modelConfig.fields.filter(f => this.isRelationshipField(f));
-    
-    if (relationshipFields.length === 0) {
-      return '';
-    }
+  private generateFieldNamesStr(fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
+    const fieldNames = ['id'];
+    fieldNames.push(childInfo ? childInfo.parentIdField : 'ownerId');
+    fieldNames.push(...fields.map(([name]) => name));
+    return fieldNames.map(f => `\\\`${f}\\\``).join(', ');
+  }
 
-    const imports = relationshipFields.map(field => {
-      const relatedModel = field.type;
-      return `import { ${relatedModel}Store } from './${relatedModel}Store';`;
+  private generateRowToModelMapping(fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
+    const result: string[] = [];
+    
+    const ownerOrParentField = childInfo ? childInfo.parentIdField : 'ownerId';
+    result.push(`      row.${ownerOrParentField}`);
+    
+    fields.forEach(([fieldName, fieldConfig]) => {
+      const fieldType = fieldConfig.type;
+      
+      // Handle datetime/date conversion
+      if (fieldType === 'datetime' || fieldType === 'date') {
+        result.push(`      row.${fieldName} ? new Date(row.${fieldName}) : undefined`);
+        return;
+      }
+      
+      // Handle boolean conversion
+      if (fieldType === 'boolean') {
+        result.push(`      Boolean(row.${fieldName})`);
+        return;
+      }
+      
+      // Handle value object conversion - deserialize from JSON
+      if (this.isValueObjectType(fieldType)) {
+        const voName = this.getValueObjectName(fieldType);
+        const voConfig = this.getValueObjectConfig(fieldType);
+        
+        if (voConfig) {
+          const voFields = Object.keys(voConfig.fields);
+          if (voFields.length > 1) {
+            // Multi-field value object - deserialize from JSON
+            const voArgs = voFields.map(f => `parsed.${f}`).join(', ');
+            result.push(`      row.${fieldName} ? (() => { const parsed = JSON.parse(row.${fieldName}); return new ${voName}(${voArgs}); })() : undefined`);
+            return;
+          } else if (voFields.length === 1) {
+            // Single-field value object
+            const singleFieldType = voConfig.fields[voFields[0]];
+            const hasEnumValues = typeof singleFieldType === 'object' && 'values' in singleFieldType;
+            if (hasEnumValues) {
+              const enumTypeName = this.getValueObjectFieldTypeName(voName, voConfig);
+              result.push(`      row.${fieldName} ? new ${voName}(row.${fieldName} as ${enumTypeName}) : undefined`);
+            } else {
+              result.push(`      row.${fieldName} ? new ${voName}(row.${fieldName}) : undefined`);
+            }
+            return;
+          }
+        }
+        
+        // Fallback - try to deserialize from JSON
+        result.push(`      row.${fieldName} ? new ${voName}(...Object.values(JSON.parse(row.${fieldName}))) : undefined`);
+        return;
+      }
+      
+      result.push(`      row.${fieldName}`);
     });
     
-    return '\n' + imports.join('\n');
+    return result.join(',\n');
   }
 
-  public generateStore(modelConfig: ModelConfig): string {
-    const entityName = modelConfig.name;
-    const tableName = entityName.toLowerCase() + 's';
+  private generateInsertDataMapping(fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
+    const result: string[] = [];
+    
+    const ownerOrParentField = childInfo ? childInfo.parentIdField : 'ownerId';
+    result.push(`      ${ownerOrParentField}: entity.${ownerOrParentField}`);
+    
+    fields.forEach(([fieldName, fieldConfig]) => {
+      const fieldType = fieldConfig.type;
+      
+      // Handle datetime/date - convert Date to MySQL DATETIME format
+      if (fieldType === 'datetime' || fieldType === 'date') {
+        result.push(`      ${fieldName}: entity.${fieldName} ? this.toMySQLDatetime(entity.${fieldName}) : undefined`);
+        return;
+      }
+      
+      // Handle value object - serialize to JSON
+      if (this.isValueObjectType(fieldType)) {
+        const voConfig = this.getValueObjectConfig(fieldType);
+        if (voConfig) {
+          const voFields = Object.keys(voConfig.fields);
+          if (voFields.length > 1) {
+            // Multi-field value object - serialize to JSON
+            result.push(`      ${fieldName}: entity.${fieldName} ? JSON.stringify(entity.${fieldName}) : undefined`);
+            return;
+          } else if (voFields.length === 1) {
+            // Single-field value object - extract the single field
+            result.push(`      ${fieldName}: entity.${fieldName}?.${voFields[0]}`);
+            return;
+          }
+        }
+        // Fallback - serialize to JSON
+        result.push(`      ${fieldName}: entity.${fieldName} ? JSON.stringify(entity.${fieldName}) : undefined`);
+        return;
+      }
+      
+      result.push(`      ${fieldName}: entity.${fieldName}`);
+    });
+    
+    return result.join(',\n');
+  }
 
-    const variables = {
-      ENTITY_NAME: entityName,
+  private generateUpdateDataMapping(fields: [string, AggregateFieldConfig][]): string {
+    return fields
+      .map(([fieldName, fieldConfig]) => {
+        const fieldType = fieldConfig.type;
+        
+        // Handle datetime/date - convert Date to MySQL DATETIME format
+        if (fieldType === 'datetime' || fieldType === 'date') {
+          return `      ${fieldName}: entity.${fieldName} ? this.toMySQLDatetime(entity.${fieldName}) : undefined`;
+        }
+        
+        // Handle value object - serialize to JSON
+        if (this.isValueObjectType(fieldType)) {
+          const voConfig = this.getValueObjectConfig(fieldType);
+          if (voConfig) {
+            const voFields = Object.keys(voConfig.fields);
+            if (voFields.length > 1) {
+              // Multi-field value object - serialize to JSON
+              return `      ${fieldName}: entity.${fieldName} ? JSON.stringify(entity.${fieldName}) : undefined`;
+            } else if (voFields.length === 1) {
+              // Single-field value object - extract the single field
+              return `      ${fieldName}: entity.${fieldName}?.${voFields[0]}`;
+            }
+          }
+          // Fallback - serialize to JSON
+          return `      ${fieldName}: entity.${fieldName} ? JSON.stringify(entity.${fieldName}) : undefined`;
+        }
+        
+        return `      ${fieldName}: entity.${fieldName}`;
+      })
+      .join(',\n');
+  }
+
+  private generateUpdateFieldsArray(fields: [string, AggregateFieldConfig][]): string {
+    return JSON.stringify(fields.map(([name]) => name));
+  }
+
+  private generateValueObjectImports(fields: [string, AggregateFieldConfig][]): string {
+    const imports: string[] = [];
+    
+    fields.forEach(([, fieldConfig]) => {
+      if (this.isValueObjectType(fieldConfig.type)) {
+        const voName = this.getValueObjectName(fieldConfig.type);
+        const voConfig = this.getValueObjectConfig(fieldConfig.type);
+        
+        // Import the class
+        const importItems = [voName];
+        
+        // Also import the type if it's an enum
+        if (voConfig) {
+          const enumTypeName = this.getValueObjectFieldTypeName(voName, voConfig);
+          if (enumTypeName) {
+            importItems.push(enumTypeName);
+          }
+        }
+        
+        imports.push(`import { ${importItems.join(', ')} } from '../../domain/valueObjects/${voName}';`);
+      }
+    });
+    
+    // Dedupe imports
+    const uniqueImports = [...new Set(imports)];
+    
+    if (uniqueImports.length === 0) {
+      return '';
+    }
+    
+    return '\n' + uniqueImports.join('\n');
+  }
+
+  private generateGetByParentIdMethod(modelName: string, fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
+    if (!childInfo) return '';
+    const fieldList = ['id', childInfo.parentIdField, ...fields.map(([name]) => name)].map(f => '\\`' + f + '\\`').join(', ');
+    const parentIdField = childInfo.parentIdField;
+    return `
+
+  async getByParentId(parentId: number): Promise<${modelName}[]> {
+    const result = await this.db.query(
+      \`SELECT ${fieldList} FROM \\\`\${this.tableName}\\\` WHERE \\\`${parentIdField}\\\` = :parentId AND deleted_at IS NULL\`,
+      { parentId }
+    );
+
+    if (result.success && result.data) {
+      return result.data.map((row: ${modelName}Row) => this.rowToModel(row));
+    }
+    return [];
+  }`;
+  }
+
+  private generateGetResourceOwnerMethod(childInfo?: ChildEntityInfo): string {
+    if (childInfo) {
+      const parentTable = childInfo.parentTableName;
+      const parentIdField = childInfo.parentIdField;
+      return `
+
+  /**
+   * Get the owner ID of a resource by its ID (via parent entity).
+   * Used for pre-mutation authorization checks.
+   */
+  async getResourceOwner(id: number): Promise<number | null> {
+    const result = await this.db.query(
+      \`SELECT p.ownerId FROM \\\`\${this.tableName}\\\` c INNER JOIN \\\`${parentTable}\\\` p ON p.id = c.\\\`${parentIdField}\\\` WHERE c.id = :id AND c.deleted_at IS NULL\`,
+      { id }
+    );
+
+    if (result.success && result.data && result.data.length > 0) {
+      return result.data[0].ownerId as number;
+    }
+    return null;
+  }`;
+    }
+    return `
+
+  /**
+   * Get the owner ID of a resource by its ID.
+   * Used for pre-mutation authorization checks.
+   */
+  async getResourceOwner(id: number): Promise<number | null> {
+    const result = await this.db.query(
+      \`SELECT ownerId FROM \\\`\${this.tableName}\\\` WHERE id = :id AND deleted_at IS NULL\`,
+      { id }
+    );
+
+    if (result.success && result.data && result.data.length > 0) {
+      return result.data[0].ownerId as number;
+    }
+    return null;
+  }`;
+  }
+
+  private generateStore(modelName: string, aggregateConfig: AggregateConfig, childInfo?: ChildEntityInfo): string {
+    const tableName = modelName.toLowerCase();
+    const fields = Object.entries(aggregateConfig.fields);
+    
+    // Sort fields for rowToModel to match entity constructor order (required first, optional second)
+    const sortedFields = this.sortFieldsForConstructor(fields);
+
+    const variables: Record<string, string> = {
+      ENTITY_NAME: modelName,
       TABLE_NAME: tableName,
-      ROW_FIELDS: this.generateRowFields(modelConfig),
-      FILTERABLE_FIELDS: this.generateFilterableFields(modelConfig),
-      FILTERABLE_FIELDS_ARRAY: this.generateFilterableFieldsArray(modelConfig),
-      UPDATABLE_FIELDS_ARRAY: this.generateUpdatableFieldsArray(modelConfig),
-      ROW_TO_MODEL_MAPPING: this.generateRowToModelMapping(modelConfig),
-      MODEL_TO_ROW_MAPPING: this.generateModelToRowMapping(modelConfig)
+      ROW_FIELDS: this.generateRowFields(fields, childInfo),
+      FIELD_NAMES: this.generateFieldNamesStr(fields, childInfo),
+      ROW_TO_MODEL_MAPPING: this.generateRowToModelMapping(sortedFields, childInfo),
+      INSERT_DATA_MAPPING: this.generateInsertDataMapping(fields, childInfo),
+      UPDATE_DATA_MAPPING: this.generateUpdateDataMapping(fields),
+      UPDATE_FIELDS_ARRAY: this.generateUpdateFieldsArray(fields),
+      VALUE_OBJECT_IMPORTS: this.generateValueObjectImports(fields),
+      GET_BY_PARENT_ID_METHOD: this.generateGetByParentIdMethod(modelName, fields, childInfo),
+      GET_RESOURCE_OWNER_METHOD: this.generateGetResourceOwnerMethod(childInfo)
     };
 
     const rowInterface = this.replaceTemplateVars(storeTemplates.rowInterface, variables);
-    const conversionMethods = this.replaceTemplateVars(storeTemplates.conversionMethods, variables);
-    
-    // Replace constructor in storeClass template
-    let storeClass = this.replaceTemplateVars(storeTemplates.storeClass, {
-      ...variables,
-      CONVERSION_METHODS: conversionMethods
-    });
-    
-    // Update constructor to include foreign store dependencies
-    const constructorParams = this.generateStoreConstructorParams(modelConfig);
-    storeClass = storeClass.replace(
-      'constructor(private db: ISqlProvider) {}',
-      `constructor(${constructorParams}) {}`
-    );
-    
-    // Add relationship methods before the closing brace
-    const relationshipMethods = this.generateRelationshipMethods(modelConfig);
-    if (relationshipMethods) {
-      storeClass = storeClass.replace(/}$/, `${relationshipMethods}\n}`);
-    }
+    const storeClass = this.replaceTemplateVars(storeTemplates.storeClass, variables);
 
-    // Add relationship store imports
-    const relationshipImports = this.generateRelationshipImports(modelConfig);
-    
-    return this.replaceTemplateVars(fileTemplates.storeFile, {
-      ENTITY_NAME: entityName,
+    return this.replaceTemplateVars(storeFileTemplate, {
+      ENTITY_NAME: modelName,
       ROW_INTERFACE: rowInterface,
-      STORE_CLASS: storeClass
-    }) + relationshipImports;
+      STORE_CLASS: storeClass,
+      VALUE_OBJECT_IMPORTS: variables.VALUE_OBJECT_IMPORTS
+    });
   }
 
-  public generateStores(models: ModelConfig[]): Record<string, string> {
+  public generateFromConfig(config: ModuleConfig): Record<string, string> {
     const result: Record<string, string> = {};
 
-    models.forEach(model => {
-      result[model.name] = this.generateStore(model);
-    });
+    // First, collect all value object names and configs
+    this.availableValueObjects.clear();
+    if (config.domain.valueObjects) {
+      Object.entries(config.domain.valueObjects).forEach(([name, voConfig]) => {
+        this.availableValueObjects.set(name, voConfig);
+      });
+    }
+
+    // Generate a store for each aggregate
+    const childEntityMap = buildChildEntityMap(config);
+    if (config.domain.aggregates) {
+      Object.entries(config.domain.aggregates).forEach(([modelName, aggregateConfig]) => {
+        const childInfo = childEntityMap.get(modelName);
+        result[modelName] = this.generateStore(modelName, aggregateConfig, childInfo);
+      });
+    }
 
     return result;
   }
 
   public generateFromYamlFile(yamlFilePath: string): Record<string, string> {
     const yamlContent = fs.readFileSync(yamlFilePath, 'utf8');
-    const config = parseYaml(yamlContent) as AppConfig;
+    const config = parseYaml(yamlContent);
 
-    const result: Record<string, string> = {};
-
-    if ((config as any).modules) {
-      Object.values((config as any).modules as Record<string, ModuleConfig>).forEach(moduleConfig => {
-        if (moduleConfig.models && moduleConfig.models.length > 0) {
-          // Set available models for relationship detection
-          this.setAvailableModels(moduleConfig.models);
-          const stores = this.generateStores(moduleConfig.models);
-          Object.assign(result, stores);
-        }
-      });
-    } else if ((config as any).models) {
-      const module = config as ModuleConfig;
-      if (module.models && module.models.length > 0) {
-        // Set available models for relationship detection
-        this.setAvailableModels(module.models);
-        const stores = this.generateStores(module.models);
-        Object.assign(result, stores);
-      }
+    if (!isValidModuleConfig(config)) {
+      throw new Error('Configuration does not match new module format. Expected domain.aggregates structure.');
     }
 
-    return result;
+    return this.generateFromConfig(config);
   }
 
   public async generateAndSaveFiles(
-    yamlFilePath: string = COMMON_FILES.APP_YAML,
-    outputDir: string = 'infrastructure',
+    yamlFilePath: string,
+    moduleDir: string,
     opts?: { force?: boolean; skipOnConflict?: boolean }
   ): Promise<void> {
-    const stores = this.generateFromYamlFile(yamlFilePath);
-
-    const storesDir = path.join(outputDir, 'stores');
-    const interfacesDir = path.join(outputDir, 'interfaces');
-
+    const storesByModel = this.generateFromYamlFile(yamlFilePath);
+    
+    const storesDir = path.join(moduleDir, 'infrastructure', 'stores');
     fs.mkdirSync(storesDir, { recursive: true });
-    fs.mkdirSync(interfacesDir, { recursive: true });
 
-    const storeInterface = this.generateStoreInterface();
-    const interfaceFilePath = path.join(interfacesDir, COMMON_FILES.STORE_INTERFACE);
-    await writeGeneratedFile(interfaceFilePath, storeInterface, { force: !!opts?.force, skipOnConflict: !!opts?.skipOnConflict });
-
-    for (const [entityName, storeCode] of Object.entries(stores)) {
-      const fileName = `${entityName}Store.ts`;
-      const filePath = path.join(storesDir, fileName);
+    for (const [modelName, code] of Object.entries(storesByModel)) {
+      const filePath = path.join(storesDir, `${modelName}Store.ts`);
       // eslint-disable-next-line no-await-in-loop
-      await writeGeneratedFile(filePath, storeCode, { force: !!opts?.force, skipOnConflict: !!opts?.skipOnConflict });
+      await writeGeneratedFile(filePath, code, { force: !!opts?.force, skipOnConflict: !!opts?.skipOnConflict });
     }
 
     // eslint-disable-next-line no-console
-    console.log('\n' + colors.green('All store files generated successfully!') + '\n');
+    console.log('\n' + colors.green('Store files generated successfully!') + '\n');
   }
 }

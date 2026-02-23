@@ -1,5 +1,5 @@
 /**
- * Type definitions for the new Clean Architecture module configuration
+ * Type definitions for the Clean Architecture module configuration
  */
 
 // ============= DOMAIN LAYER =============
@@ -161,43 +161,15 @@ export type WebConfig = Record<string, WebResourceConfig>;
 
 // ============= MODULE CONFIG =============
 
-export interface NewModuleConfig {
+export interface ModuleConfig {
   domain: DomainConfig;
   useCases: UseCasesConfig;
   api?: ApiConfig;
   web?: WebConfig;
 }
 
-// ============= LEGACY SUPPORT (for backwards compatibility during transition) =============
-
-export interface LegacyFieldConfig {
-  name: string;
-  type: string;
-  required?: boolean;
-  unique?: boolean;
-  auto?: boolean;
-  displayFields?: string[];
-}
-
-export interface LegacyModelConfig {
-  name: string;
-  fields: LegacyFieldConfig[];
-}
-
-export interface LegacyActionConfig {
-  handlers: string[];
-}
-
-export interface LegacyModuleConfig {
-  models?: LegacyModelConfig[];
-  api?: any;
-  routes?: any;
-  actions?: Record<string, LegacyActionConfig>;
-  permissions?: any[];
-}
-
-// Type guard to check if config is new format
-export function isNewModuleConfig(config: any): config is NewModuleConfig {
+// Type guard to validate module config (domain + useCases)
+export function isValidModuleConfig(config: any): config is ModuleConfig {
   return config && typeof config === 'object' && 'domain' in config && 'useCases' in config;
 }
 

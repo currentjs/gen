@@ -2,15 +2,18 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { resolveYamlPath, runCommand } from '../utils/cliUtils';
 import { parse as parseYaml } from 'yaml';
-import { DomainModelGenerator } from '../generators/domainModelGenerator';
-import { ValidationGenerator } from '../generators/validationGenerator';
+import { DomainLayerGenerator } from '../generators/domainLayerGenerator';
+import { DtoGenerator } from '../generators/dtoGenerator';
+import { UseCaseGenerator } from '../generators/useCaseGenerator';
 import { ServiceGenerator } from '../generators/serviceGenerator';
 import { ControllerGenerator } from '../generators/controllerGenerator';
-import { StoreGenerator } from '../generators/storeGenerator';
 import { TemplateGenerator } from '../generators/templateGenerator';
+import { StoreGenerator } from '../generators/storeGenerator';
 import { initGenerationRegistry } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
-import { GENERATOR_MARKERS, PATH_PATTERNS, COMMON_FILES, GENERATOR_SUFFIXES } from '../utils/constants';
+import { GENERATOR_MARKERS, COMMON_FILES } from '../utils/constants';
+import { isValidModuleConfig, ModuleConfig } from '../types/configTypes';
+import { getChildrenOfParent, buildChildEntityMap } from '../utils/childEntityUtils';
 
 export async function handleGenerateAll(
   yamlPathArg?: string,
@@ -20,11 +23,12 @@ export async function handleGenerateAll(
 ): Promise<void> {
   const appYamlPath = resolveYamlPath(yamlPathArg);
   initGenerationRegistry(process.cwd());
+  
   const raw = fs.readFileSync(appYamlPath, 'utf8');
-  const appConfig = parseYaml(raw) as { modules: Array<string | { module: string }>} | null;
+  const appConfig = parseYaml(raw) as { modules: Array<string | { module: string }>, providers?: Record<string, string>, database?: string } | null;
   const modulesList = (appConfig?.modules ?? []).map(m => (typeof m === 'string' ? m : m.module));
-  const providersConfig = (appConfig as any)?.providers as Record<string, string> | undefined;
-  const databaseProviderName = (appConfig as any)?.database as string | undefined;
+  const providersConfig = appConfig?.providers;
+  const databaseProviderName = appConfig?.database;
 
   const shouldIncludeModule = (moduleYamlRel: string): boolean => {
     if (!moduleName || moduleName === '*') return true;
@@ -36,7 +40,6 @@ export async function handleGenerateAll(
       : path.resolve(process.cwd(), moduleYamlRel);
     const dirName = path.basename(path.dirname(moduleYamlPath)).toLowerCase();
     if (dirName === moduleNameLc) return true;
-    // Allow passing a path fragment
     if (relNormalized.includes(`/${moduleNameLc}/`) || relNormalized.endsWith(`/${moduleNameLc}`)) return true;
     return false;
   };
@@ -48,68 +51,84 @@ export async function handleGenerateAll(
     return;
   }
 
-  const domainGen = new DomainModelGenerator();
-  const valGen = new ValidationGenerator();
-  const svcGen = new ServiceGenerator();
-  const ctrlGen = new ControllerGenerator();
+  // Initialize generators
+  const domainGen = new DomainLayerGenerator();
+  const dtoGen = new DtoGenerator();
+  const useCaseGen = new UseCaseGenerator();
+  const serviceGen = new ServiceGenerator();
+  const controllerGen = new ControllerGenerator();
+  const templateGen = new TemplateGenerator();
   const storeGen = new StoreGenerator();
-  const tplGen = new TemplateGenerator();
 
-  type ControllerInit = {
-    ctrlName: string;
+  interface ControllerInit {
     entityName: string;
     entityVar: string;
     importController: string;
     importStore: string;
     importService: string;
-    importAuth?: string;
-    wiring: string[]; // store + service
+    importUseCase: string;
+    wiring: string[];
     registration: string;
-    storeDependencies?: string[]; // Names of stores this store depends on
-    serviceDependencies?: string[]; // Names of stores this service depends on
-  };
-  const initsBySrcDir = new Map<string, ControllerInit[]>();
-  const moduleConfigByFolder = new Map<string, any>(); // Cache module configs by folder name
+  }
 
-  // Run modules sequentially to avoid overlapping interactive prompts
+  const initsBySrcDir = new Map<string, ControllerInit[]>();
+
+  // Process each module
   for (const moduleYamlRel of filteredModules) {
     const moduleYamlPath = path.isAbsolute(moduleYamlRel)
       ? moduleYamlRel
       : path.resolve(process.cwd(), moduleYamlRel);
+      
     if (!fs.existsSync(moduleYamlPath)) {
       // eslint-disable-next-line no-console
       console.warn(colors.yellow(`Module YAML not found: ${moduleYamlPath}`));
       continue;
     }
 
-    const moduleDir = path.dirname(moduleYamlPath);
-    const moduleFolderName = path.basename(moduleDir);
-
-    // Parse and cache module config for dependency detection
+    // Check if this is a valid module config (domain/useCases)
     const moduleYamlContent = fs.readFileSync(moduleYamlPath, 'utf8');
     const moduleConfig = parseYaml(moduleYamlContent);
-    moduleConfigByFolder.set(moduleFolderName, moduleConfig);
 
-    // Output folders inside module structure
-    const domainOut = path.join(moduleDir, 'domain', 'entities');
-    const appOut = path.join(moduleDir, 'application');
-    const infraOut = path.join(moduleDir, 'infrastructure');
-    fs.mkdirSync(domainOut, { recursive: true });
-    fs.mkdirSync(appOut, { recursive: true });
-    fs.mkdirSync(infraOut, { recursive: true });
+    if (!isValidModuleConfig(moduleConfig)) {
+      // eslint-disable-next-line no-console
+      console.warn(colors.yellow(`Skipping ${moduleYamlPath}: not in expected format (missing domain/useCases)`));
+      continue;
+    }
 
-    // Domain entities
+    const moduleDir = path.dirname(moduleYamlPath);
+
+    // eslint-disable-next-line no-console
+    console.log(colors.blue(`\nGenerating module: ${path.basename(moduleDir)}`));
+
+    // 1. Generate domain layer (entities + value objects)
     // eslint-disable-next-line no-await-in-loop
-    await domainGen.generateAndSaveFiles(moduleYamlPath, domainOut, { force: !!opts?.force, skipOnConflict: !!opts?.skip });
+    await domainGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
 
-    // Generate and save via per-generator write logic
+    // 2. Generate DTOs
     // eslint-disable-next-line no-await-in-loop
-    await valGen.generateAndSaveFiles(moduleYamlPath, appOut, { force: !!opts?.force, skipOnConflict: !!opts?.skip });
-    await svcGen.generateAndSaveFiles(moduleYamlPath, appOut, { force: !!opts?.force, skipOnConflict: !!opts?.skip });
-    const generatedControllers = await ctrlGen.generateAndSaveFiles(moduleYamlPath, infraOut, { force: !!opts?.force, skipOnConflict: !!opts?.skip });
-    await tplGen.generateAndSaveFiles(moduleYamlPath, undefined, { force: !!opts?.force, skipOnConflict: !!opts?.skip });
+    await dtoGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
 
-    // Find nearest ancestor containing src/app.ts and collect controller inits for a single write later
+    // 3. Generate Use Cases
+    // eslint-disable-next-line no-await-in-loop
+    await useCaseGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
+
+    // 4. Generate Services
+    // eslint-disable-next-line no-await-in-loop
+    await serviceGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
+
+    // 5. Generate Stores
+    // eslint-disable-next-line no-await-in-loop
+    await storeGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
+
+    // 6. Generate Controllers
+    // eslint-disable-next-line no-await-in-loop
+    const controllerPaths = await controllerGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
+
+    // 7. Generate Templates
+    // eslint-disable-next-line no-await-in-loop
+    await templateGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
+
+    // Collect wiring information for app.ts
     let probeDir = moduleDir;
     let srcDir: string | null = null;
     for (let i = 0; i < 6; i += 1) {
@@ -122,151 +141,78 @@ export async function handleGenerateAll(
       if (parent === probeDir) break;
       probeDir = parent;
     }
+
     if (!srcDir) continue;
 
+    // Build wiring for each model in the module
     const list = initsBySrcDir.get(srcDir) ?? [];
     
-    // First, add entries for all models in this module (even without controllers)
-    // This ensures dependency stores are initialized
-    if (moduleConfig && moduleConfig.models) {
-      const m = moduleYamlPath.match(/modules\/([^/]+)\//);
-      const moduleFolder = m ? m[1] : path.basename(moduleDir);
-      
-      for (const model of moduleConfig.models) {
-        const entityName = model.name;
-        const entityVar = entityName.charAt(0).toLowerCase() + entityName.slice(1);
-        
-        // Check if we already have an entry for this entity
-        if (list.find(x => x.entityName === entityName)) {
-          continue; // Skip if already added via controller
-        }
-        
-        const storeImportPath = `${PATH_PATTERNS.MODULES_RELATIVE}${moduleFolder}/${PATH_PATTERNS.INFRASTRUCTURE}/${PATH_PATTERNS.STORES}/${entityName}${GENERATOR_SUFFIXES.STORE}`;
-        const serviceImportPath = `${PATH_PATTERNS.MODULES_RELATIVE}${moduleFolder}/${PATH_PATTERNS.APPLICATION}/${PATH_PATTERNS.SERVICES}/${entityName}${GENERATOR_SUFFIXES.SERVICE}`;
-        
-        // Detect dependencies
-        const storeDeps: string[] = [];
-        const serviceDeps: string[] = [];
-        
-        if (model.fields) {
-          model.fields.forEach((field: any) => {
-            const isRelationship = moduleConfig.models.some((m: any) => m.name === field.type);
-            if (isRelationship) {
-              storeDeps.push(field.type);
-              serviceDeps.push(field.type);
+    Object.keys(moduleConfig.useCases).forEach(modelName => {
+      const entityVar = modelName.charAt(0).toLowerCase() + modelName.slice(1);
+      const moduleFolderName = path.basename(moduleDir);
+
+      const init: ControllerInit = {
+        entityName: modelName,
+        entityVar,
+        importStore: `import { ${modelName}Store } from './modules/${moduleFolderName}/infrastructure/stores/${modelName}Store';`,
+        importService: `import { ${modelName}Service } from './modules/${moduleFolderName}/application/services/${modelName}Service';`,
+        importUseCase: `import { ${modelName}UseCase } from './modules/${moduleFolderName}/application/useCases/${modelName}UseCase';`,
+        importController: '',
+        wiring: [],
+        registration: ''
+      };
+
+      // Check if this root entity's web controller needs child services (withChild: true)
+          const childEntityMap = buildChildEntityMap(moduleConfig);
+          const isRootEntity = !childEntityMap.has(modelName);
+          const withChildChildren = isRootEntity ? getChildrenOfParent(moduleConfig, modelName) : [];
+          const webUseCases = (moduleConfig as ModuleConfig).useCases[modelName];
+          const needsChildServices = withChildChildren.length > 0 && webUseCases && Object.entries(webUseCases).some(
+            ([action, uc]) => action === 'get' && uc.withChild === true
+          );
+
+          // Add controller imports if they exist
+          controllerPaths.forEach(ctrlPath => {
+            const ctrlName = path.basename(ctrlPath, '.ts');
+            const ctrlModelName = ctrlName.replace(/(Api|Web)Controller$/, '');
+            if (ctrlModelName === modelName) {
+              const rel = path.relative(srcDir!, ctrlPath).replace(/\\/g, '/').replace(/\.ts$/, '');
+              const importPath = rel.startsWith('.') ? rel : `./${rel}`;
+              init.importController += `import { ${ctrlName} } from '${importPath}';\n`;
+              
+              // Web controllers may need child services when withChild is true
+              const isWebCtrl = ctrlName.endsWith('WebController');
+              if (isWebCtrl && needsChildServices) {
+                const childServiceArgs = withChildChildren
+                  .map(c => c.childEntityName.charAt(0).toLowerCase() + c.childEntityName.slice(1) + 'Service')
+                  .join(', ');
+                init.registration += `new ${ctrlName}(${entityVar}UseCase, ${childServiceArgs}),\n  `;
+              } else {
+                init.registration += `new ${ctrlName}(${entityVar}UseCase),\n  `;
+              }
             }
           });
-        }
-        
-        // Add a minimal init entry (no controller, just for dependency resolution)
-        const init: ControllerInit = {
-          ctrlName: '', // No controller
-          entityName,
-          entityVar,
-          importController: '',
-          importStore: `import { ${entityName}Store } from '${storeImportPath}';`,
-          importService: `import { ${entityName}Service } from '${serviceImportPath}';`,
-          importAuth: undefined,
-          wiring: [],
-          registration: '',
-          storeDependencies: storeDeps,
-          serviceDependencies: serviceDeps
-        };
-        
-        list.push(init);
-      }
-    }
-    
-    // Then process controllers
-    for (const filePath of generatedControllers) {
-      const rel = path
-        .relative(srcDir, filePath)
-        .replace(/\\/g, '/')
-        .replace(/\.ts$/, '');
-      const ctrlName = path.basename(rel);
-      const importPath = rel.startsWith('.') ? rel : `./${rel}`;
-      const baseEntityName = ctrlName.endsWith('ApiController')
-        ? ctrlName.slice(0, -'ApiController'.length)
-        : ctrlName.endsWith('WebController')
-          ? ctrlName.slice(0, -'WebController'.length)
-          : ctrlName.replace('Controller', '');
-      const entityName = baseEntityName;
-      const entityVar = entityName.charAt(0).toLowerCase() + entityName.slice(1);
 
-      const m = rel.match(/modules\/([^/]+)\/infrastructure\/controllers\//);
-      const moduleFolder = m ? m[1] : undefined;
-      if (!moduleFolder) continue;
+      list.push(init);
+    });
 
-      const storeImportPath = `${PATH_PATTERNS.MODULES_RELATIVE}${moduleFolder}/${PATH_PATTERNS.INFRASTRUCTURE}/${PATH_PATTERNS.STORES}/${entityName}${GENERATOR_SUFFIXES.STORE}`;
-      const serviceImportPath = `${PATH_PATTERNS.MODULES_RELATIVE}${moduleFolder}/${PATH_PATTERNS.APPLICATION}/${PATH_PATTERNS.SERVICES}/${entityName}${GENERATOR_SUFFIXES.SERVICE}`;
-      
-      // Look up the correct module config for this controller
-      const controllerModuleConfig = moduleConfigByFolder.get(moduleFolder);
-      
-      // Detect store and service dependencies from module config
-      const storeDeps: string[] = [];
-      const serviceDeps: string[] = [];
-      
-      if (controllerModuleConfig && controllerModuleConfig.models) {
-        const model = controllerModuleConfig.models.find((m: any) => m.name === entityName);
-        if (model && model.fields) {
-          model.fields.forEach((field: any) => {
-            // Check if this field is a relationship (type is another model name)
-            const isRelationship = controllerModuleConfig.models.some((m: any) => m.name === field.type);
-            if (isRelationship) {
-              storeDeps.push(field.type);
-              serviceDeps.push(field.type);
-            }
-          });
-        }
-      }
-
-      // Check if we already have a base entry for this entity (from all models)
-      const existingEntry = list.find(x => x.entityName === entityName && !x.ctrlName);
-      
-      if (existingEntry) {
-        // Update existing entry to add controller info
-        existingEntry.ctrlName = ctrlName;
-        existingEntry.importController = `import { ${ctrlName} } from '${importPath}';`;
-        existingEntry.registration = `new ${ctrlName}(${entityVar}Service)`;
-        // Keep the dependencies we already detected
-      } else {
-        // Create new entry with controller
-        const init: ControllerInit = {
-          ctrlName,
-          entityName,
-          entityVar,
-          importController: `import { ${ctrlName} } from '${importPath}';`,
-          importStore: `import { ${entityName}Store } from '${storeImportPath}';`,
-          importService: `import { ${entityName}Service } from '${serviceImportPath}';`,
-          importAuth: undefined,
-          wiring: [],
-          registration: `new ${ctrlName}(${entityVar}Service)`,
-          storeDependencies: storeDeps,
-          serviceDependencies: serviceDeps
-        };
-        
-        if (!list.find((x) => x.ctrlName === init.ctrlName)) {
-          list.push(init);
-        }
-      }
-    }
     initsBySrcDir.set(srcDir, list);
-    await storeGen.generateAndSaveFiles(moduleYamlPath, infraOut, { force: !!opts?.force, skipOnConflict: !!opts?.skip });
   }
 
-  // Single write per app: inject imports and rewrite block between markers
-  let isIProviderImported = false;
+  // Update app.ts files with wiring
   for (const [srcDir, controllerInits] of initsBySrcDir.entries()) {
     try {
       const appTsPath = path.join(srcDir, COMMON_FILES.APP_TS);
       if (!fs.existsSync(appTsPath)) continue;
+
       let appTs = fs.readFileSync(appTsPath, 'utf8');
 
       // Build providers import and initialization from app.yaml providers section
       const importLines: string[] = [];
       const providerInitLines: string[] = [];
       const providersArrayEntries: string[] = [];
+      let isIProviderImported = false;
+
       if (providersConfig && Object.keys(providersConfig).length > 0) {
         for (const [provName, mod] of Object.entries(providersConfig)) {
           if (!mod) continue;
@@ -277,7 +223,10 @@ export async function handleGenerateAll(
             .split(/[-_]/)
             .map(s => s.charAt(0).toUpperCase() + s.slice(1))
             .join('');
-          importLines.push(`import { ${className}${!isIProviderImported ? ', IProvider, ISqlProvider' : ''} } from '${mod}';`);
+          // Only add import if the module path isn't already imported
+          if (!appTs.includes(`from '${mod}'`)) {
+            importLines.push(`import { ${className}${!isIProviderImported ? ', IProvider, ISqlProvider' : ''} } from '${mod}';`);
+          }
           if (!isIProviderImported) isIProviderImported = true;
           // Read provider configuration from env by name, parse JSON if possible, pass as is
           providerInitLines.push(`  ${provName}: new ${className}((() => {
@@ -288,7 +237,9 @@ export async function handleGenerateAll(
         }
       } else {
         // Fallback to MySQL provider if no providers configured
-        importLines.push(`import { ProviderMysql, ISqlProvider } from '@currentjs/provider-mysql';`);
+        if (!appTs.includes("from '@currentjs/provider-mysql'")) {
+          importLines.push(`import { ProviderMysql, IProvider, ISqlProvider } from '@currentjs/provider-mysql';`);
+        }
         providerInitLines.push(`  mysql: new ProviderMysql((() => {
     const raw = process.env.MYSQL || '';
     try { return raw ? JSON.parse(raw) : undefined; } catch { return raw; }
@@ -296,37 +247,32 @@ export async function handleGenerateAll(
         providersArrayEntries.push('mysql');
       }
 
-      const ensureDbLine = `const providers: Record<string, IProvider> = {\n${providerInitLines.join(',\n')}\n};\nconst db = providers['${databaseProviderName || providersArrayEntries[0]}'] as ISqlProvider;`;
-
-
-      // Ensure router import for server (app template already imports templating)
+      const dbProviderKey = databaseProviderName || providersArrayEntries[0];
+      const ensureDbLine = `const providers: Record<string, IProvider> = {\n${providerInitLines.join(',\n')}\n};\nconst db = providers['${dbProviderKey}'] as ISqlProvider;`;
+      
+      // Ensure router imports
       if (!appTs.includes("from '@currentjs/router'")) {
-        importLines.push(`import { createWebServer, createStaticServer } from '@currentjs/router';`);
-      }
-      for (const il of importLines) {
-        if (!appTs.includes(il)) {
-          appTs = il + '\n' + appTs;
-        }
-      }
-      // Ensure MySQL provider import exists
-      if (!appTs.includes("from '@currentjs/provider-mysql'")) {
-        importLines.push(`import { ProviderMysql } from '@currentjs/provider-mysql';`);
+        importLines.push(`import { createWebServer } from '@currentjs/router';`);
       }
 
+      // Add entity imports
       for (const init of controllerInits) {
-        const maybe = [init.importStore, init.importService];
-        // Only add controller import if entity has a controller
-        if (init.importController && init.importController.trim() !== '') {
-          maybe.push(init.importController);
-        }
-        if (init.importAuth) maybe.push(init.importAuth);
-        for (const line of maybe) {
-          if (line && line.trim() !== '' && !appTs.includes(line) && !importLines.includes(line)) {
+        const lines = [
+          init.importStore,
+          init.importService,
+          init.importUseCase,
+          init.importController
+        ].filter(line => line && line.trim() !== '');
+
+        for (const line of lines) {
+          if (!appTs.includes(line) && !importLines.includes(line)) {
             importLines.push(line);
           }
         }
       }
+
       if (importLines.length) {
+        // Filter out duplicates before prepending
         const existingImports = new Set<string>();
         const importRegex = /^import[^;]+;$/gm;
         const currentImports = appTs.match(importRegex) || [];
@@ -335,81 +281,38 @@ export async function handleGenerateAll(
         if (toAdd.length) appTs = toAdd.join('\n') + '\n' + appTs;
       }
 
-      // Compose fresh block content with dependency-aware ordering
+      // Build wiring block
       const wiringLines: string[] = [];
-      // DB placeholder once
+      
+      // Providers + DB initialization
       wiringLines.push(ensureDbLine);
-      
-      // Deduplicate by entityName
-      const uniqueInits = Array.from(
-        new Map(controllerInits.map(init => [init.entityName, init])).values()
-      );
-      
-      // Sort entities by dependencies (entities with no deps first)
-      const sorted: ControllerInit[] = [];
-      const processed = new Set<string>();
-      
-      const addEntity = (init: ControllerInit) => {
-        if (processed.has(init.entityName)) return;
-        
-        // Process dependencies first
-        if (init.storeDependencies) {
-          for (const depName of init.storeDependencies) {
-            const depInit = uniqueInits.find(i => i.entityName === depName);
-            if (depInit && !processed.has(depName)) {
-              addEntity(depInit);
-            }
-          }
-        }
-        
-        sorted.push(init);
-        processed.add(init.entityName);
-      };
-      
-      uniqueInits.forEach(init => addEntity(init));
-      
-      // Generate wiring for stores and services
-      for (const init of sorted) {
-        const entityVar = init.entityVar;
-        const entityName = init.entityName;
-        
-        // Build store constructor parameters
-        const storeParams = ['db'];
-        if (init.storeDependencies && init.storeDependencies.length > 0) {
-          init.storeDependencies.forEach(depName => {
-            const depVar = depName.charAt(0).toLowerCase() + depName.slice(1);
-            storeParams.push(`${depVar}Store`);
-          });
-        }
-        
-        // Build service constructor parameters
-        const serviceParams = [`${entityVar}Store`];
-        if (init.serviceDependencies && init.serviceDependencies.length > 0) {
-          init.serviceDependencies.forEach(depName => {
-            const depVar = depName.charAt(0).toLowerCase() + depName.slice(1);
-            serviceParams.push(`${depVar}Store`);
-          });
-        }
-        
-        wiringLines.push(`const ${entityVar}Store = new ${entityName}Store(${storeParams.join(', ')});`);
-        wiringLines.push(`const ${entityVar}Service = new ${entityName}Service(${serviceParams.join(', ')});`);
+
+      // Store -> Service -> UseCase wiring
+      for (const init of controllerInits) {
+        const { entityName, entityVar } = init;
+        wiringLines.push(`const ${entityVar}Store = new ${entityName}Store(db);`);
+        wiringLines.push(`const ${entityVar}Service = new ${entityName}Service(${entityVar}Store);`);
+        wiringLines.push(`const ${entityVar}UseCase = new ${entityName}UseCase(${entityVar}Service);`);
       }
-      
-      // Only include registrations for entities with controllers
+
+      // Controller registrations
       const registrations = controllerInits
-        .filter(i => i.registration && i.registration.trim() !== '')
-        .map(i => i.registration);
-      
+        .map(i => i.registration)
+        .filter(r => r && r.trim() !== '')
+        .join('');
+
       wiringLines.push('const controllers = [');
-      if (registrations.length > 0) {
-        wiringLines.push(`  ${registrations.join(',\n  ')}`);
+      if (registrations) {
+        wiringLines.push(`  ${registrations.trim()}`);
       }
       wiringLines.push('];');
 
+      // Replace content between markers
       const startMarker = GENERATOR_MARKERS.CONTROLLERS_START;
       const endMarker = GENERATOR_MARKERS.CONTROLLERS_END;
       const startIdx = appTs.indexOf(startMarker);
       const endIdx = appTs.indexOf(endMarker);
+
       if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
         const before = appTs.slice(0, startIdx + startMarker.length);
         const after = appTs.slice(endIdx);
@@ -417,38 +320,32 @@ export async function handleGenerateAll(
         appTs = before + block + after;
       }
 
-      // Ensure the createWebServer call includes renderer in options
-      // Case 1: createWebServer(controllers, { ... })
-      const withOptionsRegex = /createWebServer\(\s*controllers\s*,\s*\{([\s\S]*?)\}\s*\)/m;
-      if (withOptionsRegex.test(appTs)) {
-        appTs = appTs.replace(withOptionsRegex, (full, inner) => {
-          if (/\brenderer\b\s*:/.test(inner)) return full; // already present
-          const trimmed = inner.trim();
-          const prefix = trimmed.length ? inner.replace(trimmed, '') : '';
-          const suffix = inner.endsWith(trimmed) ? '' : inner.slice(inner.indexOf(trimmed) + trimmed.length);
-          const sep = trimmed.length ? ', ' : '';
-          return full.replace(inner, `${prefix}${trimmed}${sep}renderer` + `: renderer${suffix}`);
-        });
-      } else {
-        // Case 2: createWebServer(controllers)
-        const noOptionsRegex = /createWebServer\(\s*controllers\s*\)/m;
-        if (noOptionsRegex.test(appTs)) {
-          appTs = appTs.replace(noOptionsRegex, 'createWebServer(controllers, { renderer })');
+      // Deduplicate import lines across the entire file
+      const lines = appTs.split('\n');
+      const seenImports = new Set<string>();
+      const deduped = lines.filter(line => {
+        const trimmed = line.trim();
+        if (/^import\s+/.test(trimmed) && trimmed.endsWith(';')) {
+          if (seenImports.has(trimmed)) return false;
+          seenImports.add(trimmed);
         }
-      }
+        return true;
+      });
+      appTs = deduped.join('\n');
 
       fs.writeFileSync(appTsPath, appTs, 'utf8');
+      // eslint-disable-next-line no-console
+      console.log(colors.green(`Updated ${appTsPath}`));
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.warn(colors.yellow(`Could not update app.ts with controllers: ${e instanceof Error ? e.message : String(e)}`));
+      console.warn(colors.yellow(`Could not update app.ts: ${e instanceof Error ? e.message : String(e)}`));
     }
   }
 
-  // Run npm run build
+  // Run build
   runCommand('npm run build', {
     infoMessage: '\nBuilding...',
     successMessage: '[v] Build completed successfully',
     errorMessage: '[x] Build failed:'
   });
 }
-
