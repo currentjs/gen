@@ -39,9 +39,8 @@ jobs:
       - name: Build project
         run: npm run build
 
-      # todo: Run tests before publishing
-      # - name: Run tests
-      #   run: npm test
+      - name: Run tests
+        run: npm run test:all
 
       - name: Get current version
         id: current_version
