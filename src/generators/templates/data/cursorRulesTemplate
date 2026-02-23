@@ -152,6 +152,14 @@ permissions:                            # Role-based access control
 
 **Make sure no `ID`/`owner id`/`is deleted` fields are present in the model definition, since it's added automatically**
 
+**Use case option: withChild (aggregate root with child entities)**
+
+Per use case you can set `withChild: true` (default `false`) to show child entities on the root's pages. Only applies when the entity has child entities (e.g. Invoice with InvoiceItem). Ignored if there are no child entities.
+- **list** + `withChild: true`: adds a link column on the list page to the child entity list (no extra loading).
+- **get** + `withChild: true`: on the detail page, renders a table of child entities below the main card, with View/Edit/Add links.
+
+Example: `get: { withChild: true, input: { identifier: id }, output: { from: Invoice }, handlers: ['default:get'] }`
+
 **Field Types:**
 - `string` - Text data
 - `number` - Numeric data (integer or float)

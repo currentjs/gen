@@ -47,7 +47,9 @@ export class UseCaseGenerator {
         // Determine parameters based on action
         let params = '';
         if (defaultAction === 'list') {
-          params = 'input.page || 1, input.limit || 20';
+          params = useCaseConfig.input?.pagination
+            ? 'input.page || 1, input.limit || 20'
+            : '';
         } else if (defaultAction === 'get') {
           params = 'input.id';
         } else if (defaultAction === 'create') {
@@ -76,15 +78,7 @@ ${handlerCalls}${returnStatement}
   }`;
   }
 
-  /**
-   * Generate getResourceOwner method for aggregate roots.
-   * This is used by controllers for pre-mutation authorization checks.
-   */
-  private generateGetResourceOwnerMethod(modelName: string, isRoot: boolean): string {
-    if (!isRoot) {
-      return '';
-    }
-    
+  private generateGetResourceOwnerMethod(modelName: string): string {
     const serviceVar = `${modelName.toLowerCase()}Service`;
     
     return `
@@ -105,10 +99,6 @@ ${handlerCalls}${returnStatement}
     const serviceName = `${modelName}Service`;
     const serviceVar = `${modelName.toLowerCase()}Service`;
     
-    // Check if this model is an aggregate root
-    const aggregateConfig = this.availableAggregates.get(modelName);
-    const isRoot = aggregateConfig?.root === true;
-
     // Generate imports for DTOs (only Input types since UseCases return models)
     const dtoImports = Object.keys(useCases)
       .map(actionName => {
@@ -124,8 +114,7 @@ ${handlerCalls}${returnStatement}
       )
       .join('\n\n');
 
-    // Add getResourceOwner method for aggregate roots
-    const getResourceOwnerMethod = this.generateGetResourceOwnerMethod(modelName, isRoot);
+    const getResourceOwnerMethod = this.generateGetResourceOwnerMethod(modelName);
 
     return `import { ${modelName} } from '../../domain/entities/${modelName}';
 ${dtoImports}

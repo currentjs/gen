@@ -9,6 +9,7 @@ import {
   AggregateConfig,
   isNewModuleConfig 
 } from '../types/configTypes';
+import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
 
 interface TypeMapping {
   [key: string]: string;
@@ -46,7 +47,8 @@ export class NewServiceGenerator {
   private generateDefaultHandlerMethod(
     modelName: string,
     actionName: string,
-    aggregateConfig: AggregateConfig
+    aggregateConfig: AggregateConfig,
+    childInfo?: ChildEntityInfo
   ): string {
     const entityLower = modelName.toLowerCase();
     const storeName = `${entityLower}Store`;
@@ -70,8 +72,9 @@ export class NewServiceGenerator {
     return ${entityLower};
   }`;
 
-      case 'create':
-        // Generate constructor args
+      case 'create': {
+        // Generate constructor args (ownerId for root, parentIdField for child)
+        const firstArgField = childInfo ? childInfo.parentIdField : 'ownerId';
         const fields = Object.entries(aggregateConfig.fields)
           .filter(([fieldName, fieldConfig]) => !fieldConfig.auto && fieldName !== 'id')
           .sort((a, b) => {
@@ -85,16 +88,13 @@ export class NewServiceGenerator {
           .map(([fieldName]) => `input.${fieldName}`)
           .join(', ');
         
-        // For aggregate roots, include ownerId as the second argument
-        const isRoot = aggregateConfig.root === true;
-        const constructorArgs = isRoot
-          ? `input.ownerId, ${fieldArgs}`
-          : fieldArgs;
+        const constructorArgs = `input.${firstArgField}, ${fieldArgs}`;
 
         return `  async create(input: any): Promise<${modelName}> {
     const ${entityLower} = new ${modelName}(0, ${constructorArgs});
     return await this.${storeName}.insert(${entityLower});
   }`;
+      }
 
       case 'update':
         const setterCalls = Object.entries(aggregateConfig.fields)
@@ -159,15 +159,16 @@ ${setterCalls}
     return handlers;
   }
 
-  /**
-   * Generate getResourceOwner method for aggregate roots.
-   * This method is used by the use case for pre-mutation authorization checks.
-   */
-  private generateGetResourceOwnerMethod(modelName: string, isRoot: boolean): string {
-    if (!isRoot) {
-      return '';
-    }
-    
+  private generateListByParentMethod(modelName: string, childInfo?: ChildEntityInfo): string {
+    if (!childInfo) return '';
+    const storeVar = `${modelName.toLowerCase()}Store`;
+    return `
+  async listByParent(parentId: number): Promise<${modelName}[]> {
+    return await this.${storeVar}.getByParentId(parentId);
+  }`;
+  }
+
+  private generateGetResourceOwnerMethod(modelName: string): string {
     const storeVar = `${modelName.toLowerCase()}Store`;
     
     return `
@@ -183,12 +184,12 @@ ${setterCalls}
   private generateService(
     modelName: string,
     useCases: Record<string, UseCaseDefinition>,
-    aggregateConfig: AggregateConfig
+    aggregateConfig: AggregateConfig,
+    childInfo?: ChildEntityInfo
   ): string {
     const serviceName = `${modelName}Service`;
     const storeName = `${modelName}Store`;
     const storeVar = `${modelName.toLowerCase()}Store`;
-    const isRoot = aggregateConfig.root === true;
 
     // Collect all unique handlers
     const handlers = this.collectHandlers(useCases);
@@ -199,14 +200,18 @@ ${setterCalls}
     handlers.forEach(handler => {
       if (handler.startsWith('default:')) {
         const actionName = handler.replace('default:', '');
-        methods.push(this.generateDefaultHandlerMethod(modelName, actionName, aggregateConfig));
+        methods.push(this.generateDefaultHandlerMethod(modelName, actionName, aggregateConfig, childInfo));
       } else {
         methods.push(this.generateCustomHandlerMethod(modelName, handler));
       }
     });
 
-    // Add getResourceOwner method for aggregate roots
-    const getResourceOwnerMethod = this.generateGetResourceOwnerMethod(modelName, isRoot);
+    const listByParentMethod = this.generateListByParentMethod(modelName, childInfo);
+    if (listByParentMethod) {
+      methods.push(listByParentMethod);
+    }
+
+    const getResourceOwnerMethod = this.generateGetResourceOwnerMethod(modelName);
     if (getResourceOwnerMethod) {
       methods.push(getResourceOwnerMethod);
     }
@@ -237,6 +242,8 @@ ${methods.join('\n\n')}
       });
     }
 
+    const childEntityMap = buildChildEntityMap(config);
+
     // Generate a Service file for each model
     Object.entries(config.useCases).forEach(([modelName, useCases]) => {
       const aggregateConfig = this.availableAggregates.get(modelName);
@@ -246,7 +253,8 @@ ${methods.join('\n\n')}
         return;
       }
 
-      result[modelName] = this.generateService(modelName, useCases, aggregateConfig);
+      const childInfo = childEntityMap.get(modelName);
+      result[modelName] = this.generateService(modelName, useCases, aggregateConfig, childInfo);
     });
 
     return result;

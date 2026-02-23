@@ -10,6 +10,7 @@ import {
   AuthConfig,
   isNewModuleConfig 
 } from '../types/configTypes';
+import { buildChildEntityMap, ChildEntityInfo, getChildrenOfParent, ParentChildInfo } from '../utils/childEntityUtils';
 
 export class NewControllerGenerator {
   private capitalize(str: string): string {
@@ -135,30 +136,57 @@ export class NewControllerGenerator {
    * Generate post-fetch authorization check for owner validation.
    * This runs after fetching the entity and validates ownership.
    * Used for READ operations (get, list) where we check after fetch.
-   * @param auth - The auth requirement
-   * @param resultVar - The variable name holding the fetched result
-   * @returns Code string for the owner check, or empty string if not needed
+   * For child entities, uses getResourceOwner() since result has no ownerId.
    */
-  private generatePostFetchOwnerCheck(auth?: AuthConfig, resultVar: string = 'result'): string {
+  private generatePostFetchOwnerCheck(
+    auth?: AuthConfig,
+    resultVar: string = 'result',
+    useCaseVar?: string,
+    childInfo?: ChildEntityInfo
+  ): string {
     const roles = this.normalizeAuth(auth);
     
     if (!roles.includes('owner')) {
       return ''; // No owner check needed
     }
 
-    // Get non-owner roles for the bypass check
     const bypassRoles = roles.filter(r => r !== 'owner' && r !== 'all' && r !== 'authenticated');
-    
+
+    // Child entities don't have ownerId on result; resolve via getResourceOwner
+    if (childInfo && useCaseVar) {
+      if (bypassRoles.length === 0) {
+        return `
+    // Owner validation (post-fetch for reads, via parent)
+    const resourceOwnerId = await this.${useCaseVar}.getResourceOwner(${resultVar}.id);
+    if (resourceOwnerId === null) {
+      throw new Error('Resource not found');
+    }
+    if (resourceOwnerId !== context.request.user?.id) {
+      throw new Error('Access denied: you do not own this resource');
+    }`;
+      }
+      const bypassConditions = bypassRoles.map(r => `context.request.user?.role === '${r}'`).join(' || ');
+      return `
+    // Owner validation (post-fetch for reads, via parent, bypassed for: ${bypassRoles.join(', ')})
+    const resourceOwnerId = await this.${useCaseVar}.getResourceOwner(${resultVar}.id);
+    if (resourceOwnerId === null) {
+      throw new Error('Resource not found');
+    }
+    const isOwner = resourceOwnerId === context.request.user?.id;
+    const hasPrivilegedRole = ${bypassConditions};
+    if (!isOwner && !hasPrivilegedRole) {
+      throw new Error('Access denied: you do not own this resource');
+    }`;
+    }
+
+    // Root entity: result has ownerId
     if (bypassRoles.length === 0) {
-      // Only owner - strict ownership check
       return `
     // Owner validation (post-fetch for reads)
     if (${resultVar}.ownerId !== context.request.user?.id) {
       throw new Error('Access denied: you do not own this resource');
     }`;
     }
-    
-    // Owner OR other roles - bypass if user has a privileged role
     const bypassConditions = bypassRoles.map(r => `context.request.user?.role === '${r}'`).join(' || ');
     return `
     // Owner validation (post-fetch for reads, bypassed for: ${bypassRoles.join(', ')})
@@ -219,7 +247,8 @@ export class NewControllerGenerator {
 
   private generateApiEndpointMethod(
     endpoint: ApiEndpointConfig,
-    resourceName: string
+    resourceName: string,
+    childInfo?: ChildEntityInfo
   ): { method: string; dtoImports: Set<string> } {
     const { model, action } = this.parseUseCase(endpoint.useCase);
     const methodName = action;
@@ -236,15 +265,18 @@ export class NewControllerGenerator {
     const authLine = authCheck ? `\n    ${authCheck}\n` : '';
 
     // Build parsing logic
-    // For create action, inject ownerId from authenticated user (for aggregate roots)
+    // For create: root gets ownerId from user, child gets parentId from URL params
     let parseLogic: string;
     if (action === 'list') {
       parseLogic = `const input = ${inputClass}.parse(context.request.parameters);`;
     } else if (action === 'get' || action === 'delete') {
       parseLogic = `const input = ${inputClass}.parse({ id: context.request.parameters.id });`;
     } else if (action === 'create') {
-      // Inject ownerId from authenticated user for aggregate roots
-      parseLogic = `const input = ${inputClass}.parse({ ...context.request.body, ownerId: context.request.user?.id });`;
+      if (childInfo) {
+        parseLogic = `const input = ${inputClass}.parse({ ...context.request.body, ${childInfo.parentIdField}: context.request.parameters.${childInfo.parentIdField} });`;
+      } else {
+        parseLogic = `const input = ${inputClass}.parse({ ...context.request.body, ownerId: context.request.user?.id });`;
+      }
     } else if (action === 'update') {
       parseLogic = `const input = ${inputClass}.parse({ ...context.request.body, id: context.request.parameters.id });`;
     } else {
@@ -265,7 +297,7 @@ export class NewControllerGenerator {
     
     // Post-fetch owner check for read operations only
     const postFetchOwnerCheck = (hasOwner && isRead) 
-      ? this.generatePostFetchOwnerCheck(endpoint.auth, 'result') 
+      ? this.generatePostFetchOwnerCheck(endpoint.auth, 'result', useCaseVar, childInfo) 
       : '';
 
     // Generate output transformation based on action
@@ -292,7 +324,9 @@ export class NewControllerGenerator {
     page: WebPageConfig,
     resourceName: string,
     layout: string,
-    methodIndex: number
+    methodIndex: number,
+    childInfo?: ChildEntityInfo,
+    withChildChildren?: ParentChildInfo[]
   ): { method: string; dtoImports: Set<string> } {
     const method = page.method || 'GET';
     const decorator = this.getHttpDecorator(method);
@@ -340,25 +374,47 @@ export class NewControllerGenerator {
         const hasOwner = this.hasOwnerAuth(page.auth);
         const isReadAction = action === 'get' || action === 'list';
         const postFetchOwnerCheck = (hasOwner && isReadAction) 
-          ? this.generatePostFetchOwnerCheck(page.auth, 'result') 
+          ? this.generatePostFetchOwnerCheck(page.auth, 'result', useCaseVar, childInfo) 
           : '';
 
-        // For web pages, we return data for the template, not transformed DTO
+        // For get + withChild: load child entities and merge into result for template
+        const loadChildBlocks: string[] = [];
+        let returnExpr: string;
+        if (childInfo) {
+          returnExpr = `{ ...result, ${childInfo.parentIdField}: context.request.parameters.${childInfo.parentIdField} }`;
+        } else if (withChildChildren?.length && action === 'get') {
+          const childKeys: string[] = [];
+          for (const child of withChildChildren) {
+            const childVar = child.childEntityName.charAt(0).toLowerCase() + child.childEntityName.slice(1);
+            const childItemsKey = `${childVar}Items`;
+            childKeys.push(childItemsKey);
+            loadChildBlocks.push(`const ${childItemsKey} = await this.${childVar}Service.listByParent(result.id);`);
+          }
+          returnExpr = `{ ...result, ${childKeys.map(k => `${k}: ${k}`).join(', ')} }`;
+        } else {
+          returnExpr = 'result';
+        }
+
+        const loadChildCode = loadChildBlocks.length ? '\n    ' + loadChildBlocks.join('\n    ') + '\n    ' : '';
         const methodCode = `${renderDecorator}
   @${decorator}('${page.path}')
   async ${methodName}(context: IContext): Promise<any> {${authLine}
     ${parseLogic}
-    const result = await this.${useCaseVar}.${action}(input);${postFetchOwnerCheck}
-    return result;
+    const result = await this.${useCaseVar}.${action}(input);${postFetchOwnerCheck}${loadChildCode}
+    return ${returnExpr};
   }`;
 
         return { method: methodCode, dtoImports };
       } else {
-        // No use case - just render view
+        // No use case - just render view (e.g. create form)
+        // Child entities need the parent ID from URL params for link rendering
+        const emptyFormData = childInfo
+          ? `{ formData: {}, ${childInfo.parentIdField}: context.request.parameters.${childInfo.parentIdField} }`
+          : '{ formData: {} }';
         const methodCode = `${renderDecorator}
   @${decorator}('${page.path}')
   async ${methodName}(context: IContext): Promise<any> {${authLine}
-    return { formData: {} };
+    return ${emptyFormData};
   }`;
 
         return { method: methodCode, dtoImports };
@@ -375,7 +431,11 @@ export class NewControllerGenerator {
       if (page.path.includes(':id')) {
         parseLogic = `const input = ${inputClass}.parse({ ...context.request.body, id: context.request.parameters.id });`;
       } else if (action === 'create') {
-        parseLogic = `const input = ${inputClass}.parse({ ...context.request.body, ownerId: context.request.user?.id });`;
+        if (childInfo) {
+          parseLogic = `const input = ${inputClass}.parse({ ...context.request.body, ${childInfo.parentIdField}: context.request.parameters.${childInfo.parentIdField} });`;
+        } else {
+          parseLogic = `const input = ${inputClass}.parse({ ...context.request.body, ownerId: context.request.user?.id });`;
+        }
       } else {
         parseLogic = `const input = ${inputClass}.parse(context.request.body);`;
       }
@@ -471,7 +531,8 @@ export class NewControllerGenerator {
   private generateApiController(
     resourceName: string,
     prefix: string,
-    endpoints: ApiEndpointConfig[]
+    endpoints: ApiEndpointConfig[],
+    childInfo?: ChildEntityInfo
   ): string {
     const controllerName = `${resourceName}ApiController`;
     
@@ -485,7 +546,7 @@ export class NewControllerGenerator {
       const { model } = this.parseUseCase(endpoint.useCase);
       useCaseModels.add(model);
       
-      const { method, dtoImports } = this.generateApiEndpointMethod(endpoint, resourceName);
+      const { method, dtoImports } = this.generateApiEndpointMethod(endpoint, resourceName, childInfo);
       methods.push(method);
       dtoImports.forEach(d => allDtoImports.add(d));
     });
@@ -522,10 +583,15 @@ ${methods.join('\n\n')}
     resourceName: string,
     prefix: string,
     layout: string,
-    pages: WebPageConfig[]
+    pages: WebPageConfig[],
+    config: NewModuleConfig,
+    childInfo?: ChildEntityInfo
   ): string {
     const controllerName = `${resourceName}WebController`;
     
+    // Child entities of this resource (for withChild). Only root entities can have withChild.
+    const withChildChildren = childInfo ? [] : getChildrenOfParent(config, resourceName);
+
     // Determine which use cases and DTOs are referenced
     const useCaseModels = new Set<string>();
     const allDtoImports = new Set<string>();
@@ -537,13 +603,37 @@ ${methods.join('\n\n')}
         const { model } = this.parseUseCase(page.useCase);
         useCaseModels.add(model);
       }
+
+      const { model, action } = page.useCase ? this.parseUseCase(page.useCase) : { model: '', action: '' };
+      const useCaseWithChild = model && action && (config.useCases[model] as Record<string, { withChild?: boolean }>)?.[action]?.withChild === true;
+      const withChildForThisPage = useCaseWithChild && action === 'get' && withChildChildren.length > 0 ? withChildChildren : undefined;
       
-      const { method, dtoImports } = this.generateWebPageMethod(page, resourceName, layout, index);
+      const { method, dtoImports } = this.generateWebPageMethod(page, resourceName, layout, index, childInfo, withChildForThisPage);
       methods.push(method);
       dtoImports.forEach(d => allDtoImports.add(d));
     });
 
-    // Generate imports
+    // Determine if any page actually uses withChild (only then inject child services)
+    const needsChildServices = withChildChildren.length > 0 && sortedPages.some(page => {
+      if (!page.useCase) return false;
+      const { model: m, action: a } = this.parseUseCase(page.useCase);
+      return a === 'get' && (config.useCases[m] as Record<string, { withChild?: boolean }>)?.[a]?.withChild === true;
+    });
+
+    // Constructor: use cases + child entity services when withChild is actually used
+    const serviceImports: string[] = [];
+    const constructorParams: string[] = [];
+    Array.from(useCaseModels).forEach(model => {
+      constructorParams.push(`private ${model.toLowerCase()}UseCase: ${model}UseCase`);
+    });
+    if (needsChildServices) {
+      withChildChildren.forEach(child => {
+        const childVar = child.childEntityName.charAt(0).toLowerCase() + child.childEntityName.slice(1);
+        serviceImports.push(`import { ${child.childEntityName}Service } from '../../application/services/${child.childEntityName}Service';`);
+        constructorParams.push(`private ${childVar}Service: ${child.childEntityName}Service`);
+      });
+    }
+
     const useCaseImports = Array.from(useCaseModels)
       .map(model => `import { ${model}UseCase } from '../../application/useCases/${model}UseCase';`)
       .join('\n');
@@ -552,21 +642,15 @@ ${methods.join('\n\n')}
       .map(dto => `import { ${dto}Input } from '../../application/dto/${dto}';`)
       .join('\n');
 
-    // Generate constructor parameters
-    const constructorParams = useCaseModels.size > 0
-      ? Array.from(useCaseModels)
-          .map(model => `private ${model.toLowerCase()}UseCase: ${model}UseCase`)
-          .join(',\n    ')
-      : '';
-
-    const constructorBlock = constructorParams 
+    const constructorBlock = constructorParams.length > 0
       ? `constructor(
-    ${constructorParams}
+    ${constructorParams.join(',\n    ')}
   ) {}`
       : 'constructor() {}';
 
     return `import { Controller, Get, Post, Render, type IContext } from '@currentjs/router';
 ${useCaseImports}
+${serviceImports.join('\n')}
 ${dtoImportStatements}
 
 @Controller('${prefix}')
@@ -579,14 +663,17 @@ ${methods.join('\n\n')}
 
   public generateFromConfig(config: NewModuleConfig): Record<string, string> {
     const result: Record<string, string> = {};
+    const childEntityMap = buildChildEntityMap(config);
 
     // Generate API controllers
     if (config.api) {
       Object.entries(config.api).forEach(([resourceName, resourceConfig]) => {
+        const childInfo = childEntityMap.get(resourceName);
         const code = this.generateApiController(
           resourceName,
           resourceConfig.prefix,
-          resourceConfig.endpoints
+          resourceConfig.endpoints,
+          childInfo
         );
         result[`${resourceName}Api`] = code;
       });
@@ -595,11 +682,14 @@ ${methods.join('\n\n')}
     // Generate Web controllers
     if (config.web) {
       Object.entries(config.web).forEach(([resourceName, resourceConfig]) => {
+        const childInfo = childEntityMap.get(resourceName);
         const code = this.generateWebController(
           resourceName,
           resourceConfig.prefix,
           resourceConfig.layout || 'main_view',
-          resourceConfig.pages
+          resourceConfig.pages,
+          config,
+          childInfo
         );
         result[`${resourceName}Web`] = code;
       });

@@ -73,6 +73,7 @@ export interface UseCaseInputConfig {
   pagination?: PaginationConfig;
   filters?: Record<string, FilterFieldConfig>;
   sorting?: SortingConfig;
+  parentId?: string;
 }
 
 export interface UseCaseOutputInclude {
@@ -92,6 +93,7 @@ export interface UseCaseDefinition {
   input?: UseCaseInputConfig;
   output?: UseCaseOutputConfig | 'void';
   handlers: string[];
+  withChild?: boolean;
 }
 
 export interface UseCasesConfig {

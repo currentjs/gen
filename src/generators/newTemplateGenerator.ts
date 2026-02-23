@@ -4,11 +4,33 @@ import { parse as parseYaml } from 'yaml';
 import { writeGeneratedFile } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
 import { NewModuleConfig, WebPageConfig, AggregateConfig, ValueObjectConfig, isNewModuleConfig } from '../types/configTypes';
+import { getChildrenOfParent, ParentChildInfo } from '../utils/childEntityUtils';
 
 export class NewTemplateGenerator {
   private valueObjects: Record<string, ValueObjectConfig> = {};
 
-  private renderListTemplate(modelName: string, viewName: string, fields: [string, any][]): string {
+  /**
+   * Convert a route prefix like "/invoice/:invoiceId/items" into a
+   * template-ready path like "/invoice/{{ invoiceId }}/items".
+   */
+  private prefixToTemplatePath(prefix: string): string {
+    return prefix.replace(/:([a-zA-Z_]\w*)/g, '{{ $1 }}');
+  }
+
+  /**
+   * Replace a single path param in prefix with a template expression (e.g. for list: item.id, for detail: id).
+   */
+  private prefixWithParam(prefix: string, paramName: string, templateExpr: string): string {
+    return prefix.replace(new RegExp(':' + paramName + '(?=/|$)'), templateExpr);
+  }
+
+  private renderListTemplate(
+    modelName: string,
+    viewName: string,
+    fields: [string, any][],
+    basePath: string,
+    withChildChildren?: ParentChildInfo[]
+  ): string {
     const fieldHeaders = fields
       .filter(([name]) => name !== 'id')
       .slice(0, 5)
@@ -30,28 +52,43 @@ export class NewTemplateGenerator {
       })
       .join('\n');
 
+    const childLinkHeaders = (withChildChildren || [])
+      .map(child => `        <th>${child.childEntityName}</th>`)
+      .join('\n');
+    const childLinkCells = (withChildChildren || [])
+      .map(child => {
+        const childPath = child.childWebPrefix
+          ? this.prefixWithParam(child.childWebPrefix, child.parentIdField, '{{ item.id }}')
+          : '#';
+        return `        <td><a href="${childPath}" class="btn btn-sm btn-outline-secondary">Items</a></td>`;
+      })
+      .join('\n');
+
+    const childHeaderBlock = childLinkHeaders ? '\n' + childLinkHeaders : '';
+    const childCellBlock = childLinkCells ? '\n' + childLinkCells : '';
+
     return `<!-- @template name="${viewName}" -->
 <div class="container mt-4">
   <h1>${modelName} List</h1>
   
   <div class="mb-3">
-    <a href="/${modelName.toLowerCase()}/create" class="btn btn-primary">Create New ${modelName}</a>
+    <a href="${basePath}/create" class="btn btn-primary">Create New ${modelName}</a>
   </div>
 
   <table class="table table-striped">
     <thead>
       <tr>
 ${fieldHeaders}
-        <th>Actions</th>
+        <th>Actions</th>${childHeaderBlock}
       </tr>
     </thead>
     <tbody x-for="items" x-row="item">
       <tr>
 ${fieldCells}
         <td>
-          <a href="/${modelName.toLowerCase()}/{{ item.id }}" class="btn btn-sm btn-info">View</a>
-          <a href="/${modelName.toLowerCase()}/{{ item.id }}/edit" class="btn btn-sm btn-warning">Edit</a>
-        </td>
+          <a href="${basePath}/{{ item.id }}" class="btn btn-sm btn-info">View</a>
+          <a href="${basePath}/{{ item.id }}/edit" class="btn btn-sm btn-warning">Edit</a>
+        </td>${childCellBlock}
       </tr>
     </tbody>
   </table>
@@ -66,7 +103,61 @@ ${fieldCells}
 </div>`;
   }
 
-  private renderDetailTemplate(modelName: string, viewName: string, fields: [string, any][]): string {
+  private renderChildTableSection(child: ParentChildInfo, parentIdTemplateExpr: string): string {
+    const childVar = child.childEntityName.charAt(0).toLowerCase() + child.childEntityName.slice(1);
+    const childItemsKey = `${childVar}Items`;
+    const childBasePath = child.childWebPrefix
+      ? this.prefixWithParam(child.childWebPrefix, child.parentIdField, parentIdTemplateExpr)
+      : '';
+    const fieldEntries = Object.entries(child.childFields).filter(([name]) => name !== 'id').slice(0, 5);
+    const headers = fieldEntries.map(([name]) => `      <th>${this.capitalize(name)}</th>`).join('\n');
+    const cells = fieldEntries.map(([name, config]) => {
+      const voConfig = this.valueObjects[this.capitalize((config?.type || 'string') as string)];
+      if (voConfig) {
+        const parts = Object.keys(voConfig.fields)
+          .map(sub => `{{ childItem.${name}.${sub} }}`)
+          .join(' ');
+        return `      <td>${parts}</td>`;
+      }
+      return `      <td>{{ childItem.${name} }}</td>`;
+    }).join('\n');
+    const addLink = childBasePath
+      ? `  <div class="mb-3">
+    <a href="${childBasePath}/create" class="btn btn-primary btn-sm">Add ${child.childEntityName}</a>
+  </div>`
+      : '';
+    const actionLinks = childBasePath
+      ? `        <td>
+          <a href="${childBasePath}/{{ childItem.id }}" class="btn btn-sm btn-info">View</a>
+          <a href="${childBasePath}/{{ childItem.id }}/edit" class="btn btn-sm btn-warning">Edit</a>
+        </td>`
+      : '        <td></td>';
+    return `
+  <h2 class="mt-4">${child.childEntityName} List</h2>
+${addLink}
+  <table class="table table-striped">
+    <thead>
+      <tr>
+${headers}
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody x-for="${childItemsKey}" x-row="childItem">
+      <tr>
+${cells}
+${actionLinks}
+      </tr>
+    </tbody>
+  </table>`;
+  }
+
+  private renderDetailTemplate(
+    modelName: string,
+    viewName: string,
+    fields: [string, any][],
+    basePath: string,
+    withChildChildren?: ParentChildInfo[]
+  ): string {
     const fieldRows = fields
       .map(([name, config]) => {
         const voConfig = this.valueObjects[this.capitalize((config.type || 'string'))];
@@ -86,6 +177,10 @@ ${fieldCells}
       })
       .join('\n');
 
+    const childSections = (withChildChildren || [])
+      .map(child => this.renderChildTableSection(child, '{{ id }}'))
+      .join('');
+
     return `<!-- @template name="${viewName}" -->
 <div class="container mt-4">
   <h1>${modelName} Details</h1>
@@ -97,9 +192,9 @@ ${fieldRows}
   </div>
 
   <div class="mt-3">
-    <a href="/${modelName.toLowerCase()}/{{ id }}/edit" class="btn btn-warning">Edit</a>
-    <a href="/${modelName.toLowerCase()}" class="btn btn-secondary">Back to List</a>
-  </div>
+    <a href="${basePath}/{{ id }}/edit" class="btn btn-warning">Edit</a>
+    <a href="${basePath}" class="btn btn-secondary">Back to List</a>
+  </div>${childSections}
 </div>`;
   }
 
@@ -107,6 +202,7 @@ ${fieldRows}
     modelName: string, 
     viewName: string, 
     fields: [string, any][],
+    basePath: string,
     onSuccess?: WebPageConfig['onSuccess'],
     onError?: WebPageConfig['onError'],
     enumValuesMap: Record<string, string[]> = {}
@@ -146,19 +242,19 @@ ${fieldRows}
       : '';
 
     const redirectAttr = onSuccess?.redirect 
-      ? `data-redirect="${onSuccess.redirect}"` 
+      ? `data-redirect="${this.prefixToTemplatePath(onSuccess.redirect)}"` 
       : '';
 
     return `<!-- @template name="${viewName}" -->
 <div class="container mt-4">
   <h1>Create ${modelName}</h1>
   
-  <form method="POST" action="/${modelName.toLowerCase()}/create" ${strategyAttr} ${redirectAttr} data-entity-name="${modelName}" data-field-types='${fieldTypesJson}'>
+  <form method="POST" action="${basePath}/create" ${strategyAttr} ${redirectAttr} data-entity-name="${modelName}" data-field-types='${fieldTypesJson}'>
 ${formFields}
     
     <div class="d-flex gap-2">
       <button type="submit" class="btn btn-primary">Create</button>
-      <a href="/${modelName.toLowerCase()}" class="btn btn-secondary">Cancel</a>
+      <a href="${basePath}" class="btn btn-secondary">Cancel</a>
     </div>
   </form>
 </div>`;
@@ -168,6 +264,7 @@ ${formFields}
     modelName: string, 
     viewName: string, 
     fields: [string, any][],
+    basePath: string,
     onSuccess?: WebPageConfig['onSuccess'],
     onError?: WebPageConfig['onError'],
     enumValuesMap: Record<string, string[]> = {}
@@ -209,12 +306,12 @@ ${formFields}
 <div class="container mt-4">
   <h1>Edit ${modelName}</h1>
   
-  <form method="POST" action="/${modelName.toLowerCase()}/{{ id }}/edit" ${strategyAttr} data-entity-name="${modelName}" data-field-types='${fieldTypesJson}'>
+  <form method="POST" action="${basePath}/{{ id }}/edit" ${strategyAttr} data-entity-name="${modelName}" data-field-types='${fieldTypesJson}'>
 ${formFields}
     
     <div class="d-flex gap-2">
       <button type="submit" class="btn btn-primary">Update</button>
-      <a href="/${modelName.toLowerCase()}/{{ id }}" class="btn btn-secondary">Cancel</a>
+      <a href="${basePath}/{{ id }}" class="btn btn-secondary">Cancel</a>
     </div>
   </form>
 </div>`;
@@ -376,6 +473,9 @@ ${options}
 
       const fields = Object.entries(aggregate.fields);
       const enumValuesMap = this.getEnumValuesMap(config, resourceName);
+      const basePath = this.prefixToTemplatePath(resourceConfig.prefix);
+
+      const withChildChildren = getChildrenOfParent(config, resourceName);
 
       resourceConfig.pages.forEach(page => {
         if (!page.view) return;
@@ -386,10 +486,17 @@ ${options}
           return;
         }
 
+        const useCaseWithChild = (() => {
+          if (!page.useCase) return false;
+          const [model, action] = page.useCase.split(':');
+          return (config.useCases[model] as Record<string, { withChild?: boolean }>)?.[action]?.withChild === true;
+        })();
+        const childrenForTemplate = useCaseWithChild && withChildChildren.length > 0 ? withChildChildren : undefined;
+
         if (page.path === '/' && page.useCase?.endsWith(':list')) {
-          result[page.view] = this.renderListTemplate(resourceName, page.view, fields);
+          result[page.view] = this.renderListTemplate(resourceName, page.view, fields, basePath, childrenForTemplate);
         } else if (page.path.includes(':id') && !page.path.includes('edit')) {
-          result[page.view] = this.renderDetailTemplate(resourceName, page.view, fields);
+          result[page.view] = this.renderDetailTemplate(resourceName, page.view, fields, basePath, childrenForTemplate);
         } else if (page.path.includes('/create')) {
           // Find corresponding POST endpoint for onSuccess/onError
           const postEndpoint = resourceConfig.pages.find(p => 
@@ -399,6 +506,7 @@ ${options}
             resourceName, 
             page.view, 
             fields,
+            basePath,
             postEndpoint?.onSuccess,
             postEndpoint?.onError,
             enumValuesMap
@@ -412,6 +520,7 @@ ${options}
             resourceName, 
             page.view, 
             fields,
+            basePath,
             postEndpoint?.onSuccess,
             postEndpoint?.onError,
             enumValuesMap

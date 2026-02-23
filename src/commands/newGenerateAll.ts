@@ -12,7 +12,8 @@ import { NewStoreGenerator } from '../generators/newStoreGenerator';
 import { initGenerationRegistry } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
 import { GENERATOR_MARKERS, COMMON_FILES } from '../utils/constants';
-import { isNewModuleConfig } from '../types/configTypes';
+import { isNewModuleConfig, NewModuleConfig } from '../types/configTypes';
+import { getChildrenOfParent, buildChildEntityMap } from '../utils/childEntityUtils';
 
 export async function handleNewGenerateAll(
   yamlPathArg?: string,
@@ -161,18 +162,36 @@ export async function handleNewGenerateAll(
         registration: ''
       };
 
-      // Add controller imports if they exist
-      controllerPaths.forEach(ctrlPath => {
-        const ctrlName = path.basename(ctrlPath, '.ts');
-        if (ctrlName.startsWith(modelName)) {
-          const rel = path.relative(srcDir!, ctrlPath).replace(/\\/g, '/').replace(/\.ts$/, '');
-          const importPath = rel.startsWith('.') ? rel : `./${rel}`;
-          init.importController += `import { ${ctrlName} } from '${importPath}';\n`;
-          
-          // Determine constructor params based on controller type
-          init.registration += `new ${ctrlName}(${entityVar}UseCase),\n  `;
-        }
-      });
+      // Check if this root entity's web controller needs child services (withChild: true)
+          const childEntityMap = buildChildEntityMap(moduleConfig);
+          const isRootEntity = !childEntityMap.has(modelName);
+          const withChildChildren = isRootEntity ? getChildrenOfParent(moduleConfig, modelName) : [];
+          const webUseCases = (moduleConfig as NewModuleConfig).useCases[modelName];
+          const needsChildServices = withChildChildren.length > 0 && webUseCases && Object.entries(webUseCases).some(
+            ([action, uc]) => action === 'get' && uc.withChild === true
+          );
+
+          // Add controller imports if they exist
+          controllerPaths.forEach(ctrlPath => {
+            const ctrlName = path.basename(ctrlPath, '.ts');
+            const ctrlModelName = ctrlName.replace(/(Api|Web)Controller$/, '');
+            if (ctrlModelName === modelName) {
+              const rel = path.relative(srcDir!, ctrlPath).replace(/\\/g, '/').replace(/\.ts$/, '');
+              const importPath = rel.startsWith('.') ? rel : `./${rel}`;
+              init.importController += `import { ${ctrlName} } from '${importPath}';\n`;
+              
+              // Web controllers may need child services when withChild is true
+              const isWebCtrl = ctrlName.endsWith('WebController');
+              if (isWebCtrl && needsChildServices) {
+                const childServiceArgs = withChildChildren
+                  .map(c => c.childEntityName.charAt(0).toLowerCase() + c.childEntityName.slice(1) + 'Service')
+                  .join(', ');
+                init.registration += `new ${ctrlName}(${entityVar}UseCase, ${childServiceArgs}),\n  `;
+              } else {
+                init.registration += `new ${ctrlName}(${entityVar}UseCase),\n  `;
+              }
+            }
+          });
 
       list.push(init);
     });
@@ -300,6 +319,19 @@ export async function handleNewGenerateAll(
         const block = '\n' + wiringLines.join('\n') + '\n';
         appTs = before + block + after;
       }
+
+      // Deduplicate import lines across the entire file
+      const lines = appTs.split('\n');
+      const seenImports = new Set<string>();
+      const deduped = lines.filter(line => {
+        const trimmed = line.trim();
+        if (/^import\s+/.test(trimmed) && trimmed.endsWith(';')) {
+          if (seenImports.has(trimmed)) return false;
+          seenImports.add(trimmed);
+        }
+        return true;
+      });
+      appTs = deduped.join('\n');
 
       fs.writeFileSync(appTsPath, appTs, 'utf8');
       // eslint-disable-next-line no-console

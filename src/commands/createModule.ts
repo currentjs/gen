@@ -22,6 +22,7 @@ function moduleYamlTemplate(moduleName: string): string {
     useCases: {
       [entityName]: {
         list: {
+          withChild: false,
           input: {
             pagination: {
               type: 'offset',
@@ -38,6 +39,7 @@ function moduleYamlTemplate(moduleName: string): string {
           handlers: ['default:list']
         },
         get: {
+          withChild: false,
           input: {
             identifier: 'id'
           },
@@ -47,6 +49,7 @@ function moduleYamlTemplate(moduleName: string): string {
           handlers: ['default:get']
         },
         create: {
+          withChild: false,
           input: {
             from: entityName
           },
@@ -56,6 +59,7 @@ function moduleYamlTemplate(moduleName: string): string {
           handlers: ['default:create']
         },
         update: {
+          withChild: false,
           input: {
             identifier: 'id',
             from: entityName,
@@ -67,6 +71,7 @@ function moduleYamlTemplate(moduleName: string): string {
           handlers: ['default:update']
         },
         delete: {
+          withChild: false,
           input: {
             identifier: 'id'
           },

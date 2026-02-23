@@ -11,6 +11,7 @@ import {
   ValueObjectConfig,
   isNewModuleConfig 
 } from '../types/configTypes';
+import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
 
 interface TypeMapping {
   [key: string]: string;
@@ -102,7 +103,8 @@ export class DtoGenerator {
     modelName: string,
     actionName: string,
     inputConfig: UseCaseInputConfig | undefined,
-    aggregateConfig: AggregateConfig
+    aggregateConfig: AggregateConfig,
+    childInfo?: ChildEntityInfo
   ): string {
     const className = `${modelName}${this.capitalize(actionName)}Input`;
     
@@ -176,19 +178,17 @@ export class DtoGenerator {
         );
       }
 
-      // For aggregate roots, add ownerId field (injected from authenticated user)
-      // This is needed for create operations to set ownership
-      const isRoot = aggregateConfig.root === true;
       const isCreateAction = !inputConfig.identifier && !inputConfig.partial;
       
-      if (isRoot && isCreateAction) {
-        fieldDeclarations.push(`  readonly ownerId: number;`);
-        constructorParams.push(`ownerId: number`);
-        constructorAssignments.push(`    this.ownerId = ownerId;`);
-        validationChecks.push(`    if (b.ownerId === undefined || b.ownerId === null) {
-      throw new Error('ownerId is required');
+      if (isCreateAction) {
+        const ownerOrParentField = childInfo ? childInfo.parentIdField : 'ownerId';
+        fieldDeclarations.push(`  readonly ${ownerOrParentField}: number;`);
+        constructorParams.push(`${ownerOrParentField}: number`);
+        constructorAssignments.push(`    this.${ownerOrParentField} = ${ownerOrParentField};`);
+        validationChecks.push(`    if (b.${ownerOrParentField} === undefined || b.${ownerOrParentField} === null) {
+      throw new Error('${ownerOrParentField} is required');
     }`);
-        fieldTransforms.push(`      ownerId: typeof b.ownerId === 'string' ? parseInt(b.ownerId, 10) : b.ownerId as number`);
+        fieldTransforms.push(`      ${ownerOrParentField}: typeof b.${ownerOrParentField} === 'string' ? parseInt(b.${ownerOrParentField}, 10) : b.${ownerOrParentField} as number`);
       }
 
       // Add fields
@@ -413,6 +413,41 @@ export class ${className} {
 }`;
     }
 
+    // List action without pagination: still wrap items in a list container
+    if (actionName === 'list') {
+      return `export class ${className}Item {
+${fieldsStr}
+
+  private constructor(data: { ${paramsStr} }) {
+${fieldDeclarations.map(d => {
+  const match = d.match(/readonly (\w+)/);
+  if (match) return `    this.${match[1]} = data.${match[1]};`;
+  return '';
+}).filter(Boolean).join('\n')}
+  }
+
+  static from(entity: ${modelName}): ${className}Item {
+    return new ${className}Item({
+${mappingsStr}
+    });
+  }
+}
+
+export class ${className} {
+  readonly items: ${className}Item[];
+
+  private constructor(data: { items: ${className}Item[] }) {
+    this.items = data.items;
+  }
+
+  static from(data: { items: ${modelName}[] }): ${className} {
+    return new ${className}({
+      items: data.items.map(item => ${className}Item.from(item))
+    });
+  }
+}`;
+    }
+
     return `export class ${className} {
 ${fieldsStr}
 
@@ -492,6 +527,8 @@ ${mappingsStr}
       });
     }
 
+    const childEntityMap = buildChildEntityMap(config);
+
     // Generate DTOs for each use case
     Object.entries(config.useCases).forEach(([modelName, useCases]) => {
       const aggregateConfig = this.availableAggregates.get(modelName);
@@ -501,13 +538,16 @@ ${mappingsStr}
         return;
       }
 
+      const childInfo = childEntityMap.get(modelName);
+
       Object.entries(useCases).forEach(([actionName, useCaseConfig]) => {
         // Generate Input DTO
         const inputDto = this.generateInputDto(
           modelName,
           actionName,
           useCaseConfig.input,
-          aggregateConfig
+          aggregateConfig,
+          childInfo
         );
 
         // Generate Output DTO

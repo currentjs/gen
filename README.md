@@ -593,6 +593,33 @@ permissions:                            # Role-based access control
     actions: [publish]                  # Editor role permissions
 ```
 
+### Displaying child entities on root pages (withChild)
+
+When you have an aggregate root with child entities (e.g. `Invoice` with `InvoiceItem`), you can show child data on the root’s list or detail page by setting `withChild: true` on the corresponding use case.
+
+- **`list` + `withChild: true`**: Adds a link column (e.g. “Items”) on the list page; each row links to that root’s child entity list. No extra data is loaded (good for performance).
+- **`get` + `withChild: true`**: On the root’s detail page, shows a table of child entities below the main card, with links to view/edit each child and to add new ones.
+
+If the entity has no child entities, `withChild` is ignored. The parameter defaults to `false` when you run `currentjs create module`.
+
+**Example:**
+
+```yaml
+useCases:
+  Invoice:
+    list:
+      withChild: true    # Adds link column to child entities on list page
+      input:
+        pagination: { type: offset, defaults: { limit: 20, maxLimit: 100 } }
+      output: { from: Invoice, pagination: true }
+      handlers: ['default:list']
+    get:
+      withChild: true    # Shows child entities table on detail page
+      input: { identifier: id }
+      output: { from: Invoice }
+      handlers: ['default:get']
+```
+
 ### Field Types and Validation
 
 **Available Field Types:**

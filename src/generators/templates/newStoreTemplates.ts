@@ -127,6 +127,7 @@ export class {{ENTITY_NAME}}Store {
 
     return result.success;
   }
+{{GET_BY_PARENT_ID_METHOD}}
 {{GET_RESOURCE_OWNER_METHOD}}}`
 };
 

@@ -4,6 +4,7 @@ import * as path from 'path';
 import { writeGeneratedFile } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
 import { NewModuleConfig, AggregateConfig, AggregateFieldConfig, ValueObjectConfig, isNewModuleConfig } from '../types/configTypes';
+import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
 import { newStoreTemplates, newStoreFileTemplate } from './templates/newStoreTemplates';
 
 export class NewStoreGenerator {
@@ -93,13 +94,11 @@ export class NewStoreGenerator {
     return result;
   }
 
-  private generateRowFields(fields: [string, AggregateFieldConfig][], isRoot: boolean): string {
+  private generateRowFields(fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
     const result: string[] = [];
     
-    // Add ownerId for aggregate roots
-    if (isRoot) {
-      result.push('  ownerId: number;');
-    }
+    const ownerOrParentField = childInfo ? childInfo.parentIdField : 'ownerId';
+    result.push(`  ${ownerOrParentField}: number;`);
     
     fields.forEach(([fieldName, fieldConfig]) => {
       const tsType = this.mapTypeToRowType(fieldConfig.type);
@@ -110,22 +109,18 @@ export class NewStoreGenerator {
     return result.join('\n');
   }
 
-  private generateFieldNamesStr(fields: [string, AggregateFieldConfig][], isRoot: boolean): string {
+  private generateFieldNamesStr(fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
     const fieldNames = ['id'];
-    if (isRoot) {
-      fieldNames.push('ownerId');
-    }
+    fieldNames.push(childInfo ? childInfo.parentIdField : 'ownerId');
     fieldNames.push(...fields.map(([name]) => name));
     return fieldNames.map(f => `\\\`${f}\\\``).join(', ');
   }
 
-  private generateRowToModelMapping(fields: [string, AggregateFieldConfig][], isRoot: boolean): string {
+  private generateRowToModelMapping(fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
     const result: string[] = [];
     
-    // Add ownerId for aggregate roots
-    if (isRoot) {
-      result.push('      row.ownerId');
-    }
+    const ownerOrParentField = childInfo ? childInfo.parentIdField : 'ownerId';
+    result.push(`      row.${ownerOrParentField}`);
     
     fields.forEach(([fieldName, fieldConfig]) => {
       const fieldType = fieldConfig.type;
@@ -179,13 +174,11 @@ export class NewStoreGenerator {
     return result.join(',\n');
   }
 
-  private generateInsertDataMapping(fields: [string, AggregateFieldConfig][], isRoot: boolean): string {
+  private generateInsertDataMapping(fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
     const result: string[] = [];
     
-    // Add ownerId for aggregate roots
-    if (isRoot) {
-      result.push('      ownerId: entity.ownerId');
-    }
+    const ownerOrParentField = childInfo ? childInfo.parentIdField : 'ownerId';
+    result.push(`      ${ownerOrParentField}: entity.${ownerOrParentField}`);
     
     fields.forEach(([fieldName, fieldConfig]) => {
       const fieldType = fieldConfig.type;
@@ -291,15 +284,47 @@ export class NewStoreGenerator {
     return '\n' + uniqueImports.join('\n');
   }
 
-  /**
-   * Generate getResourceOwner method for aggregate roots.
-   * This method fetches only the ownerId for authorization checks.
-   */
-  private generateGetResourceOwnerMethod(isRoot: boolean): string {
-    if (!isRoot) {
-      return '';
+  private generateGetByParentIdMethod(modelName: string, fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
+    if (!childInfo) return '';
+    const fieldList = ['id', childInfo.parentIdField, ...fields.map(([name]) => name)].map(f => '\\`' + f + '\\`').join(', ');
+    const parentIdField = childInfo.parentIdField;
+    return `
+
+  async getByParentId(parentId: number): Promise<${modelName}[]> {
+    const result = await this.db.query(
+      \`SELECT ${fieldList} FROM \\\`\${this.tableName}\\\` WHERE \\\`${parentIdField}\\\` = :parentId AND deleted_at IS NULL\`,
+      { parentId }
+    );
+
+    if (result.success && result.data) {
+      return result.data.map((row: ${modelName}Row) => this.rowToModel(row));
     }
-    
+    return [];
+  }`;
+  }
+
+  private generateGetResourceOwnerMethod(childInfo?: ChildEntityInfo): string {
+    if (childInfo) {
+      const parentTable = childInfo.parentTableName;
+      const parentIdField = childInfo.parentIdField;
+      return `
+
+  /**
+   * Get the owner ID of a resource by its ID (via parent entity).
+   * Used for pre-mutation authorization checks.
+   */
+  async getResourceOwner(id: number): Promise<number | null> {
+    const result = await this.db.query(
+      \`SELECT p.ownerId FROM \\\`\${this.tableName}\\\` c INNER JOIN \\\`${parentTable}\\\` p ON p.id = c.\\\`${parentIdField}\\\` WHERE c.id = :id AND c.deleted_at IS NULL\`,
+      { id }
+    );
+
+    if (result.success && result.data && result.data.length > 0) {
+      return result.data[0].ownerId as number;
+    }
+    return null;
+  }`;
+    }
     return `
 
   /**
@@ -319,10 +344,9 @@ export class NewStoreGenerator {
   }`;
   }
 
-  private generateStore(modelName: string, aggregateConfig: AggregateConfig): string {
+  private generateStore(modelName: string, aggregateConfig: AggregateConfig, childInfo?: ChildEntityInfo): string {
     const tableName = modelName.toLowerCase();
     const fields = Object.entries(aggregateConfig.fields);
-    const isRoot = aggregateConfig.root === true;
     
     // Sort fields for rowToModel to match entity constructor order (required first, optional second)
     const sortedFields = this.sortFieldsForConstructor(fields);
@@ -330,14 +354,15 @@ export class NewStoreGenerator {
     const variables: Record<string, string> = {
       ENTITY_NAME: modelName,
       TABLE_NAME: tableName,
-      ROW_FIELDS: this.generateRowFields(fields, isRoot),
-      FIELD_NAMES: this.generateFieldNamesStr(fields, isRoot),
-      ROW_TO_MODEL_MAPPING: this.generateRowToModelMapping(sortedFields, isRoot),
-      INSERT_DATA_MAPPING: this.generateInsertDataMapping(fields, isRoot),
+      ROW_FIELDS: this.generateRowFields(fields, childInfo),
+      FIELD_NAMES: this.generateFieldNamesStr(fields, childInfo),
+      ROW_TO_MODEL_MAPPING: this.generateRowToModelMapping(sortedFields, childInfo),
+      INSERT_DATA_MAPPING: this.generateInsertDataMapping(fields, childInfo),
       UPDATE_DATA_MAPPING: this.generateUpdateDataMapping(fields),
       UPDATE_FIELDS_ARRAY: this.generateUpdateFieldsArray(fields),
       VALUE_OBJECT_IMPORTS: this.generateValueObjectImports(fields),
-      GET_RESOURCE_OWNER_METHOD: this.generateGetResourceOwnerMethod(isRoot)
+      GET_BY_PARENT_ID_METHOD: this.generateGetByParentIdMethod(modelName, fields, childInfo),
+      GET_RESOURCE_OWNER_METHOD: this.generateGetResourceOwnerMethod(childInfo)
     };
 
     const rowInterface = this.replaceTemplateVars(newStoreTemplates.rowInterface, variables);
@@ -363,9 +388,11 @@ export class NewStoreGenerator {
     }
 
     // Generate a store for each aggregate
+    const childEntityMap = buildChildEntityMap(config);
     if (config.domain.aggregates) {
       Object.entries(config.domain.aggregates).forEach(([modelName, aggregateConfig]) => {
-        result[modelName] = this.generateStore(modelName, aggregateConfig);
+        const childInfo = childEntityMap.get(modelName);
+        result[modelName] = this.generateStore(modelName, aggregateConfig, childInfo);
       });
     }
 

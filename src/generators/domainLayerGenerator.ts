@@ -4,6 +4,7 @@ import * as path from 'path';
 import { writeGeneratedFile } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
 import { NewModuleConfig, AggregateConfig, ValueObjectConfig, isNewModuleConfig } from '../types/configTypes';
+import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
 
 interface TypeMapping {
   [key: string]: string;
@@ -135,7 +136,12 @@ export class DomainLayerGenerator {
 }`;
   }
 
-  private generateAggregate(name: string, config: AggregateConfig, allAggregates: Record<string, AggregateConfig>): string {
+  private generateAggregate(
+    name: string,
+    config: AggregateConfig,
+    allAggregates: Record<string, AggregateConfig>,
+    childInfo: ChildEntityInfo | undefined
+  ): string {
     const fields = Object.entries(config.fields);
     
     // Determine which entities are contained in this aggregate
@@ -159,10 +165,11 @@ export class DomainLayerGenerator {
     
     const imports = [entityImports, valueObjectImports].filter(Boolean).join('\n');
 
-    // Generate constructor parameters
-    // Always add id, and ownerId for aggregate roots (for owner-based access control)
+    // Generate constructor parameters: id, then ownerId (root) or parentId field (child)
     const constructorParams: string[] = ['public id: number'];
-    if (config.root) {
+    if (childInfo) {
+      constructorParams.push(`public ${childInfo.parentIdField}: number`);
+    } else {
       constructorParams.push('public ownerId: number');
     }
     
@@ -265,10 +272,12 @@ ${setterMethods}
     }
 
     // Generate aggregates
+    const childEntityMap = buildChildEntityMap(config);
     if (config.domain.aggregates) {
       Object.entries(config.domain.aggregates).forEach(([name, aggConfig]) => {
+        const childInfo = childEntityMap.get(name);
         result[name] = {
-          code: this.generateAggregate(name, aggConfig, config.domain.aggregates),
+          code: this.generateAggregate(name, aggConfig, config.domain.aggregates, childInfo),
           type: 'entity'
         };
       });
