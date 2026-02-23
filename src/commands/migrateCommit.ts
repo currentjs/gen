@@ -17,12 +17,13 @@ interface ModuleConfig {
   models?: ModelConfig[];
 }
 
-interface ModuleReference {
-  module: string;
+interface ModuleEntryWithPath {
+  path: string;
+  models?: ModelConfig[];
 }
 
 interface AppConfig {
-  modules?: Array<string | ModuleReference> | Record<string, ModuleConfig>;
+  modules?: Record<string, ModuleEntryWithPath>;
   models?: ModelConfig[];
 }
 
@@ -40,39 +41,24 @@ function collectModelsFromYaml(yamlPath: string): ModelConfig[] {
     sources.push(`app.yaml (${config.models.length} model(s))`);
   }
 
-  // Check if it's an app YAML (has modules as array of paths)
-  if (config.modules && Array.isArray(config.modules)) {
+  // App YAML: modules as Record<string, { path }> — resolve path and read module YAML for .models
+  if (config.modules && typeof config.modules === 'object' && !Array.isArray(config.modules)) {
     let moduleCount = 0;
-    config.modules.forEach(moduleRef => {
-      // Handle both string and object format
-      const modulePath = typeof moduleRef === 'string' ? moduleRef : moduleRef.module;
+    for (const entry of Object.values(config.modules)) {
+      const modulePath = entry.path;
+      if (!modulePath) continue;
       const moduleYamlPath = path.isAbsolute(modulePath)
         ? modulePath
         : path.resolve(projectRoot, modulePath);
-      
       if (fs.existsSync(moduleYamlPath)) {
         const moduleYamlContent = fs.readFileSync(moduleYamlPath, 'utf8');
         const moduleConfig = parseYaml(moduleYamlContent) as ModuleConfig;
-        
         if (moduleConfig.models) {
           allModels.push(...moduleConfig.models);
           moduleCount++;
         }
       }
-    });
-    if (moduleCount > 0) {
-      sources.push(`app.yaml modules section (${moduleCount} module(s))`);
     }
-  }
-  // Check if modules is an object (legacy format with models embedded)
-  else if (config.modules && typeof config.modules === 'object' && !Array.isArray(config.modules)) {
-    let moduleCount = 0;
-    Object.values(config.modules).forEach(moduleConfig => {
-      if (moduleConfig.models) {
-        allModels.push(...moduleConfig.models);
-        moduleCount++;
-      }
-    });
     if (moduleCount > 0) {
       sources.push(`app.yaml modules section (${moduleCount} module(s))`);
     }

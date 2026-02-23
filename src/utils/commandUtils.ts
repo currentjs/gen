@@ -12,28 +12,72 @@ import { ControllerGenerator } from '../generators/controllerGenerator';
 import { StoreGenerator } from '../generators/storeGenerator';
 import { TemplateGenerator } from '../generators/templateGenerator';
 
-export interface AppConfig {
-  modules: Array<string | { module: string }>;
-  providers?: Record<string, string>;
+export interface ModuleEntry {
+  path: string;
   database?: string;
+  styling?: string;
+  identifiers?: string;
 }
+
+export interface GlobalConfig {
+  database?: string;
+  styling?: string;
+  identifiers?: string;
+}
+
+export interface AppConfig {
+  providers?: Record<string, string>;
+  config?: GlobalConfig;
+  modules: Record<string, ModuleEntry>;
+}
+
+const DEFAULT_DATABASE = 'mysql';
+const DEFAULT_STYLING = 'bootstrap';
+const DEFAULT_IDENTIFIERS = 'id';
 
 export function loadAppConfig(yamlPath: string): AppConfig {
   const raw = fs.readFileSync(yamlPath, 'utf8');
   const parsed = parseYaml(raw);
   if (!parsed || typeof parsed !== 'object') {
-    return { modules: [] };
+    return { modules: {} };
   }
-  const modules = Array.isArray(parsed.modules) ? parsed.modules : [];
+  const modules = parsed.modules && typeof parsed.modules === 'object' && !Array.isArray(parsed.modules)
+    ? parsed.modules
+    : {};
   return {
-    modules,
     providers: parsed.providers,
-    database: parsed.database
+    config: parsed.config,
+    modules
   };
 }
 
 export function getModuleList(config: AppConfig): string[] {
-  return config.modules.map(m => (typeof m === 'string' ? m : m.module));
+  if (!config.modules || typeof config.modules !== 'object') return [];
+  return Object.values(config.modules).map((e: ModuleEntry) => e.path);
+}
+
+export interface ModuleEntryResolved {
+  name: string;
+  path: string;
+  database: string;
+  styling: string;
+  identifiers: string;
+}
+
+export function getModuleEntries(config: AppConfig): ModuleEntryResolved[] {
+  if (!config.modules || typeof config.modules !== 'object') return [];
+  const global = config.config || {};
+  const database = global.database ?? DEFAULT_DATABASE;
+  const styling = global.styling ?? DEFAULT_STYLING;
+  const identifiers = global.identifiers ?? DEFAULT_IDENTIFIERS;
+  const globalConfig = { database, styling, identifiers };
+  return Object.entries(config.modules).map(([name, entry]) => ({
+    name,
+    path: entry.path,
+    database: entry.database ?? globalConfig.database,
+    styling: entry.styling ?? globalConfig.styling,
+    identifiers: entry.identifiers ?? globalConfig.identifiers
+  }));
 }
 
 export function shouldIncludeModule(moduleYamlRel: string, moduleName?: string): boolean {

@@ -176,22 +176,24 @@ export function handleCreateModule(name?: string): void {
 
   // Add to root app.yaml
   const appYamlPath = path.join(process.cwd(), 'app.yaml');
-  let appConfig: any = { modules: [] };
+  let appConfig: any = { modules: {} };
   if (fs.existsSync(appYamlPath)) {
     try {
       const content = fs.readFileSync(appYamlPath, 'utf8');
-      appConfig = parseYaml(content) || { modules: [] };
+      appConfig = parseYaml(content) || { modules: {} };
     } catch {
-      appConfig = { modules: [] };
+      appConfig = { modules: {} };
     }
   }
-  if (!Array.isArray(appConfig.modules)) appConfig.modules = [];
+  if (!appConfig.modules || typeof appConfig.modules !== 'object' || Array.isArray(appConfig.modules)) {
+    appConfig.modules = {};
+  }
 
-  // Use posix-style path in YAML
+  const moduleKey = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
   const moduleYamlRel = path.posix.join('src', 'modules', name, `${name.toLowerCase()}.yaml`);
-  const alreadyPresent = appConfig.modules.some((m: any) => (typeof m === 'string' ? m === moduleYamlRel : m?.module === moduleYamlRel));
+  const alreadyPresent = appConfig.modules[moduleKey]?.path === moduleYamlRel;
   if (!alreadyPresent) {
-    appConfig.modules.push({ module: moduleYamlRel });
+    appConfig.modules[moduleKey] = { path: moduleYamlRel };
   }
 
   fs.writeFileSync(appYamlPath, stringifyYaml(appConfig), 'utf8');

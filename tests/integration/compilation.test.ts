@@ -38,12 +38,16 @@ describe('Integration: full app generation and compilation', () => {
     fs.copyFileSync(FIXTURES.invoice, path.join(invoiceModuleDir, 'invoice.yaml'));
     fs.copyFileSync(FIXTURES.product, path.join(productModuleDir, 'product.yaml'));
 
-    // 3. Update app.yaml to list both modules
+    // 3. Update app.yaml to list both modules (new format: object with path per module)
     const appYamlPath = path.join(tempDir, 'app.yaml');
     const appYaml = fs.readFileSync(appYamlPath, 'utf8');
     const appConfig = appYaml.replace(
-      'modules: []',
-      'modules:\n  - src/modules/Invoice/invoice.yaml\n  - src/modules/Product/product.yaml'
+      'modules: {}',
+      `modules:
+  Invoice:
+    path: src/modules/Invoice/invoice.yaml
+  Product:
+    path: src/modules/Product/product.yaml`
     );
     fs.writeFileSync(appYamlPath, appConfig, 'utf8');
 

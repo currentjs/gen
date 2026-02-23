@@ -7,7 +7,7 @@ import { colors } from '../utils/colors';
 import { GENERATOR_MARKERS, COMMON_FILES } from '../utils/constants';
 import { isValidModuleConfig, ModuleConfig } from '../types/configTypes';
 import { getChildrenOfParent, buildChildEntityMap } from '../utils/childEntityUtils';
-import { loadAppConfig, getModuleList, shouldIncludeModule, createGenerators } from '../utils/commandUtils';
+import { loadAppConfig, getModuleEntries, shouldIncludeModule, createGenerators } from '../utils/commandUtils';
 
 export async function handleGenerateAll(
   yamlPathArg?: string,
@@ -19,12 +19,14 @@ export async function handleGenerateAll(
   initGenerationRegistry(process.cwd());
 
   const appConfig = loadAppConfig(appYamlPath);
-  const modulesList = getModuleList(appConfig);
+  const moduleEntries = getModuleEntries(appConfig);
   const providersConfig = appConfig.providers;
-  const databaseProviderName = appConfig.database;
+  const defaultDatabaseKey = appConfig.config?.database;
 
-  const filteredModules = modulesList.filter(rel => shouldIncludeModule(rel, moduleName));
-  if (filteredModules.length === 0) {
+  const filteredEntries = moduleEntries.filter(
+    entry => shouldIncludeModule(entry.path, moduleName) || (moduleName && entry.name === moduleName)
+  );
+  if (filteredEntries.length === 0) {
     // eslint-disable-next-line no-console
     console.warn(colors.yellow(`No modules matched: ${moduleName}`));
     return;
@@ -35,6 +37,7 @@ export async function handleGenerateAll(
   interface ControllerInit {
     entityName: string;
     entityVar: string;
+    databaseKey: string;
     importController: string;
     importStore: string;
     importService: string;
@@ -46,10 +49,10 @@ export async function handleGenerateAll(
   const initsBySrcDir = new Map<string, ControllerInit[]>();
 
   // Process each module
-  for (const moduleYamlRel of filteredModules) {
-    const moduleYamlPath = path.isAbsolute(moduleYamlRel)
-      ? moduleYamlRel
-      : path.resolve(process.cwd(), moduleYamlRel);
+  for (const entry of filteredEntries) {
+    const moduleYamlPath = path.isAbsolute(entry.path)
+      ? entry.path
+      : path.resolve(process.cwd(), entry.path);
       
     if (!fs.existsSync(moduleYamlPath)) {
       // eslint-disable-next-line no-console
@@ -126,6 +129,7 @@ export async function handleGenerateAll(
       const init: ControllerInit = {
         entityName: modelName,
         entityVar,
+        databaseKey: entry.database,
         importStore: `import { ${modelName}Store } from './modules/${moduleFolderName}/infrastructure/stores/${modelName}Store';`,
         importService: `import { ${modelName}Service } from './modules/${moduleFolderName}/application/services/${modelName}Service';`,
         importUseCase: `import { ${modelName}UseCase } from './modules/${moduleFolderName}/application/useCases/${modelName}UseCase';`,
@@ -219,9 +223,26 @@ export async function handleGenerateAll(
         providersArrayEntries.push('mysql');
       }
 
-      const dbProviderKey = databaseProviderName || providersArrayEntries[0];
-      const ensureDbLine = `const providers: Record<string, IProvider> = {\n${providerInitLines.join(',\n')}\n};\nconst db = providers['${dbProviderKey}'] as ISqlProvider;`;
-      
+      const providerKeysSet = new Set(providersArrayEntries);
+      const usedDatabaseKeys = [...new Set(controllerInits.map(i => i.databaseKey))];
+      const dbVarByKey: Record<string, string> = {};
+      const dbLines: string[] = [`const providers: Record<string, IProvider> = {\n${providerInitLines.join(',\n')}\n};`];
+      const emittedProviderKeys = new Set<string>();
+      for (const key of usedDatabaseKeys) {
+        const resolvedKey = providerKeysSet.has(key) ? key : (defaultDatabaseKey && providerKeysSet.has(defaultDatabaseKey) ? defaultDatabaseKey : providersArrayEntries[0]);
+        if (!providerKeysSet.has(key)) {
+          // eslint-disable-next-line no-console
+          console.warn(colors.yellow(`Module uses database '${key}' which is not in providers; using '${resolvedKey}'`));
+        }
+        const varName = 'db' + (resolvedKey.charAt(0).toUpperCase() + resolvedKey.slice(1));
+        dbVarByKey[key] = varName;
+        if (!emittedProviderKeys.has(resolvedKey)) {
+          emittedProviderKeys.add(resolvedKey);
+          dbLines.push(`const ${varName} = providers['${resolvedKey}'] as ISqlProvider;`);
+        }
+      }
+      const ensureDbLine = dbLines.join('\n');
+
       // Ensure router imports
       if (!appTs.includes("from '@currentjs/router'")) {
         importLines.push(`import { createWebServer } from '@currentjs/router';`);
@@ -259,10 +280,11 @@ export async function handleGenerateAll(
       // Providers + DB initialization
       wiringLines.push(ensureDbLine);
 
-      // Store -> Service -> UseCase wiring
+      // Store -> Service -> UseCase wiring (each store uses its module's database)
       for (const init of controllerInits) {
-        const { entityName, entityVar } = init;
-        wiringLines.push(`const ${entityVar}Store = new ${entityName}Store(db);`);
+        const { entityName, entityVar, databaseKey } = init;
+        const dbVar = dbVarByKey[databaseKey] ?? dbVarByKey[Object.keys(dbVarByKey)[0]];
+        wiringLines.push(`const ${entityVar}Store = new ${entityName}Store(${dbVar});`);
         wiringLines.push(`const ${entityVar}Service = new ${entityName}Service(${entityVar}Store);`);
         wiringLines.push(`const ${entityVar}UseCase = new ${entityName}UseCase(${entityVar}Service);`);
       }
