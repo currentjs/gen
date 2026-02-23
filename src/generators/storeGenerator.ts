@@ -6,38 +6,18 @@ import { colors } from '../utils/colors';
 import { ModuleConfig, AggregateConfig, AggregateFieldConfig, ValueObjectConfig, isValidModuleConfig } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
 import { storeTemplates, storeFileTemplate } from './templates/storeTemplates';
+import { capitalize, mapRowType } from '../utils/typeUtils';
 
 export class StoreGenerator {
-  // Maps YAML types to TypeScript types for Row interface (database representation)
-  private rowTypeMapping: Record<string, string> = {
-    string: 'string',
-    number: 'number',
-    integer: 'number',
-    decimal: 'number',
-    boolean: 'boolean',
-    datetime: 'string',  // MySQL returns datetime as string
-    date: 'string',      // MySQL returns date as string
-    id: 'number',       // Foreign key references are numbers
-    json: 'string',     // JSON stored as string in MySQL
-    array: 'string',    // Arrays serialized as string
-    object: 'string',   // Objects serialized as string
-    enum: 'string'      // Enum values stored as strings
-  };
-
   private availableValueObjects: Map<string, ValueObjectConfig> = new Map();
 
-  private capitalize(str: string): string {
-    return str.charAt(0).toUpperCase() + str.slice(1);
-  }
-
   private isValueObjectType(fieldType: string): boolean {
-    // Check if the type matches a known value object (case-insensitive)
-    const capitalizedType = this.capitalize(fieldType);
+    const capitalizedType = capitalize(fieldType);
     return this.availableValueObjects.has(capitalizedType);
   }
 
   private getValueObjectName(fieldType: string): string {
-    return this.capitalize(fieldType);
+    return capitalize(fieldType);
   }
 
   private getValueObjectConfig(fieldType: string): ValueObjectConfig | undefined {
@@ -70,7 +50,7 @@ export class StoreGenerator {
     for (const [fieldName, fieldConfig] of fields) {
       if (typeof fieldConfig === 'object' && 'values' in fieldConfig) {
         // This is an enum field, return the generated type name
-        return `${voName}${this.capitalize(fieldName)}`;
+        return `${voName}${capitalize(fieldName)}`;
       }
     }
     
@@ -78,11 +58,54 @@ export class StoreGenerator {
   }
 
   private mapTypeToRowType(yamlType: string): string {
-    // Value objects are stored as strings in the database
-    if (this.isValueObjectType(yamlType)) {
-      return 'string';
+    return mapRowType(yamlType, this.availableValueObjects);
+  }
+
+  /** Single line for serializing a value object field to DB (insert/update). */
+  private generateValueObjectSerialization(
+    fieldName: string,
+    voName: string,
+    voConfig: ValueObjectConfig
+  ): string {
+    const voFields = Object.keys(voConfig.fields);
+    if (voFields.length > 1) {
+      return `      ${fieldName}: entity.${fieldName} ? JSON.stringify(entity.${fieldName}) : undefined`;
     }
-    return this.rowTypeMapping[yamlType] || 'string';
+    if (voFields.length === 1) {
+      return `      ${fieldName}: entity.${fieldName}?.${voFields[0]}`;
+    }
+    return `      ${fieldName}: entity.${fieldName} ? JSON.stringify(entity.${fieldName}) : undefined`;
+  }
+
+  /** Single line for deserializing a value object from row (rowToModel). */
+  private generateValueObjectDeserialization(
+    fieldName: string,
+    voName: string,
+    voConfig: ValueObjectConfig
+  ): string {
+    const voFields = Object.keys(voConfig.fields);
+    if (voFields.length > 1) {
+      const voArgs = voFields.map(f => `parsed.${f}`).join(', ');
+      return `      row.${fieldName} ? (() => { const parsed = JSON.parse(row.${fieldName}); return new ${voName}(${voArgs}); })() : undefined`;
+    }
+    if (voFields.length === 1) {
+      const singleFieldType = voConfig.fields[voFields[0]];
+      const hasEnumValues = typeof singleFieldType === 'object' && 'values' in singleFieldType;
+      if (hasEnumValues) {
+        const enumTypeName = this.getValueObjectFieldTypeName(voName, voConfig);
+        return `      row.${fieldName} ? new ${voName}(row.${fieldName} as ${enumTypeName}) : undefined`;
+      }
+      return `      row.${fieldName} ? new ${voName}(row.${fieldName}) : undefined`;
+    }
+    return `      row.${fieldName} ? new ${voName}(...Object.values(JSON.parse(row.${fieldName}))) : undefined`;
+  }
+
+  /** Single line for datetime conversion: toDate (row->model) or toMySQL (entity->row). */
+  private generateDatetimeConversion(fieldName: string, direction: 'toDate' | 'toMySQL'): string {
+    if (direction === 'toDate') {
+      return `      row.${fieldName} ? new Date(row.${fieldName}) : undefined`;
+    }
+    return `      ${fieldName}: entity.${fieldName} ? this.toMySQLDatetime(entity.${fieldName}) : undefined`;
   }
 
   private replaceTemplateVars(template: string, variables: Record<string, string>): string {
@@ -127,7 +150,7 @@ export class StoreGenerator {
       
       // Handle datetime/date conversion
       if (fieldType === 'datetime' || fieldType === 'date') {
-        result.push(`      row.${fieldName} ? new Date(row.${fieldName}) : undefined`);
+        result.push(this.generateDatetimeConversion(fieldName, 'toDate'));
         return;
       }
       
@@ -141,30 +164,11 @@ export class StoreGenerator {
       if (this.isValueObjectType(fieldType)) {
         const voName = this.getValueObjectName(fieldType);
         const voConfig = this.getValueObjectConfig(fieldType);
-        
         if (voConfig) {
-          const voFields = Object.keys(voConfig.fields);
-          if (voFields.length > 1) {
-            // Multi-field value object - deserialize from JSON
-            const voArgs = voFields.map(f => `parsed.${f}`).join(', ');
-            result.push(`      row.${fieldName} ? (() => { const parsed = JSON.parse(row.${fieldName}); return new ${voName}(${voArgs}); })() : undefined`);
-            return;
-          } else if (voFields.length === 1) {
-            // Single-field value object
-            const singleFieldType = voConfig.fields[voFields[0]];
-            const hasEnumValues = typeof singleFieldType === 'object' && 'values' in singleFieldType;
-            if (hasEnumValues) {
-              const enumTypeName = this.getValueObjectFieldTypeName(voName, voConfig);
-              result.push(`      row.${fieldName} ? new ${voName}(row.${fieldName} as ${enumTypeName}) : undefined`);
-            } else {
-              result.push(`      row.${fieldName} ? new ${voName}(row.${fieldName}) : undefined`);
-            }
-            return;
-          }
+          result.push(this.generateValueObjectDeserialization(fieldName, voName, voConfig));
+        } else {
+          result.push(`      row.${fieldName} ? new ${voName}(...Object.values(JSON.parse(row.${fieldName}))) : undefined`);
         }
-        
-        // Fallback - try to deserialize from JSON
-        result.push(`      row.${fieldName} ? new ${voName}(...Object.values(JSON.parse(row.${fieldName}))) : undefined`);
         return;
       }
       
@@ -185,7 +189,7 @@ export class StoreGenerator {
       
       // Handle datetime/date - convert Date to MySQL DATETIME format
       if (fieldType === 'datetime' || fieldType === 'date') {
-        result.push(`      ${fieldName}: entity.${fieldName} ? this.toMySQLDatetime(entity.${fieldName}) : undefined`);
+        result.push(this.generateDatetimeConversion(fieldName, 'toMySQL'));
         return;
       }
       
@@ -193,19 +197,10 @@ export class StoreGenerator {
       if (this.isValueObjectType(fieldType)) {
         const voConfig = this.getValueObjectConfig(fieldType);
         if (voConfig) {
-          const voFields = Object.keys(voConfig.fields);
-          if (voFields.length > 1) {
-            // Multi-field value object - serialize to JSON
-            result.push(`      ${fieldName}: entity.${fieldName} ? JSON.stringify(entity.${fieldName}) : undefined`);
-            return;
-          } else if (voFields.length === 1) {
-            // Single-field value object - extract the single field
-            result.push(`      ${fieldName}: entity.${fieldName}?.${voFields[0]}`);
-            return;
-          }
+          result.push(this.generateValueObjectSerialization(fieldName, this.getValueObjectName(fieldType), voConfig));
+        } else {
+          result.push(`      ${fieldName}: entity.${fieldName} ? JSON.stringify(entity.${fieldName}) : undefined`);
         }
-        // Fallback - serialize to JSON
-        result.push(`      ${fieldName}: entity.${fieldName} ? JSON.stringify(entity.${fieldName}) : undefined`);
         return;
       }
       
@@ -219,29 +214,16 @@ export class StoreGenerator {
     return fields
       .map(([fieldName, fieldConfig]) => {
         const fieldType = fieldConfig.type;
-        
-        // Handle datetime/date - convert Date to MySQL DATETIME format
         if (fieldType === 'datetime' || fieldType === 'date') {
-          return `      ${fieldName}: entity.${fieldName} ? this.toMySQLDatetime(entity.${fieldName}) : undefined`;
+          return this.generateDatetimeConversion(fieldName, 'toMySQL');
         }
-        
-        // Handle value object - serialize to JSON
         if (this.isValueObjectType(fieldType)) {
           const voConfig = this.getValueObjectConfig(fieldType);
           if (voConfig) {
-            const voFields = Object.keys(voConfig.fields);
-            if (voFields.length > 1) {
-              // Multi-field value object - serialize to JSON
-              return `      ${fieldName}: entity.${fieldName} ? JSON.stringify(entity.${fieldName}) : undefined`;
-            } else if (voFields.length === 1) {
-              // Single-field value object - extract the single field
-              return `      ${fieldName}: entity.${fieldName}?.${voFields[0]}`;
-            }
+            return this.generateValueObjectSerialization(fieldName, this.getValueObjectName(fieldType), voConfig);
           }
-          // Fallback - serialize to JSON
           return `      ${fieldName}: entity.${fieldName} ? JSON.stringify(entity.${fieldName}) : undefined`;
         }
-        
         return `      ${fieldName}: entity.${fieldName}`;
       })
       .join(',\n');

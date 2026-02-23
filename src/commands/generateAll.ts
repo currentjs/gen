@@ -2,18 +2,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { resolveYamlPath, runCommand } from '../utils/cliUtils';
 import { parse as parseYaml } from 'yaml';
-import { DomainLayerGenerator } from '../generators/domainLayerGenerator';
-import { DtoGenerator } from '../generators/dtoGenerator';
-import { UseCaseGenerator } from '../generators/useCaseGenerator';
-import { ServiceGenerator } from '../generators/serviceGenerator';
-import { ControllerGenerator } from '../generators/controllerGenerator';
-import { TemplateGenerator } from '../generators/templateGenerator';
-import { StoreGenerator } from '../generators/storeGenerator';
 import { initGenerationRegistry } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
 import { GENERATOR_MARKERS, COMMON_FILES } from '../utils/constants';
 import { isValidModuleConfig, ModuleConfig } from '../types/configTypes';
 import { getChildrenOfParent, buildChildEntityMap } from '../utils/childEntityUtils';
+import { loadAppConfig, getModuleList, shouldIncludeModule, createGenerators } from '../utils/commandUtils';
 
 export async function handleGenerateAll(
   yamlPathArg?: string,
@@ -23,42 +17,20 @@ export async function handleGenerateAll(
 ): Promise<void> {
   const appYamlPath = resolveYamlPath(yamlPathArg);
   initGenerationRegistry(process.cwd());
-  
-  const raw = fs.readFileSync(appYamlPath, 'utf8');
-  const appConfig = parseYaml(raw) as { modules: Array<string | { module: string }>, providers?: Record<string, string>, database?: string } | null;
-  const modulesList = (appConfig?.modules ?? []).map(m => (typeof m === 'string' ? m : m.module));
-  const providersConfig = appConfig?.providers;
-  const databaseProviderName = appConfig?.database;
 
-  const shouldIncludeModule = (moduleYamlRel: string): boolean => {
-    if (!moduleName || moduleName === '*') return true;
-    const moduleNameLc = moduleName.toLowerCase();
-    const relNormalized = moduleYamlRel.replace(/\\/g, '/').toLowerCase();
-    if (relNormalized.endsWith(`/${moduleNameLc}.yaml`)) return true;
-    const moduleYamlPath = path.isAbsolute(moduleYamlRel)
-      ? moduleYamlRel
-      : path.resolve(process.cwd(), moduleYamlRel);
-    const dirName = path.basename(path.dirname(moduleYamlPath)).toLowerCase();
-    if (dirName === moduleNameLc) return true;
-    if (relNormalized.includes(`/${moduleNameLc}/`) || relNormalized.endsWith(`/${moduleNameLc}`)) return true;
-    return false;
-  };
+  const appConfig = loadAppConfig(appYamlPath);
+  const modulesList = getModuleList(appConfig);
+  const providersConfig = appConfig.providers;
+  const databaseProviderName = appConfig.database;
 
-  const filteredModules = modulesList.filter(shouldIncludeModule);
+  const filteredModules = modulesList.filter(rel => shouldIncludeModule(rel, moduleName));
   if (filteredModules.length === 0) {
     // eslint-disable-next-line no-console
     console.warn(colors.yellow(`No modules matched: ${moduleName}`));
     return;
   }
 
-  // Initialize generators
-  const domainGen = new DomainLayerGenerator();
-  const dtoGen = new DtoGenerator();
-  const useCaseGen = new UseCaseGenerator();
-  const serviceGen = new ServiceGenerator();
-  const controllerGen = new ControllerGenerator();
-  const templateGen = new TemplateGenerator();
-  const storeGen = new StoreGenerator();
+  const { domainGen, dtoGen, useCaseGen, serviceGen, controllerGen, templateGen, storeGen } = createGenerators();
 
   interface ControllerInit {
     entityName: string;

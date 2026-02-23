@@ -14,6 +14,10 @@ export type DiffHunk = {
   ctxAfterOld?: string[];
 };
 
+export interface CommitMeta {
+  [key: string]: unknown;
+}
+
 type StoredCommit = {
   createdAt?: string;
   files: Array<{
@@ -28,7 +32,7 @@ type StoredCommit = {
     baseHash?: string;
     resultHash?: string;
     hunks?: DiffHunk[];
-    meta?: Record<string, any>;
+    meta?: CommitMeta;
   }>;
 };
 

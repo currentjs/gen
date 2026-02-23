@@ -10,38 +10,93 @@ import {
   isValidModuleConfig 
 } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
-
-interface TypeMapping {
-  [key: string]: string;
-}
+import { capitalize, mapType as mapTypeUtil } from '../utils/typeUtils';
 
 export class ServiceGenerator {
-  private typeMapping: TypeMapping = {
-    string: 'string',
-    number: 'number',
-    integer: 'number',
-    decimal: 'number',
-    boolean: 'boolean',
-    datetime: 'Date',
-    date: 'Date',
-    id: 'number',
-    money: 'Money',
-    json: 'any',
-    array: 'any[]',
-    object: 'object'
-  };
-
   private availableAggregates: Map<string, AggregateConfig> = new Map();
 
   private mapType(yamlType: string): string {
-    if (this.availableAggregates.has(yamlType)) {
-      return yamlType;
-    }
-    return this.typeMapping[yamlType] || 'any';
+    return mapTypeUtil(yamlType, this.availableAggregates);
   }
 
-  private capitalize(str: string): string {
-    return str.charAt(0).toUpperCase() + str.slice(1);
+  private generateListHandler(modelName: string, storeName: string): string {
+    return `  async list(page: number = 1, limit: number = 20): Promise<{ items: ${modelName}[]; total: number; page: number; limit: number }> {
+    const [items, total] = await Promise.all([
+      this.${storeName}.getAll(page, limit),
+      this.${storeName}.count()
+    ]);
+    return { items, total, page, limit };
+  }`;
+  }
+
+  private generateGetHandler(modelName: string, storeName: string, entityLower: string): string {
+    return `  async get(id: number): Promise<${modelName}> {
+    const ${entityLower} = await this.${storeName}.getById(id);
+    if (!${entityLower}) {
+      throw new Error('${modelName} not found');
+    }
+    return ${entityLower};
+  }`;
+  }
+
+  private generateCreateHandler(
+    modelName: string,
+    storeName: string,
+    entityLower: string,
+    aggregateConfig: AggregateConfig,
+    childInfo?: ChildEntityInfo
+  ): string {
+    const firstArgField = childInfo ? childInfo.parentIdField : 'ownerId';
+    const fields = Object.entries(aggregateConfig.fields)
+      .filter(([fieldName, fieldConfig]) => !fieldConfig.auto && fieldName !== 'id')
+      .sort((a, b) => {
+        const aRequired = a[1].required !== false;
+        const bRequired = b[1].required !== false;
+        if (aRequired === bRequired) return 0;
+        return aRequired ? -1 : 1;
+      });
+    const fieldArgs = fields.map(([fieldName]) => `input.${fieldName}`).join(', ');
+    const constructorArgs = `input.${firstArgField}, ${fieldArgs}`;
+    return `  async create(input: any): Promise<${modelName}> {
+    const ${entityLower} = new ${modelName}(0, ${constructorArgs});
+    return await this.${storeName}.insert(${entityLower});
+  }`;
+  }
+
+  private generateUpdateHandler(
+    modelName: string,
+    storeName: string,
+    aggregateConfig: AggregateConfig
+  ): string {
+    const setterCalls = Object.entries(aggregateConfig.fields)
+      .filter(([fieldName, fieldConfig]) => !fieldConfig.auto && fieldName !== 'id')
+      .map(([fieldName]) => {
+        const methodName = `set${capitalize(fieldName)}`;
+        return `    if (input.${fieldName} !== undefined) {
+      existing${modelName}.${methodName}(input.${fieldName});
+    }`;
+      })
+      .join('\n');
+    return `  async update(id: number, input: any): Promise<${modelName}> {
+    const existing${modelName} = await this.${storeName}.getById(id);
+    if (!existing${modelName}) {
+      throw new Error('${modelName} not found');
+    }
+    
+${setterCalls}
+    
+    return await this.${storeName}.update(id, existing${modelName});
+  }`;
+  }
+
+  private generateDeleteHandler(modelName: string, storeName: string): string {
+    return `  async delete(id: number): Promise<{ success: boolean; message: string }> {
+    const success = await this.${storeName}.softDelete(id);
+    if (!success) {
+      throw new Error('${modelName} not found or could not be deleted');
+    }
+    return { success: true, message: '${modelName} deleted successfully' };
+  }`;
   }
 
   private generateDefaultHandlerMethod(
@@ -55,78 +110,15 @@ export class ServiceGenerator {
 
     switch (actionName) {
       case 'list':
-        return `  async list(page: number = 1, limit: number = 20): Promise<{ items: ${modelName}[]; total: number; page: number; limit: number }> {
-    const [items, total] = await Promise.all([
-      this.${storeName}.getAll(page, limit),
-      this.${storeName}.count()
-    ]);
-    return { items, total, page, limit };
-  }`;
-
+        return this.generateListHandler(modelName, storeName);
       case 'get':
-        return `  async get(id: number): Promise<${modelName}> {
-    const ${entityLower} = await this.${storeName}.getById(id);
-    if (!${entityLower}) {
-      throw new Error('${modelName} not found');
-    }
-    return ${entityLower};
-  }`;
-
-      case 'create': {
-        // Generate constructor args (ownerId for root, parentIdField for child)
-        const firstArgField = childInfo ? childInfo.parentIdField : 'ownerId';
-        const fields = Object.entries(aggregateConfig.fields)
-          .filter(([fieldName, fieldConfig]) => !fieldConfig.auto && fieldName !== 'id')
-          .sort((a, b) => {
-            const aRequired = a[1].required !== false;
-            const bRequired = b[1].required !== false;
-            if (aRequired === bRequired) return 0;
-            return aRequired ? -1 : 1;
-          });
-        
-        const fieldArgs = fields
-          .map(([fieldName]) => `input.${fieldName}`)
-          .join(', ');
-        
-        const constructorArgs = `input.${firstArgField}, ${fieldArgs}`;
-
-        return `  async create(input: any): Promise<${modelName}> {
-    const ${entityLower} = new ${modelName}(0, ${constructorArgs});
-    return await this.${storeName}.insert(${entityLower});
-  }`;
-      }
-
+        return this.generateGetHandler(modelName, storeName, entityLower);
+      case 'create':
+        return this.generateCreateHandler(modelName, storeName, entityLower, aggregateConfig, childInfo);
       case 'update':
-        const setterCalls = Object.entries(aggregateConfig.fields)
-          .filter(([fieldName, fieldConfig]) => !fieldConfig.auto && fieldName !== 'id')
-          .map(([fieldName]) => {
-            const methodName = `set${this.capitalize(fieldName)}`;
-            return `    if (input.${fieldName} !== undefined) {
-      existing${modelName}.${methodName}(input.${fieldName});
-    }`;
-          })
-          .join('\n');
-
-        return `  async update(id: number, input: any): Promise<${modelName}> {
-    const existing${modelName} = await this.${storeName}.getById(id);
-    if (!existing${modelName}) {
-      throw new Error('${modelName} not found');
-    }
-    
-${setterCalls}
-    
-    return await this.${storeName}.update(id, existing${modelName});
-  }`;
-
+        return this.generateUpdateHandler(modelName, storeName, aggregateConfig);
       case 'delete':
-        return `  async delete(id: number): Promise<{ success: boolean; message: string }> {
-    const success = await this.${storeName}.softDelete(id);
-    if (!success) {
-      throw new Error('${modelName} not found or could not be deleted');
-    }
-    return { success: true, message: '${modelName} deleted successfully' };
-  }`;
-
+        return this.generateDeleteHandler(modelName, storeName);
       default:
         return `  async ${actionName}(input: any): Promise<any> {
     // TODO: Implement default ${actionName} handler

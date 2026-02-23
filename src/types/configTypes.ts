@@ -62,12 +62,18 @@ export interface SortingConfig {
   };
 }
 
+/** Additional input field definition (type only; used in add) */
+export interface UseCaseInputAddField {
+  type: string;
+  source?: string;
+}
+
 export interface UseCaseInputConfig {
   from?: string;
   pick?: string[];
   omit?: string[];
-  add?: Record<string, any>;
-  validate?: Record<string, any>;
+  add?: Record<string, UseCaseInputAddField>;
+  validate?: Record<string, unknown>;
   identifier?: string;
   partial?: boolean;
   pagination?: PaginationConfig;

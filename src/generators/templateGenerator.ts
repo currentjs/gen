@@ -3,8 +3,9 @@ import * as path from 'path';
 import { parse as parseYaml } from 'yaml';
 import { writeGeneratedFile } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
-import { ModuleConfig, WebPageConfig, AggregateConfig, ValueObjectConfig, isValidModuleConfig } from '../types/configTypes';
+import { ModuleConfig, WebPageConfig, AggregateConfig, AggregateFieldConfig, ValueObjectConfig, isValidModuleConfig } from '../types/configTypes';
 import { getChildrenOfParent, ParentChildInfo } from '../utils/childEntityUtils';
+import { capitalize } from '../utils/typeUtils';
 
 export class TemplateGenerator {
   private valueObjects: Record<string, ValueObjectConfig> = {};
@@ -34,14 +35,14 @@ export class TemplateGenerator {
     const fieldHeaders = fields
       .filter(([name]) => name !== 'id')
       .slice(0, 5)
-      .map(([name]) => `    <th>${this.capitalize(name)}</th>`)
+      .map(([name]) => `    <th>${capitalize(name)}</th>`)
       .join('\n');
 
     const fieldCells = fields
       .filter(([name]) => name !== 'id')
       .slice(0, 5)
       .map(([name, config]) => {
-        const voConfig = this.valueObjects[this.capitalize((config.type || 'string'))];
+        const voConfig = this.valueObjects[capitalize((config.type || 'string'))];
         if (voConfig) {
           const parts = Object.keys(voConfig.fields)
             .map(sub => `{{ item.${name}.${sub} }}`)
@@ -110,9 +111,9 @@ ${fieldCells}
       ? this.prefixWithParam(child.childWebPrefix, child.parentIdField, parentIdTemplateExpr)
       : '';
     const fieldEntries = Object.entries(child.childFields).filter(([name]) => name !== 'id').slice(0, 5);
-    const headers = fieldEntries.map(([name]) => `      <th>${this.capitalize(name)}</th>`).join('\n');
+    const headers = fieldEntries.map(([name]) => `      <th>${capitalize(name)}</th>`).join('\n');
     const cells = fieldEntries.map(([name, config]) => {
-      const voConfig = this.valueObjects[this.capitalize((config?.type || 'string') as string)];
+      const voConfig = this.valueObjects[capitalize((config?.type || 'string') as string)];
       if (voConfig) {
         const parts = Object.keys(voConfig.fields)
           .map(sub => `{{ childItem.${name}.${sub} }}`)
@@ -160,18 +161,18 @@ ${actionLinks}
   ): string {
     const fieldRows = fields
       .map(([name, config]) => {
-        const voConfig = this.valueObjects[this.capitalize((config.type || 'string'))];
+        const voConfig = this.valueObjects[capitalize((config.type || 'string'))];
         if (voConfig) {
           const parts = Object.keys(voConfig.fields)
             .map(sub => `{{ ${name}.${sub} }}`)
             .join(' ');
           return `  <div class="row mb-2">
-    <div class="col-4"><strong>${this.capitalize(name)}:</strong></div>
+    <div class="col-4"><strong>${capitalize(name)}:</strong></div>
     <div class="col-8">${parts}</div>
   </div>`;
         }
         return `  <div class="row mb-2">
-    <div class="col-4"><strong>${this.capitalize(name)}:</strong></div>
+    <div class="col-4"><strong>${capitalize(name)}:</strong></div>
     <div class="col-8">{{ ${name} }}</div>
   </div>`;
       })
@@ -198,9 +199,32 @@ ${fieldRows}
 </div>`;
   }
 
-  private renderCreateTemplate(
-    modelName: string, 
-    viewName: string, 
+  private buildFieldTypesJson(safeFields: [string, AggregateFieldConfig | Record<string, unknown>][]): string {
+    return JSON.stringify(
+      safeFields.reduce((acc, [name, config]) => {
+        const typeStr = typeof config?.type === 'string' ? config.type : 'string';
+        const capitalizedType = capitalize(typeStr);
+        const voConfig = this.valueObjects[capitalizedType];
+        if (voConfig) {
+          for (const [subName, subConfig] of Object.entries(voConfig.fields)) {
+            if (typeof subConfig === 'object' && 'values' in subConfig) {
+              acc[`${name}.${subName}`] = 'enum';
+            } else {
+              acc[`${name}.${subName}`] = (subConfig as { type?: string }).type || 'string';
+            }
+          }
+        } else {
+          acc[name] = typeStr;
+        }
+        return acc;
+      }, {} as Record<string, string>)
+    );
+  }
+
+  private renderFormTemplate(
+    mode: 'create' | 'edit',
+    modelName: string,
+    viewName: string,
     fields: [string, any][],
     basePath: string,
     onSuccess?: WebPageConfig['onSuccess'],
@@ -208,113 +232,64 @@ ${fieldRows}
     enumValuesMap: Record<string, string[]> = {}
   ): string {
     const safeFields = fields.filter(([name, config]) => name !== 'id' && !config.auto);
+    const isEdit = mode === 'edit';
     const formFields = safeFields
-      .map(([name, config]) => this.renderFormField(name, config, enumValuesMap[name] || []))
+      .map(([name, config]) => this.renderFormField(name, config, enumValuesMap[name] || [], isEdit))
       .join('\n');
 
-    const fieldTypesJson = JSON.stringify(
-      safeFields.reduce((acc, [name, config]) => {
-        const capitalizedType = this.capitalize(config.type || 'string');
-        const voConfig = this.valueObjects[capitalizedType];
-        if (voConfig) {
-          for (const [subName, subConfig] of Object.entries(voConfig.fields)) {
-            if (typeof subConfig === 'object' && 'values' in subConfig) {
-              acc[`${name}.${subName}`] = 'enum';
-            } else {
-              acc[`${name}.${subName}`] = subConfig.type || 'string';
-            }
-          }
-        } else {
-          acc[name] = config.type || 'string';
-        }
-        return acc;
-      }, {} as Record<string, string>)
-    );
+    const fieldTypesJson = this.buildFieldTypesJson(safeFields);
 
-    // Build strategy array from onSuccess/onError
     const strategies: string[] = [];
     if (onSuccess?.toast) strategies.push('toast');
     if (onSuccess?.back) strategies.push('back');
-    if (onSuccess?.redirect) strategies.push('redirect');
-    
-    const strategyAttr = strategies.length > 0 
-      ? `data-strategy='${JSON.stringify(strategies)}'` 
+    if (mode === 'create' && onSuccess?.redirect) strategies.push('redirect');
+    const strategyAttr = strategies.length > 0 ? `data-strategy='${JSON.stringify(strategies)}'` : '';
+    const redirectAttr = mode === 'create' && onSuccess?.redirect
+      ? `data-redirect="${this.prefixToTemplatePath(onSuccess.redirect)}"`
       : '';
 
-    const redirectAttr = onSuccess?.redirect 
-      ? `data-redirect="${this.prefixToTemplatePath(onSuccess.redirect)}"` 
-      : '';
+    const title = mode === 'create' ? `Create ${modelName}` : `Edit ${modelName}`;
+    const formAction = mode === 'create' ? `${basePath}/create` : `${basePath}/{{ id }}/edit`;
+    const submitLabel = mode === 'create' ? 'Create' : 'Update';
+    const cancelHref = mode === 'create' ? basePath : `${basePath}/{{ id }}`;
 
     return `<!-- @template name="${viewName}" -->
 <div class="container mt-4">
-  <h1>Create ${modelName}</h1>
+  <h1>${title}</h1>
   
-  <form method="POST" action="${basePath}/create" ${strategyAttr} ${redirectAttr} data-entity-name="${modelName}" data-field-types='${fieldTypesJson}'>
+  <form method="POST" action="${formAction}" ${strategyAttr} ${redirectAttr} data-entity-name="${modelName}" data-field-types='${fieldTypesJson}'>
 ${formFields}
     
     <div class="d-flex gap-2">
-      <button type="submit" class="btn btn-primary">Create</button>
-      <a href="${basePath}" class="btn btn-secondary">Cancel</a>
+      <button type="submit" class="btn btn-primary">${submitLabel}</button>
+      <a href="${cancelHref}" class="btn btn-secondary">Cancel</a>
     </div>
   </form>
 </div>`;
   }
 
-  private renderEditTemplate(
-    modelName: string, 
-    viewName: string, 
+  private renderCreateTemplate(
+    modelName: string,
+    viewName: string,
     fields: [string, any][],
     basePath: string,
     onSuccess?: WebPageConfig['onSuccess'],
     onError?: WebPageConfig['onError'],
     enumValuesMap: Record<string, string[]> = {}
   ): string {
-    const safeFields = fields.filter(([name, config]) => name !== 'id' && !config.auto);
-    const formFields = safeFields
-      .map(([name, config]) => this.renderFormField(name, config, enumValuesMap[name] || [], true))
-      .join('\n');
+    return this.renderFormTemplate('create', modelName, viewName, fields, basePath, onSuccess, onError, enumValuesMap);
+  }
 
-    const fieldTypesJson = JSON.stringify(
-      safeFields.reduce((acc, [name, config]) => {
-        const capitalizedType = this.capitalize(config.type || 'string');
-        const voConfig = this.valueObjects[capitalizedType];
-        if (voConfig) {
-          for (const [subName, subConfig] of Object.entries(voConfig.fields)) {
-            if (typeof subConfig === 'object' && 'values' in subConfig) {
-              acc[`${name}.${subName}`] = 'enum';
-            } else {
-              acc[`${name}.${subName}`] = subConfig.type || 'string';
-            }
-          }
-        } else {
-          acc[name] = config.type || 'string';
-        }
-        return acc;
-      }, {} as Record<string, string>)
-    );
-
-    // Build strategy array from onSuccess/onError
-    const strategies: string[] = [];
-    if (onSuccess?.toast) strategies.push('toast');
-    if (onSuccess?.back) strategies.push('back');
-    
-    const strategyAttr = strategies.length > 0 
-      ? `data-strategy='${JSON.stringify(strategies)}'` 
-      : '';
-
-    return `<!-- @template name="${viewName}" -->
-<div class="container mt-4">
-  <h1>Edit ${modelName}</h1>
-  
-  <form method="POST" action="${basePath}/{{ id }}/edit" ${strategyAttr} data-entity-name="${modelName}" data-field-types='${fieldTypesJson}'>
-${formFields}
-    
-    <div class="d-flex gap-2">
-      <button type="submit" class="btn btn-primary">Update</button>
-      <a href="${basePath}/{{ id }}" class="btn btn-secondary">Cancel</a>
-    </div>
-  </form>
-</div>`;
+  private renderEditTemplate(
+    modelName: string,
+    viewName: string,
+    fields: [string, any][],
+    basePath: string,
+    onSuccess?: WebPageConfig['onSuccess'],
+    onError?: WebPageConfig['onError'],
+    enumValuesMap: Record<string, string[]> = {}
+  ): string {
+    return this.renderFormTemplate('edit', modelName, viewName, fields, basePath, onSuccess, onError, enumValuesMap);
   }
 
   private getInputType(fieldType: string): string {
@@ -337,7 +312,7 @@ ${formFields}
 
     const columns = subFields.map(([subName, subConfig]) => {
       const fullName = `${name}.${subName}`;
-      const subLabel = this.capitalize(subName);
+      const subLabel = capitalize(subName);
 
       if (typeof subConfig === 'object' && 'values' in subConfig) {
         const uniqueValues = [...new Set(subConfig.values)];
@@ -371,10 +346,10 @@ ${columns}
 
   private renderFormField(name: string, config: any, enumValues: string[] = [], isEdit = false): string {
     const required = config.required ? 'required' : '';
-    const label = this.capitalize(name);
+    const label = capitalize(name);
     const fieldType = (config.type || 'string').toLowerCase();
 
-    const capitalizedType = this.capitalize(fieldType);
+    const capitalizedType = capitalize(fieldType);
     const voConfig = this.valueObjects[capitalizedType];
     if (voConfig) {
       return this.renderValueObjectField(name, label, voConfig, required, isEdit);
@@ -396,7 +371,7 @@ ${columns}
         if (enumValues.length > 0) {
           const options = enumValues.map(v => {
             const sel = isEdit ? ` {{ ${name} === '${v}' ? 'selected' : '' }}` : '';
-            return `      <option value="${v}"${sel}>${this.capitalize(v)}</option>`;
+            return `      <option value="${v}"${sel}>${capitalize(v)}</option>`;
           }).join('\n');
           return `  <div class="mb-3">
     <label for="${name}" class="form-label">${label}</label>
@@ -450,10 +425,6 @@ ${options}
     }
 
     return enumMap;
-  }
-
-  private capitalize(str: string): string {
-    return str.charAt(0).toUpperCase() + str.slice(1);
   }
 
   public generateFromConfig(config: ModuleConfig): Record<string, string> {

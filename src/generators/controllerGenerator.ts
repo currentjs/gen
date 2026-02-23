@@ -11,11 +11,10 @@ import {
   isValidModuleConfig 
 } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo, getChildrenOfParent, ParentChildInfo } from '../utils/childEntityUtils';
+import { capitalize } from '../utils/typeUtils';
+import { AUTH_ROLES, AUTH_ERRORS } from '../utils/constants';
 
 export class ControllerGenerator {
-  private capitalize(str: string): string {
-    return str.charAt(0).toUpperCase() + str.slice(1);
-  }
 
   private getHttpDecorator(method: string): string {
     switch (method.toUpperCase()) {
@@ -47,7 +46,7 @@ export class ControllerGenerator {
    */
   private hasOwnerAuth(auth?: AuthConfig): boolean {
     const roles = this.normalizeAuth(auth);
-    return roles.includes('owner');
+    return roles.includes(AUTH_ROLES.OWNER);
   }
 
   /**
@@ -59,46 +58,46 @@ export class ControllerGenerator {
   private generateAuthCheck(auth?: AuthConfig): string {
     const roles = this.normalizeAuth(auth);
     
-    if (roles.length === 0 || (roles.length === 1 && roles[0] === 'all')) {
+    if (roles.length === 0 || (roles.length === 1 && roles[0] === AUTH_ROLES.ALL)) {
       return ''; // No check needed - public access
     }
 
     // If only 'authenticated' is specified
-    if (roles.length === 1 && roles[0] === 'authenticated') {
+    if (roles.length === 1 && roles[0] === AUTH_ROLES.AUTHENTICATED) {
       return `if (!context.request.user) {
-      throw new Error('Authentication required');
+      throw new Error('${AUTH_ERRORS.REQUIRED}');
     }`;
     }
 
     // If only 'owner' is specified - just require authentication here
     // (owner check happens post-fetch)
-    if (roles.length === 1 && roles[0] === 'owner') {
+    if (roles.length === 1 && roles[0] === AUTH_ROLES.OWNER) {
       return `if (!context.request.user) {
-      throw new Error('Authentication required');
+      throw new Error('${AUTH_ERRORS.REQUIRED}');
     }`;
     }
 
     // Filter out 'owner' and 'all' for role checks (owner is checked post-fetch)
-    const roleChecks = roles.filter(r => r !== 'owner' && r !== 'all' && r !== 'authenticated');
-    const hasOwner = roles.includes('owner');
-    const hasAuthenticated = roles.includes('authenticated');
+    const roleChecks = roles.filter(r => r !== AUTH_ROLES.OWNER && r !== AUTH_ROLES.ALL && r !== AUTH_ROLES.AUTHENTICATED);
+    const hasOwner = roles.includes(AUTH_ROLES.OWNER);
+    const hasAuthenticated = roles.includes(AUTH_ROLES.AUTHENTICATED);
     
     // If we have role checks or owner, we need authentication
     if (roleChecks.length > 0 || hasOwner) {
       if (roleChecks.length === 0) {
         // Only owner (and maybe authenticated) - just require auth
         return `if (!context.request.user) {
-      throw new Error('Authentication required');
+      throw new Error('${AUTH_ERRORS.REQUIRED}');
     }`;
       }
       
       if (roleChecks.length === 1 && !hasOwner) {
         // Single role check
         return `if (!context.request.user) {
-      throw new Error('Authentication required');
+      throw new Error('${AUTH_ERRORS.REQUIRED}');
     }
     if (context.request.user.role !== '${roleChecks[0]}') {
-      throw new Error('Insufficient permissions: ${roleChecks[0]} role required');
+      throw new Error('${AUTH_ERRORS.INSUFFICIENT_PERMISSIONS}: ${roleChecks[0]} role required');
     }`;
       }
       
@@ -108,24 +107,24 @@ export class ControllerGenerator {
       if (hasOwner) {
         // With owner: require auth, role check will be combined with owner check post-fetch
         return `if (!context.request.user) {
-      throw new Error('Authentication required');
+      throw new Error('${AUTH_ERRORS.REQUIRED}');
     }`;
       }
       
       // Multiple roles without owner - check if user has ANY of the roles
       const roleConditions = roleChecks.map(r => `context.request.user.role === '${r}'`).join(' || ');
       return `if (!context.request.user) {
-      throw new Error('Authentication required');
+      throw new Error('${AUTH_ERRORS.REQUIRED}');
     }
     if (!(${roleConditions})) {
-      throw new Error('Insufficient permissions: one of [${roleChecks.join(', ')}] role required');
+      throw new Error('${AUTH_ERRORS.INSUFFICIENT_PERMISSIONS}: one of [${roleChecks.join(', ')}] role required');
     }`;
     }
 
     // Only 'authenticated' in the mix
     if (hasAuthenticated) {
       return `if (!context.request.user) {
-      throw new Error('Authentication required');
+      throw new Error('${AUTH_ERRORS.REQUIRED}');
     }`;
     }
 
@@ -146,11 +145,11 @@ export class ControllerGenerator {
   ): string {
     const roles = this.normalizeAuth(auth);
     
-    if (!roles.includes('owner')) {
+    if (!roles.includes(AUTH_ROLES.OWNER)) {
       return ''; // No owner check needed
     }
 
-    const bypassRoles = roles.filter(r => r !== 'owner' && r !== 'all' && r !== 'authenticated');
+    const bypassRoles = roles.filter(r => r !== AUTH_ROLES.OWNER && r !== AUTH_ROLES.ALL && r !== AUTH_ROLES.AUTHENTICATED);
 
     // Child entities don't have ownerId on result; resolve via getResourceOwner
     if (childInfo && useCaseVar) {
@@ -162,7 +161,7 @@ export class ControllerGenerator {
       throw new Error('Resource not found');
     }
     if (resourceOwnerId !== context.request.user?.id) {
-      throw new Error('Access denied: you do not own this resource');
+      throw new Error('${AUTH_ERRORS.ACCESS_DENIED}');
     }`;
       }
       const bypassConditions = bypassRoles.map(r => `context.request.user?.role === '${r}'`).join(' || ');
@@ -175,7 +174,7 @@ export class ControllerGenerator {
     const isOwner = resourceOwnerId === context.request.user?.id;
     const hasPrivilegedRole = ${bypassConditions};
     if (!isOwner && !hasPrivilegedRole) {
-      throw new Error('Access denied: you do not own this resource');
+      throw new Error('${AUTH_ERRORS.ACCESS_DENIED}');
     }`;
     }
 
@@ -184,7 +183,7 @@ export class ControllerGenerator {
       return `
     // Owner validation (post-fetch for reads)
     if (${resultVar}.ownerId !== context.request.user?.id) {
-      throw new Error('Access denied: you do not own this resource');
+      throw new Error('${AUTH_ERRORS.ACCESS_DENIED}');
     }`;
     }
     const bypassConditions = bypassRoles.map(r => `context.request.user?.role === '${r}'`).join(' || ');
@@ -193,7 +192,7 @@ export class ControllerGenerator {
     const isOwner = ${resultVar}.ownerId === context.request.user?.id;
     const hasPrivilegedRole = ${bypassConditions};
     if (!isOwner && !hasPrivilegedRole) {
-      throw new Error('Access denied: you do not own this resource');
+      throw new Error('${AUTH_ERRORS.ACCESS_DENIED}');
     }`;
   }
 
@@ -208,12 +207,12 @@ export class ControllerGenerator {
   private generatePreMutationOwnerCheck(auth?: AuthConfig, useCaseVar: string = 'useCase'): string {
     const roles = this.normalizeAuth(auth);
     
-    if (!roles.includes('owner')) {
+    if (!roles.includes(AUTH_ROLES.OWNER)) {
       return ''; // No owner check needed
     }
 
     // Get non-owner roles for the bypass check
-    const bypassRoles = roles.filter(r => r !== 'owner' && r !== 'all' && r !== 'authenticated');
+    const bypassRoles = roles.filter(r => r !== AUTH_ROLES.OWNER && r !== AUTH_ROLES.ALL && r !== AUTH_ROLES.AUTHENTICATED);
     
     if (bypassRoles.length === 0) {
       // Only owner - strict ownership check
@@ -224,7 +223,7 @@ export class ControllerGenerator {
       throw new Error('Resource not found');
     }
     if (resourceOwnerId !== context.request.user?.id) {
-      throw new Error('Access denied: you do not own this resource');
+      throw new Error('${AUTH_ERRORS.ACCESS_DENIED}');
     }
 `;
     }
@@ -240,7 +239,7 @@ export class ControllerGenerator {
     const isOwner = resourceOwnerId === context.request.user?.id;
     const hasPrivilegedRole = ${bypassConditions};
     if (!isOwner && !hasPrivilegedRole) {
-      throw new Error('Access denied: you do not own this resource');
+      throw new Error('${AUTH_ERRORS.ACCESS_DENIED}');
     }
 `;
   }
@@ -254,11 +253,11 @@ export class ControllerGenerator {
     const methodName = action;
     const decorator = this.getHttpDecorator(endpoint.method);
     const useCaseVar = `${model.toLowerCase()}UseCase`;
-    const inputClass = `${model}${this.capitalize(action)}Input`;
-    const outputClass = `${model}${this.capitalize(action)}Output`;
+    const inputClass = `${model}${capitalize(action)}Input`;
+    const outputClass = `${model}${capitalize(action)}Output`;
 
     const dtoImports = new Set<string>();
-    dtoImports.add(`${model}${this.capitalize(action)}`);
+    dtoImports.add(`${model}${capitalize(action)}`);
 
     // Generate auth check (pre-fetch)
     const authCheck = this.generateAuthCheck(endpoint.auth);
@@ -338,9 +337,9 @@ export class ControllerGenerator {
       ? 'index'
       : pathSegments.map((seg, idx) => {
           if (seg.startsWith(':')) {
-            return 'By' + this.capitalize(seg.slice(1));
+            return 'By' + capitalize(seg.slice(1));
           }
-          return idx === 0 ? seg : this.capitalize(seg);
+          return idx === 0 ? seg : capitalize(seg);
         }).join('');
     
     // Append method suffix for POST to avoid duplicates
@@ -357,9 +356,9 @@ export class ControllerGenerator {
       if (page.useCase) {
         const { model, action } = this.parseUseCase(page.useCase);
         const useCaseVar = `${model.toLowerCase()}UseCase`;
-        const inputClass = `${model}${this.capitalize(action)}Input`;
+        const inputClass = `${model}${capitalize(action)}Input`;
         
-        dtoImports.add(`${model}${this.capitalize(action)}`);
+        dtoImports.add(`${model}${capitalize(action)}`);
 
         let parseLogic: string;
         if (page.path.includes(':id')) {
@@ -423,9 +422,9 @@ export class ControllerGenerator {
       // POST request - form submission
       const { model, action } = this.parseUseCase(page.useCase);
       const useCaseVar = `${model.toLowerCase()}UseCase`;
-      const inputClass = `${model}${this.capitalize(action)}Input`;
+      const inputClass = `${model}${capitalize(action)}Input`;
 
-      dtoImports.add(`${model}${this.capitalize(action)}`);
+      dtoImports.add(`${model}${capitalize(action)}`);
 
       let parseLogic: string;
       if (page.path.includes(':id')) {

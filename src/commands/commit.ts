@@ -2,17 +2,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { resolveYamlPath } from '../utils/cliUtils';
 import { parse as parseYaml } from 'yaml';
-import { DomainLayerGenerator } from '../generators/domainLayerGenerator';
-import { DtoGenerator } from '../generators/dtoGenerator';
-import { UseCaseGenerator } from '../generators/useCaseGenerator';
-import { ServiceGenerator } from '../generators/serviceGenerator';
-import { ControllerGenerator } from '../generators/controllerGenerator';
-import { StoreGenerator } from '../generators/storeGenerator';
-import { TemplateGenerator } from '../generators/templateGenerator';
 import { computeContentHash, ensureCommitsDir, getStoredHash, initGenerationRegistry, updateStoredHunks } from '../utils/generationRegistry';
-import { computeHunks, DiffHunk } from '../utils/commitUtils';
+import { computeHunks, DiffHunk, type CommitMeta } from '../utils/commitUtils';
 import { colors } from '../utils/colors';
 import { isValidModuleConfig } from '../types/configTypes';
+import { loadAppConfig, getModuleList, createGenerators } from '../utils/commandUtils';
 
 type DiffRecord = {
   file: string; // relative to project root
@@ -24,15 +18,14 @@ type DiffRecord = {
   baseHash?: string;
   resultHash?: string;
   hunks?: DiffHunk[];
-  meta?: Record<string, any>;
+  meta?: CommitMeta;
 };
 
 export function handleCommit(yamlPathArg?: string, files?: string[]): void {
   const appYamlPath = resolveYamlPath(yamlPathArg);
   initGenerationRegistry(process.cwd());
-  const raw = fs.readFileSync(appYamlPath, 'utf8');
-  const appConfig = parseYaml(raw) as { modules: Array<string | { module: string }>} | null;
-  const modulesList = (appConfig?.modules ?? []).map(m => (typeof m === 'string' ? m : m.module));
+  const appConfig = loadAppConfig(appYamlPath);
+  const modulesList = getModuleList(appConfig);
 
   const selection: Set<string> | null = (() => {
     if (!files || files.length === 0) return null;
@@ -45,13 +38,7 @@ export function handleCommit(yamlPathArg?: string, files?: string[]): void {
     return new Set(files.map(norm));
   })();
 
-  const domainGen = new DomainLayerGenerator();
-  const dtoGen = new DtoGenerator();
-  const useCaseGen = new UseCaseGenerator();
-  const svcGen = new ServiceGenerator();
-  const ctrlGen = new ControllerGenerator();
-  const storeGen = new StoreGenerator();
-  const tplGen = new TemplateGenerator();
+  const { domainGen, dtoGen, useCaseGen, serviceGen: svcGen, controllerGen: ctrlGen, storeGen, templateGen: tplGen } = createGenerators();
 
   const diffs: DiffRecord[] = [];
 

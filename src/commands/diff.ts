@@ -2,53 +2,26 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { resolveYamlPath } from '../utils/cliUtils';
 import { parse as parseYaml } from 'yaml';
-import { DomainLayerGenerator } from '../generators/domainLayerGenerator';
-import { DtoGenerator } from '../generators/dtoGenerator';
-import { UseCaseGenerator } from '../generators/useCaseGenerator';
-import { ServiceGenerator } from '../generators/serviceGenerator';
-import { ControllerGenerator } from '../generators/controllerGenerator';
-import { StoreGenerator } from '../generators/storeGenerator';
-import { TemplateGenerator } from '../generators/templateGenerator';
 import { computeContentHash, getStoredHash, initGenerationRegistry, loadRegistry } from '../utils/generationRegistry';
 import { computeHunks, applyHunksToBase, type DiffHunk } from '../utils/commitUtils';
 import { colors } from '../utils/colors';
 import { isValidModuleConfig } from '../types/configTypes';
+import { loadAppConfig, getModuleList, shouldIncludeModule, createGenerators } from '../utils/commandUtils';
 
 export async function handleDiff(yamlPathArg?: string, moduleName?: string): Promise<void> {
   const appYamlPath = resolveYamlPath(yamlPathArg);
   initGenerationRegistry(process.cwd());
-  const raw = fs.readFileSync(appYamlPath, 'utf8');
-  const appConfig = parseYaml(raw) as { modules: Array<string | { module: string }>} | null;
-  const modulesList = (appConfig?.modules ?? []).map(m => (typeof m === 'string' ? m : m.module));
+  const appConfig = loadAppConfig(appYamlPath);
+  const modulesList = getModuleList(appConfig);
 
-  const shouldIncludeModule = (moduleYamlRel: string): boolean => {
-    if (!moduleName || moduleName === '*') return true;
-    const moduleNameLc = moduleName.toLowerCase();
-    const relNormalized = moduleYamlRel.replace(/\\/g, '/').toLowerCase();
-    if (relNormalized.endsWith(`/${moduleNameLc}.yaml`)) return true;
-    const moduleYamlPath = path.isAbsolute(moduleYamlRel)
-      ? moduleYamlRel
-      : path.resolve(process.cwd(), moduleYamlRel);
-    const dirName = path.basename(path.dirname(moduleYamlPath)).toLowerCase();
-    if (dirName === moduleNameLc) return true;
-    if (relNormalized.includes(`/${moduleNameLc}/`) || relNormalized.endsWith(`/${moduleNameLc}`)) return true;
-    return false;
-  };
-
-  const filteredModules = modulesList.filter(shouldIncludeModule);
+  const filteredModules = modulesList.filter(rel => shouldIncludeModule(rel, moduleName));
   if (filteredModules.length === 0) {
     // eslint-disable-next-line no-console
     console.warn(colors.yellow(`No modules matched: ${moduleName}`));
     return;
   }
 
-  const domainGen = new DomainLayerGenerator();
-  const dtoGen = new DtoGenerator();
-  const useCaseGen = new UseCaseGenerator();
-  const svcGen = new ServiceGenerator();
-  const ctrlGen = new ControllerGenerator();
-  const storeGen = new StoreGenerator();
-  const tplGen = new TemplateGenerator();
+  const { domainGen, dtoGen, useCaseGen, serviceGen: svcGen, controllerGen: ctrlGen, storeGen, templateGen: tplGen } = createGenerators();
 
   const results: Array<{ file: string; status: 'clean' | 'modified' | 'missing'; hunks?: DiffHunk[]; note?: string }> = [];
 

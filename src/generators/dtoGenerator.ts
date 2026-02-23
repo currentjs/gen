@@ -12,49 +12,18 @@ import {
   isValidModuleConfig 
 } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
-
-interface TypeMapping {
-  [key: string]: string;
-}
+import { capitalize, mapType as mapTypeUtil } from '../utils/typeUtils';
 
 export class DtoGenerator {
-  private typeMapping: TypeMapping = {
-    string: 'string',
-    number: 'number',
-    integer: 'number',
-    decimal: 'number',
-    boolean: 'boolean',
-    datetime: 'Date',
-    date: 'Date',
-    id: 'number',
-    money: 'Money',
-    json: 'any',
-    array: 'any[]',
-    object: 'object',
-    enum: 'string'
-  };
-
   private availableAggregates: Map<string, AggregateConfig> = new Map();
   private availableValueObjects: Map<string, ValueObjectConfig> = new Map();
 
-  private capitalize(str: string): string {
-    return str.charAt(0).toUpperCase() + str.slice(1);
-  }
-
   private mapType(yamlType: string): string {
-    if (this.availableAggregates.has(yamlType)) {
-      return yamlType;
-    }
-    // Check for value objects (case-insensitive)
-    const capitalizedType = this.capitalize(yamlType);
-    if (this.availableValueObjects.has(capitalizedType)) {
-      return capitalizedType;
-    }
-    return this.typeMapping[yamlType] || 'any';
+    return mapTypeUtil(yamlType, this.availableAggregates, this.availableValueObjects);
   }
 
   private isValueObjectType(yamlType: string): boolean {
-    const capitalizedType = this.capitalize(yamlType);
+    const capitalizedType = capitalize(yamlType);
     return this.availableValueObjects.has(capitalizedType);
   }
 
@@ -106,7 +75,7 @@ export class DtoGenerator {
     aggregateConfig: AggregateConfig,
     childInfo?: ChildEntityInfo
   ): string {
-    const className = `${modelName}${this.capitalize(actionName)}Input`;
+    const className = `${modelName}${capitalize(actionName)}Input`;
     
     if (!inputConfig) {
       return `export class ${className} {
@@ -283,7 +252,7 @@ ${transformsStr}
     aggregateConfig: AggregateConfig,
     allAggregates: Map<string, AggregateConfig>
   ): string {
-    const className = `${modelName}${this.capitalize(actionName)}Output`;
+    const className = `${modelName}${capitalize(actionName)}Output`;
 
     if (outputConfig === 'void') {
       return `export type ${className} = void;`;
@@ -493,7 +462,7 @@ ${mappingsStr}
       // Check each field for value object types
       fieldsToCheck.forEach(([, fieldConfig]) => {
         if (this.isValueObjectType(fieldConfig.type)) {
-          valueObjects.add(this.capitalize(fieldConfig.type));
+          valueObjects.add(capitalize(fieldConfig.type));
         }
       });
     }
@@ -586,7 +555,7 @@ ${mappingsStr}
 
         const importStatement = imports.length > 0 ? imports.join('\n') + '\n\n' : '';
 
-        const dtoFileName = `${modelName}${this.capitalize(actionName)}`;
+        const dtoFileName = `${modelName}${capitalize(actionName)}`;
         result[dtoFileName] = `${importStatement}${inputDto}\n\n${outputDto}`;
       });
     });

@@ -9,13 +9,10 @@ import {
   AggregateConfig,
   isValidModuleConfig 
 } from '../types/configTypes';
+import { capitalize } from '../utils/typeUtils';
 
 export class UseCaseGenerator {
   private availableAggregates: Map<string, AggregateConfig> = new Map();
-
-  private capitalize(str: string): string {
-    return str.charAt(0).toUpperCase() + str.slice(1);
-  }
 
   private generateUseCaseMethod(
     modelName: string,
@@ -23,7 +20,7 @@ export class UseCaseGenerator {
     useCaseConfig: UseCaseDefinition
   ): string {
     const methodName = actionName;
-    const inputType = `${modelName}${this.capitalize(actionName)}Input`;
+    const inputType = `${modelName}${capitalize(actionName)}Input`;
     
     // Determine the return type based on action
     let returnType: string;
@@ -102,8 +99,8 @@ ${handlerCalls}${returnStatement}
     // Generate imports for DTOs (only Input types since UseCases return models)
     const dtoImports = Object.keys(useCases)
       .map(actionName => {
-        const inputType = `${modelName}${this.capitalize(actionName)}Input`;
-        return `import { ${inputType} } from '../dto/${modelName}${this.capitalize(actionName)}';`;
+        const inputType = `${modelName}${capitalize(actionName)}Input`;
+        return `import { ${inputType} } from '../dto/${modelName}${capitalize(actionName)}';`;
       })
       .join('\n');
 
