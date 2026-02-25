@@ -78,6 +78,7 @@ packages/gen/
 │       ├── colors.ts             # Terminal colors
 │       ├── commitUtils.ts        # Diff/hunk computation
 │       ├── constants.ts          # Markers and file paths
+│       ├── diResolver.ts         # DI class scanning, constructor parsing, topological sort
 │       └── generationRegistry.ts # Hash tracking for regeneration
 └── dist/                         # Compiled JavaScript
 ```
@@ -373,6 +374,7 @@ Creates a new application with:
 - `tsconfig.json` for TypeScript
 - `app.yaml` application config
 - `src/app.ts` entry point
+- `src/system.ts` DI decorator (`@Injectable`)
 - `src/common/ui/templates/` with layout templates
 - `web/app.js` frontend script
 - `web/translations.json` for i18n
@@ -389,10 +391,13 @@ Creates a new module with:
 **File**: `src/commands/generateAll.ts`
 
 Generates all TypeScript files from YAML:
-1. Reads `app.yaml` to find modules
+1. Reads `app.yaml` to find modules and providers
 2. For each module (with `domain` + `useCases`), generates files for each layer
-4. Updates `src/app.ts` with wiring code
-5. Runs `npm run build`
+3. Ensures `src/system.ts` exists (creates it for older apps)
+4. Scans generated files for `@Injectable` and `@Controller` decorators
+5. Builds dependency graph from constructor parameters, topologically sorts
+6. Updates `src/app.ts` with DI-based wiring code between markers
+7. Runs `npm run build`
 
 **Flags**:
 - `--force`: Overwrite modified files
@@ -459,7 +464,7 @@ Generates Data Transfer Objects from `useCases` config.
 - Filter/sorting support
 
 ### `useCaseGenerator.ts`
-Generates use case orchestrators that coordinate handlers.
+Generates use case orchestrators that coordinate handlers. Generated use cases are decorated with `@Injectable` (imported from `src/system.ts`).
 
 **Features**:
 - Orchestrates service handler calls in sequence
@@ -486,7 +491,7 @@ export class InvoiceUseCase {
 ```
 
 ### `serviceGenerator.ts`
-Generates service classes with handler methods.
+Generates service classes with handler methods. Generated services are decorated with `@Injectable` (imported from `src/system.ts`).
 
 **Default Handlers**: Full implementation for CRUD operations
 **Custom Handlers**: Empty method stubs for user implementation
@@ -513,7 +518,7 @@ export class InvoiceService {
 ```
 
 ### `storeGenerator.ts`
-Generates database access layer.
+Generates database access layer. Generated stores are decorated with `@Injectable` (imported from `src/system.ts`).
 
 **Features**:
 - Row interface (database representation)
@@ -643,6 +648,46 @@ auth: [owner, editor, admin]  # Any of these
 - The field stores the ID of the user who created the resource
 - On create, `ownerId` is injected from `context.request.user.id`
 
+### Dependency Injection System
+
+The generator includes a decorator-driven DI system that auto-wires all module classes in `src/app.ts`.
+
+**Key File**: `src/utils/diResolver.ts`
+
+**How It Works**:
+1. Generators decorate Stores, Services, and UseCases with `@Injectable()` (imported from `src/system.ts`). Controllers use the existing `@Controller()` decorator instead.
+2. After generation, `generateAll.ts` scans all module `.ts` files for classes with `@Injectable` or `@Controller` decorators.
+3. For each discovered class, it parses the constructor to extract dependency types (e.g., `constructor(private invoiceStore: InvoiceStore)`).
+4. A dependency graph is built and topologically sorted (Kahn's algorithm) to determine instantiation order.
+5. The wiring code (imports + instantiations + controllers array) is injected into `src/app.ts` between `// currentjs:controllers:start` and `// currentjs:controllers:end` markers.
+
+**`@Injectable` Decorator**:
+Lives in the generated app's `src/system.ts` (not in any `@currentjs/*` package). It's a simple no-op marker decorator:
+```typescript
+export function Injectable() {
+  return function (target: any) {
+    target.__injectable = true;
+  };
+}
+```
+
+**Provider Resolution**:
+Database providers are configured in `app.yaml` (global) with optional per-module overrides. The `resolveProviderImport()` function handles both:
+- **npm packages**: `@currentjs/provider-mysql` → imported as-is
+- **local paths**: `./src/common/SomeProvider` → resolved relative to `src/app.ts`
+
+Stores receive the appropriate provider instance as their first constructor argument based on their module's database configuration.
+
+**`diResolver.ts` Functions**:
+- `parseClassFile(filePath)` — Reads a `.ts` file, detects `@Injectable`/`@Controller` decorators, parses constructor params
+- `scanModuleClasses(moduleDir)` — Recursively finds all `@Injectable`/`@Controller` classes in a module
+- `buildInstantiationOrder(classes, providerVarByType, classProviderVar, srcDir)` — Builds dependency graph and returns topologically sorted instantiation steps
+- `resolveProviderImport(importSpec, appTsDir)` — Resolves provider import path for npm or local sources
+
+**Deduplication**: The generator prevents duplicate imports and instantiations when the same class appears across multiple dependency chains.
+
+**Circular Dependencies**: Detected during topological sort; throws an informative error listing the cycle.
+
 ### Handler Chain Execution
 Handlers execute sequentially. Each custom handler receives:
 - `result`: Output from previous handler (or `null` if first)
@@ -672,12 +717,24 @@ id → number → INT (foreign key)
 - Generation timestamps
 
 ### Marker Comments
-`src/app.ts` uses markers for safe regeneration:
+`src/app.ts` uses markers for safe regeneration of DI wiring:
 ```typescript
-// --- GENERATED:CONTROLLERS:START ---
-const controllers = [new InvoiceApiController(...)];
-// --- GENERATED:CONTROLLERS:END ---
+// currentjs:controllers:start
+import { InvoiceStore } from './modules/Invoice/infrastructure/stores/InvoiceStore';
+// ... all imports ...
+
+const db = new MySQLProvider(config.database);
+const invoiceStore = new InvoiceStore(db);
+const invoiceService = new InvoiceService(invoiceStore);
+const invoiceUseCase = new InvoiceUseCase(invoiceService);
+
+const controllers = [
+  new InvoiceApiController(invoiceUseCase),
+  new InvoiceWebController(invoiceUseCase),
+];
+// currentjs:controllers:end
 ```
+Everything between these markers is regenerated on each `currentjs generate` run.
 
 ---
 
@@ -719,9 +776,12 @@ const controllers = [new InvoiceApiController(...)];
 ### Typical Module Structure After Generation
 
 ```
-src/modules/Invoice/
-├── invoice.yaml                  # Module configuration
-├── domain/
+src/
+├── app.ts                        # Entry point with DI wiring
+├── system.ts                     # @Injectable decorator
+└── modules/Invoice/
+    ├── invoice.yaml              # Module configuration
+    ├── domain/
 │   ├── entities/
 │   │   ├── Invoice.ts            # Aggregate root
 │   │   └── InvoiceItem.ts        # Child entity

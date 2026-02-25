@@ -10,6 +10,7 @@ export const storeTemplates = {
   storeClass: `/**
  * Data access layer for {{ENTITY_NAME}}
  */
+@Injectable()
 export class {{ENTITY_NAME}}Store {
   private tableName = '{{TABLE_NAME}}';
 
@@ -131,7 +132,8 @@ export class {{ENTITY_NAME}}Store {
 {{GET_RESOURCE_OWNER_METHOD}}}`
 };
 
-export const storeFileTemplate = `import { {{ENTITY_NAME}} } from '../../domain/entities/{{ENTITY_NAME}}';
+export const storeFileTemplate = `import { Injectable } from '../../../../system';
+import { {{ENTITY_NAME}} } from '../../domain/entities/{{ENTITY_NAME}}';
 import type { ISqlProvider } from '@currentjs/provider-mysql';{{VALUE_OBJECT_IMPORTS}}
 
 {{ROW_INTERFACE}}

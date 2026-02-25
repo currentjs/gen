@@ -3,10 +3,13 @@
 ## Architecture Overview
 This is a CurrentJS framework application using clean architecture principles with the following layers:
 - **Controllers**: Handle HTTP requests/responses and route handling
+- **UseCases**: Orchestrate handler calls in sequence
 - **Services**: Contain business logic and orchestrate operations
 - **Stores**: Provide data access layer and database operations
 - **Domain Entities**: Core business models
 - **Views**: HTML templates for server-side rendering
+
+All layers (except Domain and Views) are auto-wired via **dependency injection** — the generator scans `@Injectable` and `@Controller` decorators, resolves constructor dependencies, and generates wiring code in `src/app.ts`.
 
 ## Commands
 
@@ -365,6 +368,43 @@ The template generator converts `onSuccess` options into `data-strategy` attribu
 - UseCase references use `ModelName:actionName` format (e.g., `Post:list`, `Person:create`)
 - Handlers within `useCases` do not need model prefix (model is already the key)
 - Controllers and services are generated per model, not per module
+
+## Dependency Injection & Wiring
+
+The application uses a decorator-driven DI system. All wiring is auto-generated in `src/app.ts` between `// currentjs:controllers:start` and `// currentjs:controllers:end` markers. **Never edit this block manually** — it is regenerated on each `current generate`.
+
+### `@Injectable` Decorator
+
+Lives in `src/system.ts`. Marks a class for automatic DI discovery:
+
+```typescript
+import { Injectable } from '../../../../system';
+
+@Injectable()
+export class MyService {
+  constructor(private myStore: MyStore) {}
+}
+```
+
+Generated Stores, Services, and UseCases already have `@Injectable()`. Controllers use `@Controller()` from `@currentjs/router` instead.
+
+### Adding Custom Classes to DI
+
+If you create a new class that should be auto-wired:
+1. Add `@Injectable()` decorator (import from `src/system.ts`)
+2. Declare dependencies as constructor parameters with their types
+3. Run `current generate` — the class will be auto-imported and instantiated in `app.ts`
+4. Run `current commit` to preserve your changes
+
+### How Wiring Works
+
+The generator:
+1. Scans all module `.ts` files for `@Injectable` and `@Controller` decorators
+2. Parses constructor parameters to build a dependency graph
+3. Topologically sorts classes (stores → services → use cases → controllers)
+4. Generates imports, instantiations, and the `controllers` array in `app.ts`
+
+Database provider instances are injected into stores based on `app.yaml` configuration (global, with optional per-module overrides). Both npm packages and local file paths are supported as providers.
 
 ## Module Structure
 ```

@@ -113,7 +113,8 @@ ${handlerCalls}${returnStatement}
 
     const getResourceOwnerMethod = this.generateGetResourceOwnerMethod(modelName);
 
-    return `import { ${modelName} } from '../../domain/entities/${modelName}';
+    return `import { Injectable } from '../../../../system';
+import { ${modelName} } from '../../domain/entities/${modelName}';
 ${dtoImports}
 import { ${serviceName} } from '../services/${serviceName}';
 
@@ -121,6 +122,7 @@ import { ${serviceName} } from '../services/${serviceName}';
  * Use Case orchestrator for ${modelName}
  * Coordinates business logic by calling service handlers in sequence
  */
+@Injectable()
 export class ${className} {
   constructor(
     private ${serviceVar}: ${serviceName}

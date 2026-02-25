@@ -10,6 +10,7 @@ import {
   frontendScriptTemplate,
   translationsTemplate,
   cursorRulesTemplate,
+  systemTsTemplate,
   DEFAULT_DIRECTORIES,
   DEFAULT_FILES
 } from '../generators/templates/appTemplates';
@@ -38,6 +39,7 @@ export function handleCreateApp(rawName?: string): void {
   writeFileIfMissing(path.join(targetRoot, DEFAULT_FILES.APP_YAML), appYamlTemplate);
   writeFileIfMissing(path.join(targetRoot, DEFAULT_FILES.CURSOR_RULES), cursorRulesTemplate);
   writeFileIfMissing(path.join(srcDir, DEFAULT_FILES.APP_TS), appTsTemplate);
+  writeFileIfMissing(path.join(srcDir, DEFAULT_FILES.SYSTEM_TS), systemTsTemplate);
   writeFileIfMissing(path.join(templatesDir, DEFAULT_FILES.MAIN_VIEW), mainViewTemplate);
   writeFileIfMissing(path.join(templatesDir, DEFAULT_FILES.ERROR_TEMPLATE), errorTemplate);
   writeFileIfMissing(path.join(webDir, DEFAULT_FILES.FRONTEND_SCRIPT), frontendScriptTemplate);

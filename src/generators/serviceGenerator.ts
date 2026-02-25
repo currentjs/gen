@@ -208,13 +208,15 @@ ${setterCalls}
       methods.push(getResourceOwnerMethod);
     }
 
-    return `import { ${modelName} } from '../../domain/entities/${modelName}';
+    return `import { Injectable } from '../../../../system';
+import { ${modelName} } from '../../domain/entities/${modelName}';
 import { ${storeName} } from '../../infrastructure/stores/${storeName}';
 
 /**
  * Service layer for ${modelName}
  * Contains business logic handlers that can be composed in use cases
  */
+@Injectable()
 export class ${serviceName} {
   constructor(
     private ${storeVar}: ${storeName}

@@ -474,7 +474,8 @@ my-app/
 ├── tsconfig.json               # TypeScript configuration
 ├── app.yaml                    # Main application config
 ├── src/
-│   ├── app.ts                  # Main application entry point
+│   ├── app.ts                  # Main application entry point (with DI wiring)
+│   ├── system.ts               # @Injectable decorator for DI
 │   ├── common/                 # Shared utilities and templates
 │   │   ├── services/           # Common services
 │   │   └── ui/
@@ -501,6 +502,99 @@ my-app/
     └── translations.json       # i18n support
 ```
 
+
+## Automatic Dependency Injection 🔌
+
+The generator includes a **decorator-driven DI system** that automatically wires all your module classes together in `src/app.ts`. No manual instantiation or import management required.
+
+### How It Works
+
+1. **Generated classes are decorated**: Stores, Services, and UseCases get the `@Injectable()` decorator. Controllers use the existing `@Controller()` decorator.
+2. **Constructor-based discovery**: The generator scans constructors to determine what each class needs (e.g., `InvoiceService` needs `InvoiceStore`).
+3. **Automatic ordering**: Dependencies are topologically sorted — stores first, then services, then use cases, then controllers.
+4. **Wiring in `app.ts`**: All imports, instantiations, and the `controllers` array are auto-generated between marker comments.
+
+### The `@Injectable` Decorator
+
+Lives in `src/system.ts` (generated with your app, no external dependencies):
+
+```typescript
+export function Injectable() {
+  return function (target: any) {
+    target.__injectable = true;
+  };
+}
+```
+
+Any class decorated with `@Injectable()` will be automatically discovered, instantiated, and injected where needed.
+
+### Adding Custom Injectable Classes
+
+If you create a custom class that should participate in DI wiring, just add the `@Injectable()` decorator:
+
+```typescript
+import { Injectable } from '../../../../system';
+
+@Injectable()
+export class EmailNotificationService {
+  constructor(private invoiceService: InvoiceService) {}
+  
+  async sendInvoiceEmail(invoiceId: number): Promise<void> {
+    // ...
+  }
+}
+```
+
+On the next `currentjs generate`, this class will be automatically imported and instantiated in `app.ts` with its dependencies resolved.
+
+### Database Providers
+
+Database providers are configured in `app.yaml`:
+
+```yaml
+database:
+  provider: "@currentjs/provider-mysql"  # npm package
+  # or:
+  provider: "./src/common/SomeProvider"  # local file path
+```
+
+Modules can override the global provider with their own:
+
+```yaml
+# In module's yaml section of app.yaml
+modules:
+  - name: Analytics
+    database:
+      provider: "@currentjs/provider-postgres"
+```
+
+Both npm packages and local paths are supported. Stores automatically receive the correct provider instance based on their module's configuration.
+
+### Generated Wiring Example
+
+After generation, `src/app.ts` contains auto-generated wiring between markers:
+
+```typescript
+// currentjs:controllers:start
+import { InvoiceStore } from './modules/Invoice/infrastructure/stores/InvoiceStore';
+import { InvoiceService } from './modules/Invoice/application/services/InvoiceService';
+import { InvoiceUseCase } from './modules/Invoice/application/useCases/InvoiceUseCase';
+import { InvoiceApiController } from './modules/Invoice/infrastructure/controllers/InvoiceApiController';
+import { InvoiceWebController } from './modules/Invoice/infrastructure/controllers/InvoiceWebController';
+
+const db = new MySQLProvider(config.database);
+const invoiceStore = new InvoiceStore(db);
+const invoiceService = new InvoiceService(invoiceStore);
+const invoiceUseCase = new InvoiceUseCase(invoiceService);
+
+const controllers = [
+  new InvoiceApiController(invoiceUseCase),
+  new InvoiceWebController(invoiceUseCase),
+];
+// currentjs:controllers:end
+```
+
+This block is fully regenerated on each `currentjs generate` run. You never need to edit it manually.
 
 ## Complete YAML Configuration Guide 📋
 
