@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0] – 2026-02-26
+
+So many changes were made that we skipped version 0.4:
+- Rethought YAML structures entirely
+- Implemented DI wiring during the build process
+- Internals: Added comprehensive testing
+- Internals: Completed a full refactoring of the codebase
+
 ## [0.3.2] - 2025-12-28
 
 fixed an issue 6
