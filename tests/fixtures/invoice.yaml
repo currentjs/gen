@@ -1,0 +1,249 @@
+domain:
+  aggregates:
+    Invoice:
+      root: true
+      fields:
+        number:
+          type: string
+          required: true
+          unique: true
+        date:
+          type: datetime
+          required: true
+        dueDate:
+          type: datetime
+          required: false
+        amount:
+          type: Money
+          required: true
+        status:
+          type: enum
+          required: true
+        taxRate:
+          type: number
+          required: false
+        discountPercent:
+          type: decimal
+          required: false
+        isPublished:
+          type: boolean
+          required: true
+        metadata:
+          type: json
+          required: false
+        customerId:
+          type: id
+          required: true
+        notes:
+          type: string
+          required: false
+      entities:
+        - InvoiceItem
+
+    InvoiceItem:
+      fields:
+        productId:
+          type: id
+          required: true
+        quantity:
+          type: integer
+          required: true
+        price:
+          type: Money
+          required: true
+        description:
+          type: string
+          required: false
+
+  valueObjects:
+    Money:
+      fields:
+        amount:
+          type: decimal
+          constraints:
+            min: 0
+        currency:
+          type: enum
+          values: ['USD', 'EUR', 'PLN']
+
+useCases:
+  Invoice:
+    list:
+      input:
+        pagination:
+          type: cursor
+          defaults:
+            limit: 20
+            maxLimit: 100
+        filters:
+          status:
+            type: string
+            enum: [draft, pending, paid, overdue]
+            optional: true
+          dateFrom:
+            type: datetime
+            optional: true
+          dateTo:
+            type: datetime
+            optional: true
+          search:
+            type: string
+            searchIn: [number, notes]
+            optional: true
+        sorting:
+          allow: [date, amount, number]
+          default:
+            field: date
+            order: desc
+      output:
+        from: Invoice
+        pick: [id, number, date, amount, status, customerId]
+        pagination: true
+      handlers:
+        - default:list
+
+    get:
+      input:
+        identifier: id
+      output:
+        from: Invoice
+        include:
+          items:
+            from: InvoiceItem
+      handlers:
+        - default:get
+        - loadItems
+
+    create:
+      input:
+        from: Invoice
+        pick: [number, date, dueDate, amount, status, taxRate, discountPercent, isPublished, metadata, customerId, notes]
+        add:
+          items:
+            type: array
+            of: InvoiceItem
+            pick: [productId, quantity, price, description]
+            optional: true
+        validate:
+          number:
+            pattern: "^INV-\\d+$"
+          amount:
+            min: 0
+      output:
+        from: Invoice
+      handlers:
+        - validateInput
+        - default:create
+        - notifyAccounting
+
+    update:
+      input:
+        identifier: id
+        from: Invoice
+        partial: true
+        pick: [number, date, dueDate, amount, status, taxRate, discountPercent, isPublished, notes]
+      output:
+        from: Invoice
+      handlers:
+        - default:update
+        - recalculateTotal
+
+    delete:
+      input:
+        identifier: id
+      output: void
+      handlers:
+        - checkCanDelete
+        - default:delete
+
+    publish:
+      input:
+        identifier: id
+      output:
+        from: Invoice
+      handlers:
+        - default:get
+        - validateForPublish
+        - updatePublishStatus
+
+api:
+  Invoice:
+    prefix: /api/invoice
+    endpoints:
+      - method: GET
+        path: /
+        useCase: Invoice:list
+        auth: all
+
+      - method: GET
+        path: /:id
+        useCase: Invoice:get
+        auth: authenticated
+
+      - method: POST
+        path: /
+        useCase: Invoice:create
+        auth: authenticated
+
+      - method: PUT
+        path: /:id
+        useCase: Invoice:update
+        auth: [owner, admin]
+
+      - method: DELETE
+        path: /:id
+        useCase: Invoice:delete
+        auth: admin
+
+      - method: POST
+        path: /:id/publish
+        useCase: Invoice:publish
+        auth: owner
+
+web:
+  Invoice:
+    prefix: /invoice
+    layout: main_view
+    pages:
+      - path: /
+        useCase: Invoice:list
+        view: invoiceList
+        auth: all
+
+      - path: /:id
+        useCase: Invoice:get
+        view: invoiceDetail
+        auth: all
+
+      - path: /create
+        method: GET
+        view: invoiceCreate
+        auth: authenticated
+
+      - path: /create
+        method: POST
+        useCase: Invoice:create
+        auth: authenticated
+        onSuccess:
+          redirect: /invoice/:id
+          toast: Invoice created successfully
+        onError:
+          stay: true
+          toast: error
+
+      - path: /:id/edit
+        method: GET
+        useCase: Invoice:get
+        view: invoiceEdit
+        auth: [owner, admin]
+
+      - path: /:id/edit
+        method: POST
+        useCase: Invoice:update
+        auth: [owner, admin]
+        onSuccess:
+          back: true
+          toast: Invoice updated successfully
+        onError:
+          stay: true
+          toast: error

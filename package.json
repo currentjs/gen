@@ -1,6 +1,6 @@
 {
   "name": "@currentjs/gen",
-  "version": "0.3.2",
+  "version": "0.5.0",
   "description": "CLI code generator",
   "license": "LGPL-3.0",
   "author": "Konstantin Zavalny",
@@ -29,8 +29,12 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && npm run copy-templates",
     "copy-templates": "mkdir -p dist/generators/templates/data && cp src/generators/templates/data/* dist/generators/templates/data/",
-    "clean": "rm -rf dist",
-    "prepack": "npm run build"
+    "clean": "rm -rf dist dist-test",
+    "prepack": "npm run build",
+    "test:build": "tsc -p tsconfig.test.json && mkdir -p dist-test/src/generators/templates/data && cp src/generators/templates/data/* dist-test/src/generators/templates/data/",
+    "test": "npm run test:build && node --test dist-test/tests/unit/*.test.js",
+    "test:integration": "npm run test:build && node --test dist-test/tests/integration/*.test.js",
+    "test:all": "npm run test:build && node --test dist-test/tests/unit/*.test.js dist-test/tests/integration/*.test.js"
   },
   "engines": {
     "node": ">=18"

@@ -414,7 +414,7 @@ window.AppConfig = {
    * @returns {any} Converted value
    */
   function convertFieldValue(value, fieldType) {
-    if (!value || value === '') {
+    if (value === undefined || value === null || value === '') {
       return null;
     }
     
@@ -422,6 +422,7 @@ window.AppConfig = {
       case 'number':
       case 'int':
       case 'integer':
+      case 'id':
         const intVal = parseInt(value, 10);
         return isNaN(intVal) ? null : intVal;
       
@@ -432,10 +433,15 @@ window.AppConfig = {
       
       case 'boolean':
       case 'bool':
-        if (value === 'true') return true;
-        if (value === 'false') return false;
+        if (value === 'true' || value === 'on' || value === '1') return true;
+        if (value === 'false' || value === 'off' || value === '0') return false;
         return Boolean(value);
+
+      case 'json':
+        try { return JSON.parse(value); } catch { return value; }
       
+      case 'datetime':
+      case 'date':
       case 'enum':
       case 'string':
       case 'text':
@@ -474,6 +480,30 @@ window.AppConfig = {
         jsonData[key] = convertedValue;
       }
     }
+
+    // Unchecked checkboxes are not included in FormData — default to false
+    for (const [fieldName, fieldType] of Object.entries(fieldTypes)) {
+      const ft = fieldType.toLowerCase();
+      if ((ft === 'boolean' || ft === 'bool') && !(fieldName in jsonData)) {
+        jsonData[fieldName] = false;
+      }
+    }
+
+    // Unflatten dot-notation keys (e.g., "amount.currency") into nested objects
+    const finalData = {};
+    for (const [key, value] of Object.entries(jsonData)) {
+      if (key.includes('.')) {
+        const parts = key.split('.');
+        let current = finalData;
+        for (let i = 0; i < parts.length - 1; i++) {
+          if (!(parts[i] in current)) current[parts[i]] = {};
+          current = current[parts[i]];
+        }
+        current[parts[parts.length - 1]] = value;
+      } else {
+        finalData[key] = value;
+      }
+    }
     
     const url = form.getAttribute('data-action') || form.action;
     const method = (form.getAttribute('data-method') || form.method || 'POST').toUpperCase();
@@ -486,16 +516,20 @@ window.AppConfig = {
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       }),
-      body: JSON.stringify(jsonData)
+      body: JSON.stringify(finalData)
     })
-      .then(response => {
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      .then(response =>
+        response.json()
+          .catch(() => ({}))
+          .then(body => ({ ok: response.ok, status: response.status, statusText: response.statusText, body }))
+      )
+      .then(({ ok, status, statusText, body }) => {
+        if (!ok) {
+          const message = body.message || body.error || `HTTP ${status}: ${statusText}`;
+          handleFormError({ message }, options);
+          return;
         }
-        return response.json();
-      })
-      .then(data => {
-        handleFormSuccess(data, strategy, options);
+        handleFormSuccess(body, strategy, options);
       })
       .catch(error => {
         console.error('Form submission failed:', error);

@@ -1,4 +1,7 @@
 providers:
   mysql: '@currentjs/provider-mysql'
-database: mysql
-modules: []
+config:
+  database: mysql
+  styling: bootstrap
+  identifiers: id
+modules: {}

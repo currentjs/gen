@@ -70,3 +70,17 @@ export const GENERATOR_SUFFIXES = {
   API_CONTROLLER: 'ApiController',
   WEB_CONTROLLER: 'WebController'
 } as const;
+
+// Auth roles (magic strings used in controller auth generation)
+export const AUTH_ROLES = {
+  ALL: 'all',
+  AUTHENTICATED: 'authenticated',
+  OWNER: 'owner',
+} as const;
+
+// Auth error messages (used in controller auth check generation)
+export const AUTH_ERRORS = {
+  REQUIRED: 'Authentication required',
+  ACCESS_DENIED: 'Access denied: you do not own this resource',
+  INSUFFICIENT_PERMISSIONS: 'Insufficient permissions',
+} as const;

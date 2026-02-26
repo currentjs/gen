@@ -1,0 +1,181 @@
+domain:
+  aggregates:
+    Product:
+      root: true
+      fields:
+        name:
+          type: string
+          required: true
+        sku:
+          type: string
+          required: true
+          unique: true
+        price:
+          type: Money
+          required: true
+        stock:
+          type: integer
+          required: true
+        isActive:
+          type: boolean
+          required: true
+        category:
+          type: string
+          required: false
+        tags:
+          type: json
+          required: false
+
+  valueObjects:
+    Money:
+      fields:
+        amount:
+          type: decimal
+          constraints:
+            min: 0
+        currency:
+          type: enum
+          values: ['USD', 'EUR', 'PLN']
+
+useCases:
+  Product:
+    list:
+      input:
+        pagination:
+          type: offset
+          defaults:
+            limit: 20
+            maxLimit: 100
+        filters:
+          isActive:
+            type: boolean
+            optional: true
+          search:
+            type: string
+            searchIn: [name, sku, category]
+            optional: true
+        sorting:
+          allow: [name, price, stock]
+          default:
+            field: name
+            order: asc
+      output:
+        from: Product
+        pick: [id, name, sku, price, stock, isActive]
+        pagination: true
+      handlers:
+        - default:list
+
+    get:
+      input:
+        identifier: id
+      output:
+        from: Product
+      handlers:
+        - default:get
+
+    create:
+      input:
+        from: Product
+        omit: [tags]
+        add:
+          categoryName:
+            type: string
+            required: false
+      output:
+        from: Product
+      handlers:
+        - default:create
+
+    update:
+      input:
+        identifier: id
+        from: Product
+        partial: true
+      output:
+        from: Product
+      handlers:
+        - default:update
+
+    delete:
+      input:
+        identifier: id
+      output: void
+      handlers:
+        - default:delete
+
+api:
+  Product:
+    prefix: /api/product
+    endpoints:
+      - method: GET
+        path: /
+        useCase: Product:list
+        auth: all
+
+      - method: GET
+        path: /:id
+        useCase: Product:get
+        auth: all
+
+      - method: POST
+        path: /
+        useCase: Product:create
+        auth: admin
+
+      - method: PUT
+        path: /:id
+        useCase: Product:update
+        auth: admin
+
+      - method: DELETE
+        path: /:id
+        useCase: Product:delete
+        auth: admin
+
+web:
+  Product:
+    prefix: /product
+    layout: main_view
+    pages:
+      - path: /
+        useCase: Product:list
+        view: productList
+        auth: all
+
+      - path: /:id
+        useCase: Product:get
+        view: productDetail
+        auth: all
+
+      - path: /create
+        method: GET
+        view: productCreate
+        auth: admin
+
+      - path: /create
+        method: POST
+        useCase: Product:create
+        auth: admin
+        onSuccess:
+          redirect: /product/:id
+          toast: Product created successfully
+        onError:
+          stay: true
+          toast: error
+
+      - path: /:id/edit
+        method: GET
+        useCase: Product:get
+        view: productEdit
+        auth: admin
+
+      - path: /:id/edit
+        method: POST
+        useCase: Product:update
+        auth: admin
+        onSuccess:
+          toast: Product updated successfully
+        onError:
+          stay: true
+          toast: error

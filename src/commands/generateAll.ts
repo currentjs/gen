@@ -2,15 +2,18 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { resolveYamlPath, runCommand } from '../utils/cliUtils';
 import { parse as parseYaml } from 'yaml';
-import { DomainModelGenerator } from '../generators/domainModelGenerator';
-import { ValidationGenerator } from '../generators/validationGenerator';
-import { ServiceGenerator } from '../generators/serviceGenerator';
-import { ControllerGenerator } from '../generators/controllerGenerator';
-import { StoreGenerator } from '../generators/storeGenerator';
-import { TemplateGenerator } from '../generators/templateGenerator';
 import { initGenerationRegistry } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
-import { GENERATOR_MARKERS, PATH_PATTERNS, COMMON_FILES, GENERATOR_SUFFIXES } from '../utils/constants';
+import { GENERATOR_MARKERS, COMMON_FILES } from '../utils/constants';
+import { isValidModuleConfig } from '../types/configTypes';
+import { loadAppConfig, getModuleEntries, shouldIncludeModule, createGenerators } from '../utils/commandUtils';
+import { scanModuleClasses, buildInstantiationOrder, resolveProviderImport, ClassInfo } from '../utils/diResolver';
+import { systemTsTemplate } from '../generators/templates/appTemplates';
+
+interface ModuleScanEntry {
+  moduleDir: string;
+  databaseKey: string;
+}
 
 export async function handleGenerateAll(
   yamlPathArg?: string,
@@ -20,96 +23,67 @@ export async function handleGenerateAll(
 ): Promise<void> {
   const appYamlPath = resolveYamlPath(yamlPathArg);
   initGenerationRegistry(process.cwd());
-  const raw = fs.readFileSync(appYamlPath, 'utf8');
-  const appConfig = parseYaml(raw) as { modules: Array<string | { module: string }>} | null;
-  const modulesList = (appConfig?.modules ?? []).map(m => (typeof m === 'string' ? m : m.module));
-  const providersConfig = (appConfig as any)?.providers as Record<string, string> | undefined;
-  const databaseProviderName = (appConfig as any)?.database as string | undefined;
 
-  const shouldIncludeModule = (moduleYamlRel: string): boolean => {
-    if (!moduleName || moduleName === '*') return true;
-    const moduleNameLc = moduleName.toLowerCase();
-    const relNormalized = moduleYamlRel.replace(/\\/g, '/').toLowerCase();
-    if (relNormalized.endsWith(`/${moduleNameLc}.yaml`)) return true;
-    const moduleYamlPath = path.isAbsolute(moduleYamlRel)
-      ? moduleYamlRel
-      : path.resolve(process.cwd(), moduleYamlRel);
-    const dirName = path.basename(path.dirname(moduleYamlPath)).toLowerCase();
-    if (dirName === moduleNameLc) return true;
-    // Allow passing a path fragment
-    if (relNormalized.includes(`/${moduleNameLc}/`) || relNormalized.endsWith(`/${moduleNameLc}`)) return true;
-    return false;
-  };
+  const appConfig = loadAppConfig(appYamlPath);
+  const moduleEntries = getModuleEntries(appConfig);
+  const providersConfig = appConfig.providers;
+  const defaultDatabaseKey = appConfig.config?.database;
 
-  const filteredModules = modulesList.filter(shouldIncludeModule);
-  if (filteredModules.length === 0) {
+  const filteredEntries = moduleEntries.filter(
+    entry => shouldIncludeModule(entry.path, moduleName) || (moduleName && entry.name === moduleName)
+  );
+  if (filteredEntries.length === 0) {
     // eslint-disable-next-line no-console
     console.warn(colors.yellow(`No modules matched: ${moduleName}`));
     return;
   }
 
-  const domainGen = new DomainModelGenerator();
-  const valGen = new ValidationGenerator();
-  const svcGen = new ServiceGenerator();
-  const ctrlGen = new ControllerGenerator();
-  const storeGen = new StoreGenerator();
-  const tplGen = new TemplateGenerator();
+  const { domainGen, dtoGen, useCaseGen, serviceGen, controllerGen, templateGen, storeGen } = createGenerators();
 
-  type ControllerInit = {
-    ctrlName: string;
-    entityName: string;
-    entityVar: string;
-    importController: string;
-    importStore: string;
-    importService: string;
-    importAuth?: string;
-    wiring: string[]; // store + service
-    registration: string;
-    storeDependencies?: string[]; // Names of stores this store depends on
-    serviceDependencies?: string[]; // Names of stores this service depends on
-  };
-  const initsBySrcDir = new Map<string, ControllerInit[]>();
-  const moduleConfigByFolder = new Map<string, any>(); // Cache module configs by folder name
+  const moduleScansBySrcDir = new Map<string, ModuleScanEntry[]>();
 
-  // Run modules sequentially to avoid overlapping interactive prompts
-  for (const moduleYamlRel of filteredModules) {
-    const moduleYamlPath = path.isAbsolute(moduleYamlRel)
-      ? moduleYamlRel
-      : path.resolve(process.cwd(), moduleYamlRel);
+  // Process each module: generate files and collect module dirs for DI scanning
+  for (const entry of filteredEntries) {
+    const moduleYamlPath = path.isAbsolute(entry.path)
+      ? entry.path
+      : path.resolve(process.cwd(), entry.path);
+
     if (!fs.existsSync(moduleYamlPath)) {
       // eslint-disable-next-line no-console
       console.warn(colors.yellow(`Module YAML not found: ${moduleYamlPath}`));
       continue;
     }
 
-    const moduleDir = path.dirname(moduleYamlPath);
-    const moduleFolderName = path.basename(moduleDir);
-
-    // Parse and cache module config for dependency detection
     const moduleYamlContent = fs.readFileSync(moduleYamlPath, 'utf8');
     const moduleConfig = parseYaml(moduleYamlContent);
-    moduleConfigByFolder.set(moduleFolderName, moduleConfig);
 
-    // Output folders inside module structure
-    const domainOut = path.join(moduleDir, 'domain', 'entities');
-    const appOut = path.join(moduleDir, 'application');
-    const infraOut = path.join(moduleDir, 'infrastructure');
-    fs.mkdirSync(domainOut, { recursive: true });
-    fs.mkdirSync(appOut, { recursive: true });
-    fs.mkdirSync(infraOut, { recursive: true });
+    if (!isValidModuleConfig(moduleConfig)) {
+      // eslint-disable-next-line no-console
+      console.warn(colors.yellow(`Skipping ${moduleYamlPath}: not in expected format (missing domain/useCases)`));
+      continue;
+    }
 
-    // Domain entities
+    const moduleDir = path.dirname(moduleYamlPath);
+
+    // eslint-disable-next-line no-console
+    console.log(colors.blue(`\nGenerating module: ${path.basename(moduleDir)}`));
+
     // eslint-disable-next-line no-await-in-loop
-    await domainGen.generateAndSaveFiles(moduleYamlPath, domainOut, { force: !!opts?.force, skipOnConflict: !!opts?.skip });
-
-    // Generate and save via per-generator write logic
+    await domainGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
     // eslint-disable-next-line no-await-in-loop
-    await valGen.generateAndSaveFiles(moduleYamlPath, appOut, { force: !!opts?.force, skipOnConflict: !!opts?.skip });
-    await svcGen.generateAndSaveFiles(moduleYamlPath, appOut, { force: !!opts?.force, skipOnConflict: !!opts?.skip });
-    const generatedControllers = await ctrlGen.generateAndSaveFiles(moduleYamlPath, infraOut, { force: !!opts?.force, skipOnConflict: !!opts?.skip });
-    await tplGen.generateAndSaveFiles(moduleYamlPath, undefined, { force: !!opts?.force, skipOnConflict: !!opts?.skip });
+    await dtoGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
+    // eslint-disable-next-line no-await-in-loop
+    await useCaseGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
+    // eslint-disable-next-line no-await-in-loop
+    await serviceGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
+    // eslint-disable-next-line no-await-in-loop
+    await storeGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
+    // eslint-disable-next-line no-await-in-loop
+    await controllerGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
+    // eslint-disable-next-line no-await-in-loop
+    await templateGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
 
-    // Find nearest ancestor containing src/app.ts and collect controller inits for a single write later
+    // Find srcDir by probing upward for app.ts
     let probeDir = moduleDir;
     let srcDir: string | null = null;
     for (let i = 0; i < 6; i += 1) {
@@ -124,171 +98,58 @@ export async function handleGenerateAll(
     }
     if (!srcDir) continue;
 
-    const list = initsBySrcDir.get(srcDir) ?? [];
-    
-    // First, add entries for all models in this module (even without controllers)
-    // This ensures dependency stores are initialized
-    if (moduleConfig && moduleConfig.models) {
-      const m = moduleYamlPath.match(/modules\/([^/]+)\//);
-      const moduleFolder = m ? m[1] : path.basename(moduleDir);
-      
-      for (const model of moduleConfig.models) {
-        const entityName = model.name;
-        const entityVar = entityName.charAt(0).toLowerCase() + entityName.slice(1);
-        
-        // Check if we already have an entry for this entity
-        if (list.find(x => x.entityName === entityName)) {
-          continue; // Skip if already added via controller
-        }
-        
-        const storeImportPath = `${PATH_PATTERNS.MODULES_RELATIVE}${moduleFolder}/${PATH_PATTERNS.INFRASTRUCTURE}/${PATH_PATTERNS.STORES}/${entityName}${GENERATOR_SUFFIXES.STORE}`;
-        const serviceImportPath = `${PATH_PATTERNS.MODULES_RELATIVE}${moduleFolder}/${PATH_PATTERNS.APPLICATION}/${PATH_PATTERNS.SERVICES}/${entityName}${GENERATOR_SUFFIXES.SERVICE}`;
-        
-        // Detect dependencies
-        const storeDeps: string[] = [];
-        const serviceDeps: string[] = [];
-        
-        if (model.fields) {
-          model.fields.forEach((field: any) => {
-            const isRelationship = moduleConfig.models.some((m: any) => m.name === field.type);
-            if (isRelationship) {
-              storeDeps.push(field.type);
-              serviceDeps.push(field.type);
-            }
-          });
-        }
-        
-        // Add a minimal init entry (no controller, just for dependency resolution)
-        const init: ControllerInit = {
-          ctrlName: '', // No controller
-          entityName,
-          entityVar,
-          importController: '',
-          importStore: `import { ${entityName}Store } from '${storeImportPath}';`,
-          importService: `import { ${entityName}Service } from '${serviceImportPath}';`,
-          importAuth: undefined,
-          wiring: [],
-          registration: '',
-          storeDependencies: storeDeps,
-          serviceDependencies: serviceDeps
-        };
-        
-        list.push(init);
-      }
-    }
-    
-    // Then process controllers
-    for (const filePath of generatedControllers) {
-      const rel = path
-        .relative(srcDir, filePath)
-        .replace(/\\/g, '/')
-        .replace(/\.ts$/, '');
-      const ctrlName = path.basename(rel);
-      const importPath = rel.startsWith('.') ? rel : `./${rel}`;
-      const baseEntityName = ctrlName.endsWith('ApiController')
-        ? ctrlName.slice(0, -'ApiController'.length)
-        : ctrlName.endsWith('WebController')
-          ? ctrlName.slice(0, -'WebController'.length)
-          : ctrlName.replace('Controller', '');
-      const entityName = baseEntityName;
-      const entityVar = entityName.charAt(0).toLowerCase() + entityName.slice(1);
-
-      const m = rel.match(/modules\/([^/]+)\/infrastructure\/controllers\//);
-      const moduleFolder = m ? m[1] : undefined;
-      if (!moduleFolder) continue;
-
-      const storeImportPath = `${PATH_PATTERNS.MODULES_RELATIVE}${moduleFolder}/${PATH_PATTERNS.INFRASTRUCTURE}/${PATH_PATTERNS.STORES}/${entityName}${GENERATOR_SUFFIXES.STORE}`;
-      const serviceImportPath = `${PATH_PATTERNS.MODULES_RELATIVE}${moduleFolder}/${PATH_PATTERNS.APPLICATION}/${PATH_PATTERNS.SERVICES}/${entityName}${GENERATOR_SUFFIXES.SERVICE}`;
-      
-      // Look up the correct module config for this controller
-      const controllerModuleConfig = moduleConfigByFolder.get(moduleFolder);
-      
-      // Detect store and service dependencies from module config
-      const storeDeps: string[] = [];
-      const serviceDeps: string[] = [];
-      
-      if (controllerModuleConfig && controllerModuleConfig.models) {
-        const model = controllerModuleConfig.models.find((m: any) => m.name === entityName);
-        if (model && model.fields) {
-          model.fields.forEach((field: any) => {
-            // Check if this field is a relationship (type is another model name)
-            const isRelationship = controllerModuleConfig.models.some((m: any) => m.name === field.type);
-            if (isRelationship) {
-              storeDeps.push(field.type);
-              serviceDeps.push(field.type);
-            }
-          });
-        }
-      }
-
-      // Check if we already have a base entry for this entity (from all models)
-      const existingEntry = list.find(x => x.entityName === entityName && !x.ctrlName);
-      
-      if (existingEntry) {
-        // Update existing entry to add controller info
-        existingEntry.ctrlName = ctrlName;
-        existingEntry.importController = `import { ${ctrlName} } from '${importPath}';`;
-        existingEntry.registration = `new ${ctrlName}(${entityVar}Service)`;
-        // Keep the dependencies we already detected
-      } else {
-        // Create new entry with controller
-        const init: ControllerInit = {
-          ctrlName,
-          entityName,
-          entityVar,
-          importController: `import { ${ctrlName} } from '${importPath}';`,
-          importStore: `import { ${entityName}Store } from '${storeImportPath}';`,
-          importService: `import { ${entityName}Service } from '${serviceImportPath}';`,
-          importAuth: undefined,
-          wiring: [],
-          registration: `new ${ctrlName}(${entityVar}Service)`,
-          storeDependencies: storeDeps,
-          serviceDependencies: serviceDeps
-        };
-        
-        if (!list.find((x) => x.ctrlName === init.ctrlName)) {
-          list.push(init);
-        }
-      }
-    }
-    initsBySrcDir.set(srcDir, list);
-    await storeGen.generateAndSaveFiles(moduleYamlPath, infraOut, { force: !!opts?.force, skipOnConflict: !!opts?.skip });
+    const scans = moduleScansBySrcDir.get(srcDir) ?? [];
+    scans.push({ moduleDir, databaseKey: entry.database });
+    moduleScansBySrcDir.set(srcDir, scans);
   }
 
-  // Single write per app: inject imports and rewrite block between markers
-  let isIProviderImported = false;
-  for (const [srcDir, controllerInits] of initsBySrcDir.entries()) {
+  // Update app.ts files with DI-based wiring
+  for (const [srcDir, moduleScans] of moduleScansBySrcDir.entries()) {
     try {
       const appTsPath = path.join(srcDir, COMMON_FILES.APP_TS);
       if (!fs.existsSync(appTsPath)) continue;
+
+      // Ensure system.ts exists (for existing apps created before this feature)
+      const systemTsPath = path.join(srcDir, 'system.ts');
+      if (!fs.existsSync(systemTsPath)) {
+        fs.writeFileSync(systemTsPath, systemTsTemplate, 'utf8');
+        // eslint-disable-next-line no-console
+        console.log(colors.green(`Created ${systemTsPath}`));
+      }
+
       let appTs = fs.readFileSync(appTsPath, 'utf8');
 
-      // Build providers import and initialization from app.yaml providers section
+      // --- Scan all modules for @Injectable and @Controller classes ---
+      const allClasses: ClassInfo[] = [];
+      for (const scan of moduleScans) {
+        const classes = scanModuleClasses(scan.moduleDir);
+        allClasses.push(...classes);
+      }
+
+      // --- Build provider info ---
       const importLines: string[] = [];
       const providerInitLines: string[] = [];
       const providersArrayEntries: string[] = [];
+      let isIProviderImported = false;
+
       if (providersConfig && Object.keys(providersConfig).length > 0) {
         for (const [provName, mod] of Object.entries(providersConfig)) {
           if (!mod) continue;
-          // Assume default import name from module spec after last '/'
-          const baseName = mod.split('/').pop() || 'provider';
-          const className = baseName
-            .replace(/^[^a-zA-Z_]*/g, '')
-            .split(/[-_]/)
-            .map(s => s.charAt(0).toUpperCase() + s.slice(1))
-            .join('');
-          importLines.push(`import { ${className}${!isIProviderImported ? ', IProvider, ISqlProvider' : ''} } from '${mod}';`);
+          const resolved = resolveProviderImport(mod, srcDir);
+          if (!appTs.includes(`from '${resolved.importPath}'`)) {
+            importLines.push(`import { ${resolved.className}${!isIProviderImported ? ', IProvider, ISqlProvider' : ''} } from '${resolved.importPath}';`);
+          }
           if (!isIProviderImported) isIProviderImported = true;
-          // Read provider configuration from env by name, parse JSON if possible, pass as is
-          providerInitLines.push(`  ${provName}: new ${className}((() => {
+          providerInitLines.push(`  ${provName}: new ${resolved.className}((() => {
     const raw = process.env.${provName.toUpperCase()} || '';
     try { return raw ? JSON.parse(raw) : undefined; } catch { return raw; }
   })())`);
           providersArrayEntries.push(provName);
         }
       } else {
-        // Fallback to MySQL provider if no providers configured
-        importLines.push(`import { ProviderMysql, ISqlProvider } from '@currentjs/provider-mysql';`);
+        if (!appTs.includes("from '@currentjs/provider-mysql'")) {
+          importLines.push(`import { ProviderMysql, IProvider, ISqlProvider } from '@currentjs/provider-mysql';`);
+        }
         providerInitLines.push(`  mysql: new ProviderMysql((() => {
     const raw = process.env.MYSQL || '';
     try { return raw ? JSON.parse(raw) : undefined; } catch { return raw; }
@@ -296,36 +157,60 @@ export async function handleGenerateAll(
         providersArrayEntries.push('mysql');
       }
 
-      const ensureDbLine = `const providers: Record<string, IProvider> = {\n${providerInitLines.join(',\n')}\n};\nconst db = providers['${databaseProviderName || providersArrayEntries[0]}'] as ISqlProvider;`;
+      // Resolve database keys to provider variable names
+      const providerKeysSet = new Set(providersArrayEntries);
+      const allDatabaseKeys = [...new Set(moduleScans.map(s => s.databaseKey))];
+      const dbVarByKey: Record<string, string> = {};
+      const dbLines: string[] = [`const providers: Record<string, IProvider> = {\n${providerInitLines.join(',\n')}\n};`];
+      const emittedProviderKeys = new Set<string>();
 
-
-      // Ensure router import for server (app template already imports templating)
-      if (!appTs.includes("from '@currentjs/router'")) {
-        importLines.push(`import { createWebServer, createStaticServer } from '@currentjs/router';`);
-      }
-      for (const il of importLines) {
-        if (!appTs.includes(il)) {
-          appTs = il + '\n' + appTs;
+      for (const key of allDatabaseKeys) {
+        const resolvedKey = providerKeysSet.has(key)
+          ? key
+          : (defaultDatabaseKey && providerKeysSet.has(defaultDatabaseKey) ? defaultDatabaseKey : providersArrayEntries[0]);
+        if (!providerKeysSet.has(key)) {
+          // eslint-disable-next-line no-console
+          console.warn(colors.yellow(`Module uses database '${key}' which is not in providers; using '${resolvedKey}'`));
+        }
+        const varName = 'db' + (resolvedKey.charAt(0).toUpperCase() + resolvedKey.slice(1));
+        dbVarByKey[key] = varName;
+        if (!emittedProviderKeys.has(resolvedKey)) {
+          emittedProviderKeys.add(resolvedKey);
+          dbLines.push(`const ${varName} = providers['${resolvedKey}'] as ISqlProvider;`);
         }
       }
-      // Ensure MySQL provider import exists
-      if (!appTs.includes("from '@currentjs/provider-mysql'")) {
-        importLines.push(`import { ProviderMysql } from '@currentjs/provider-mysql';`);
-      }
 
-      for (const init of controllerInits) {
-        const maybe = [init.importStore, init.importService];
-        // Only add controller import if entity has a controller
-        if (init.importController && init.importController.trim() !== '') {
-          maybe.push(init.importController);
-        }
-        if (init.importAuth) maybe.push(init.importAuth);
-        for (const line of maybe) {
-          if (line && line.trim() !== '' && !appTs.includes(line) && !importLines.includes(line)) {
-            importLines.push(line);
+      // --- Build DI instantiation order ---
+      const providerVarByType = new Map<string, string>();
+      providerVarByType.set('ISqlProvider', dbVarByKey[allDatabaseKeys[0]] ?? 'dbMysql');
+
+      // Per-class provider var: map each class to its module's database variable
+      const classProviderVar = new Map<string, string>();
+      for (const scan of moduleScans) {
+        const dbVar = dbVarByKey[scan.databaseKey] ?? dbVarByKey[Object.keys(dbVarByKey)[0]];
+        const classes = allClasses.filter(c => c.filePath.startsWith(scan.moduleDir + path.sep));
+        for (const cls of classes) {
+          const hasProviderParam = cls.constructorParams.some(p => providerVarByType.has(p.type));
+          if (hasProviderParam) {
+            classProviderVar.set(cls.className, dbVar);
           }
         }
       }
+
+      const steps = buildInstantiationOrder(allClasses, providerVarByType, classProviderVar, srcDir);
+
+      // --- Generate import lines for all discovered classes ---
+      for (const step of steps) {
+        const importLine = `import { ${step.className} } from '${step.importPath}';`;
+        if (!appTs.includes(importLine) && !importLines.includes(importLine)) {
+          importLines.push(importLine);
+        }
+      }
+
+      if (!appTs.includes("from '@currentjs/router'")) {
+        importLines.push(`import { createWebServer } from '@currentjs/router';`);
+      }
+
       if (importLines.length) {
         const existingImports = new Set<string>();
         const importRegex = /^import[^;]+;$/gm;
@@ -335,81 +220,37 @@ export async function handleGenerateAll(
         if (toAdd.length) appTs = toAdd.join('\n') + '\n' + appTs;
       }
 
-      // Compose fresh block content with dependency-aware ordering
+      // --- Build wiring block ---
       const wiringLines: string[] = [];
-      // DB placeholder once
-      wiringLines.push(ensureDbLine);
-      
-      // Deduplicate by entityName
-      const uniqueInits = Array.from(
-        new Map(controllerInits.map(init => [init.entityName, init])).values()
-      );
-      
-      // Sort entities by dependencies (entities with no deps first)
-      const sorted: ControllerInit[] = [];
-      const processed = new Set<string>();
-      
-      const addEntity = (init: ControllerInit) => {
-        if (processed.has(init.entityName)) return;
-        
-        // Process dependencies first
-        if (init.storeDependencies) {
-          for (const depName of init.storeDependencies) {
-            const depInit = uniqueInits.find(i => i.entityName === depName);
-            if (depInit && !processed.has(depName)) {
-              addEntity(depInit);
-            }
-          }
-        }
-        
-        sorted.push(init);
-        processed.add(init.entityName);
-      };
-      
-      uniqueInits.forEach(init => addEntity(init));
-      
-      // Generate wiring for stores and services
-      for (const init of sorted) {
-        const entityVar = init.entityVar;
-        const entityName = init.entityName;
-        
-        // Build store constructor parameters
-        const storeParams = ['db'];
-        if (init.storeDependencies && init.storeDependencies.length > 0) {
-          init.storeDependencies.forEach(depName => {
-            const depVar = depName.charAt(0).toLowerCase() + depName.slice(1);
-            storeParams.push(`${depVar}Store`);
-          });
-        }
-        
-        // Build service constructor parameters
-        const serviceParams = [`${entityVar}Store`];
-        if (init.serviceDependencies && init.serviceDependencies.length > 0) {
-          init.serviceDependencies.forEach(depName => {
-            const depVar = depName.charAt(0).toLowerCase() + depName.slice(1);
-            serviceParams.push(`${depVar}Store`);
-          });
-        }
-        
-        wiringLines.push(`const ${entityVar}Store = new ${entityName}Store(${storeParams.join(', ')});`);
-        wiringLines.push(`const ${entityVar}Service = new ${entityName}Service(${serviceParams.join(', ')});`);
+
+      wiringLines.push(dbLines.join('\n'));
+
+      const nonControllers = steps.filter(s => !s.isController);
+      const controllers = steps.filter(s => s.isController);
+
+      for (const step of nonControllers) {
+        const args = step.constructorArgs.length > 0 ? step.constructorArgs.join(', ') : '';
+        wiringLines.push(`const ${step.varName} = new ${step.className}(${args});`);
       }
-      
-      // Only include registrations for entities with controllers
-      const registrations = controllerInits
-        .filter(i => i.registration && i.registration.trim() !== '')
-        .map(i => i.registration);
-      
+
       wiringLines.push('const controllers = [');
-      if (registrations.length > 0) {
-        wiringLines.push(`  ${registrations.join(',\n  ')}`);
+      if (controllers.length > 0) {
+        const registrations = controllers
+          .map(s => {
+            const args = s.constructorArgs.length > 0 ? s.constructorArgs.join(', ') : '';
+            return `  new ${s.className}(${args}),`;
+          })
+          .join('\n');
+        wiringLines.push(registrations);
       }
       wiringLines.push('];');
 
+      // Replace content between markers
       const startMarker = GENERATOR_MARKERS.CONTROLLERS_START;
       const endMarker = GENERATOR_MARKERS.CONTROLLERS_END;
       const startIdx = appTs.indexOf(startMarker);
       const endIdx = appTs.indexOf(endMarker);
+
       if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
         const before = appTs.slice(0, startIdx + startMarker.length);
         const after = appTs.slice(endIdx);
@@ -417,38 +258,32 @@ export async function handleGenerateAll(
         appTs = before + block + after;
       }
 
-      // Ensure the createWebServer call includes renderer in options
-      // Case 1: createWebServer(controllers, { ... })
-      const withOptionsRegex = /createWebServer\(\s*controllers\s*,\s*\{([\s\S]*?)\}\s*\)/m;
-      if (withOptionsRegex.test(appTs)) {
-        appTs = appTs.replace(withOptionsRegex, (full, inner) => {
-          if (/\brenderer\b\s*:/.test(inner)) return full; // already present
-          const trimmed = inner.trim();
-          const prefix = trimmed.length ? inner.replace(trimmed, '') : '';
-          const suffix = inner.endsWith(trimmed) ? '' : inner.slice(inner.indexOf(trimmed) + trimmed.length);
-          const sep = trimmed.length ? ', ' : '';
-          return full.replace(inner, `${prefix}${trimmed}${sep}renderer` + `: renderer${suffix}`);
-        });
-      } else {
-        // Case 2: createWebServer(controllers)
-        const noOptionsRegex = /createWebServer\(\s*controllers\s*\)/m;
-        if (noOptionsRegex.test(appTs)) {
-          appTs = appTs.replace(noOptionsRegex, 'createWebServer(controllers, { renderer })');
+      // Deduplicate import lines across the entire file
+      const lines = appTs.split('\n');
+      const seenImports = new Set<string>();
+      const deduped = lines.filter(line => {
+        const trimmed = line.trim();
+        if (/^import\s+/.test(trimmed) && trimmed.endsWith(';')) {
+          if (seenImports.has(trimmed)) return false;
+          seenImports.add(trimmed);
         }
-      }
+        return true;
+      });
+      appTs = deduped.join('\n');
 
       fs.writeFileSync(appTsPath, appTs, 'utf8');
+      // eslint-disable-next-line no-console
+      console.log(colors.green(`Updated ${appTsPath}`));
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.warn(colors.yellow(`Could not update app.ts with controllers: ${e instanceof Error ? e.message : String(e)}`));
+      console.warn(colors.yellow(`Could not update app.ts: ${e instanceof Error ? e.message : String(e)}`));
     }
   }
 
-  // Run npm run build
+  // Run build
   runCommand('npm run build', {
     infoMessage: '\nBuilding...',
     successMessage: '[v] Build completed successfully',
     errorMessage: '[x] Build failed:'
   });
 }
-

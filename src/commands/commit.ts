@@ -2,16 +2,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { resolveYamlPath } from '../utils/cliUtils';
 import { parse as parseYaml } from 'yaml';
-import { DomainModelGenerator } from '../generators/domainModelGenerator';
-import { ValidationGenerator } from '../generators/validationGenerator';
-import { ServiceGenerator } from '../generators/serviceGenerator';
-import { ControllerGenerator } from '../generators/controllerGenerator';
-import { StoreGenerator } from '../generators/storeGenerator';
-import { TemplateGenerator } from '../generators/templateGenerator';
 import { computeContentHash, ensureCommitsDir, getStoredHash, initGenerationRegistry, updateStoredHunks } from '../utils/generationRegistry';
-import { computeLineDiff } from '../utils/commitUtils';
-import { computeHunks, DiffHunk } from '../utils/commitUtils';
+import { computeHunks, DiffHunk, type CommitMeta } from '../utils/commitUtils';
 import { colors } from '../utils/colors';
+import { isValidModuleConfig } from '../types/configTypes';
+import { loadAppConfig, getModuleList, createGenerators } from '../utils/commandUtils';
 
 type DiffRecord = {
   file: string; // relative to project root
@@ -23,33 +18,14 @@ type DiffRecord = {
   baseHash?: string;
   resultHash?: string;
   hunks?: DiffHunk[];
-  meta?: Record<string, any>;
+  meta?: CommitMeta;
 };
-
-// legacy inline diff removed in favor of hunks; kept for backward compatibility via utils/commitUtils if needed
-
-function collectFiles(dir: string): string[] {
-  if (!fs.existsSync(dir)) return [];
-  const result: string[] = [];
-  const stack: string[] = [dir];
-  while (stack.length) {
-    const current = stack.pop()!;
-    const entries = fs.readdirSync(current, { withFileTypes: true });
-    entries.forEach(entry => {
-      const abs = path.join(current, entry.name);
-      if (entry.isDirectory()) stack.push(abs);
-      else result.push(abs);
-    });
-  }
-  return result;
-}
 
 export function handleCommit(yamlPathArg?: string, files?: string[]): void {
   const appYamlPath = resolveYamlPath(yamlPathArg);
   initGenerationRegistry(process.cwd());
-  const raw = fs.readFileSync(appYamlPath, 'utf8');
-  const appConfig = parseYaml(raw) as { modules: Array<string | { module: string }>} | null;
-  const modulesList = (appConfig?.modules ?? []).map(m => (typeof m === 'string' ? m : m.module));
+  const appConfig = loadAppConfig(appYamlPath);
+  const modulesList = getModuleList(appConfig);
 
   const selection: Set<string> | null = (() => {
     if (!files || files.length === 0) return null;
@@ -62,12 +38,7 @@ export function handleCommit(yamlPathArg?: string, files?: string[]): void {
     return new Set(files.map(norm));
   })();
 
-  const domainGen = new DomainModelGenerator();
-  const valGen = new ValidationGenerator();
-  const svcGen = new ServiceGenerator();
-  const ctrlGen = new ControllerGenerator();
-  const storeGen = new StoreGenerator();
-  const tplGen = new TemplateGenerator();
+  const { domainGen, dtoGen, useCaseGen, serviceGen: svcGen, controllerGen: ctrlGen, storeGen, templateGen: tplGen } = createGenerators();
 
   const diffs: DiffRecord[] = [];
 
@@ -81,16 +52,25 @@ export function handleCommit(yamlPathArg?: string, files?: string[]): void {
       return;
     }
 
-    const moduleDir = path.dirname(moduleYamlPath);
+    const moduleYamlContent = fs.readFileSync(moduleYamlPath, 'utf8');
+    const moduleConfig = parseYaml(moduleYamlContent);
+    if (!isValidModuleConfig(moduleConfig)) {
+      // eslint-disable-next-line no-console
+      console.warn(colors.yellow(`Skipping ${moduleYamlPath}: not in expected format (missing domain/useCases)`));
+      return;
+    }
 
-    // Infer outputs
-    const domainOut = path.join(moduleDir, 'domain', 'entities');
+    const moduleDir = path.dirname(moduleYamlPath);
+    const domainEntitiesOut = path.join(moduleDir, 'domain', 'entities');
+    const domainValueObjectsOut = path.join(moduleDir, 'domain', 'valueObjects');
     const appOut = path.join(moduleDir, 'application');
     const infraOut = path.join(moduleDir, 'infrastructure');
+    const viewsOut = path.join(moduleDir, 'views');
 
     // Generate in-memory
     const nextDomain = domainGen.generateFromYamlFile(moduleYamlPath);
-    const nextValidations = valGen.generateFromYamlFile(moduleYamlPath);
+    const nextDtos = dtoGen.generateFromYamlFile(moduleYamlPath);
+    const nextUseCases = useCaseGen.generateFromYamlFile(moduleYamlPath);
     const nextServices = svcGen.generateFromYamlFile(moduleYamlPath);
     const nextControllers = ctrlGen.generateFromYamlFile(moduleYamlPath);
     const nextStores = storeGen.generateFromYamlFile(moduleYamlPath);
@@ -122,18 +102,20 @@ export function handleCommit(yamlPathArg?: string, files?: string[]): void {
       });
     };
 
-    Object.entries(nextDomain).forEach(([entity, code]) => consider(path.join(domainOut, `${entity}.ts`), code));
-    Object.entries(nextValidations).forEach(([entity, code]) =>
-      consider(path.join(appOut, 'validation', `${entity}Validation.ts`), code)
-    );
+    Object.entries(nextDomain).forEach(([name, { code, type }]) => {
+      const outDir = type === 'valueObject' ? domainValueObjectsOut : domainEntitiesOut;
+      consider(path.join(outDir, `${name}.ts`), code);
+    });
+    Object.entries(nextDtos).forEach(([name, code]) => consider(path.join(appOut, 'dto', `${name}.ts`), code));
+    Object.entries(nextUseCases).forEach(([name, code]) => consider(path.join(appOut, 'useCases', `${name}UseCase.ts`), code));
     Object.entries(nextServices).forEach(([entity, code]) =>
       consider(path.join(appOut, 'services', `${entity}Service.ts`), code)
     );
-    Object.entries(nextControllers).forEach(([entity, code]) =>
-      consider(path.join(infraOut, 'controllers', `${entity}Controller.ts`), code)
+    Object.entries(nextControllers).forEach(([name, code]) =>
+      consider(path.join(infraOut, 'controllers', `${name}Controller.ts`), code)
     );
     Object.entries(nextStores).forEach(([entity, code]) => consider(path.join(infraOut, 'stores', `${entity}Store.ts`), code));
-    Object.entries(nextTemplates).forEach(([, { file, contents }]) => consider(file, contents));
+    Object.entries(nextTemplates).forEach(([name, code]) => consider(path.join(viewsOut, `${name}.html`), code));
   });
 
   const commitsDir = ensureCommitsDir();
@@ -144,4 +126,3 @@ export function handleCommit(yamlPathArg?: string, files?: string[]): void {
   // eslint-disable-next-line no-console
   console.log(colors.green(`Saved diff summary with ${diffs.length} modified file(s) to ${path.relative(process.cwd(), commitFile)}`));
 }
-

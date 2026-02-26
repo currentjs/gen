@@ -2,50 +2,26 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { resolveYamlPath } from '../utils/cliUtils';
 import { parse as parseYaml } from 'yaml';
-import { DomainModelGenerator } from '../generators/domainModelGenerator';
-import { ValidationGenerator } from '../generators/validationGenerator';
-import { ServiceGenerator } from '../generators/serviceGenerator';
-import { ControllerGenerator } from '../generators/controllerGenerator';
-import { StoreGenerator } from '../generators/storeGenerator';
-import { TemplateGenerator } from '../generators/templateGenerator';
 import { computeContentHash, getStoredHash, initGenerationRegistry, loadRegistry } from '../utils/generationRegistry';
 import { computeHunks, applyHunksToBase, type DiffHunk } from '../utils/commitUtils';
 import { colors } from '../utils/colors';
+import { isValidModuleConfig } from '../types/configTypes';
+import { loadAppConfig, getModuleList, shouldIncludeModule, createGenerators } from '../utils/commandUtils';
 
 export async function handleDiff(yamlPathArg?: string, moduleName?: string): Promise<void> {
   const appYamlPath = resolveYamlPath(yamlPathArg);
   initGenerationRegistry(process.cwd());
-  const raw = fs.readFileSync(appYamlPath, 'utf8');
-  const appConfig = parseYaml(raw) as { modules: Array<string | { module: string }>} | null;
-  const modulesList = (appConfig?.modules ?? []).map(m => (typeof m === 'string' ? m : m.module));
+  const appConfig = loadAppConfig(appYamlPath);
+  const modulesList = getModuleList(appConfig);
 
-  const shouldIncludeModule = (moduleYamlRel: string): boolean => {
-    if (!moduleName || moduleName === '*') return true;
-    const moduleNameLc = moduleName.toLowerCase();
-    const relNormalized = moduleYamlRel.replace(/\\/g, '/').toLowerCase();
-    if (relNormalized.endsWith(`/${moduleNameLc}.yaml`)) return true;
-    const moduleYamlPath = path.isAbsolute(moduleYamlRel)
-      ? moduleYamlRel
-      : path.resolve(process.cwd(), moduleYamlRel);
-    const dirName = path.basename(path.dirname(moduleYamlPath)).toLowerCase();
-    if (dirName === moduleNameLc) return true;
-    if (relNormalized.includes(`/${moduleNameLc}/`) || relNormalized.endsWith(`/${moduleNameLc}`)) return true;
-    return false;
-  };
-
-  const filteredModules = modulesList.filter(shouldIncludeModule);
+  const filteredModules = modulesList.filter(rel => shouldIncludeModule(rel, moduleName));
   if (filteredModules.length === 0) {
     // eslint-disable-next-line no-console
     console.warn(colors.yellow(`No modules matched: ${moduleName}`));
     return;
   }
 
-  const domainGen = new DomainModelGenerator();
-  const valGen = new ValidationGenerator();
-  const svcGen = new ServiceGenerator();
-  const ctrlGen = new ControllerGenerator();
-  const storeGen = new StoreGenerator();
-  const tplGen = new TemplateGenerator();
+  const { domainGen, dtoGen, useCaseGen, serviceGen: svcGen, controllerGen: ctrlGen, storeGen, templateGen: tplGen } = createGenerators();
 
   const results: Array<{ file: string; status: 'clean' | 'modified' | 'missing'; hunks?: DiffHunk[]; note?: string }> = [];
 
@@ -55,13 +31,24 @@ export async function handleDiff(yamlPathArg?: string, moduleName?: string): Pro
       : path.resolve(process.cwd(), moduleYamlRel);
     if (!fs.existsSync(moduleYamlPath)) continue;
 
+    const moduleYamlContent = fs.readFileSync(moduleYamlPath, 'utf8');
+    const moduleConfig = parseYaml(moduleYamlContent);
+    if (!isValidModuleConfig(moduleConfig)) {
+      // eslint-disable-next-line no-console
+      console.warn(colors.yellow(`Skipping ${moduleYamlPath}: not in expected format (missing domain/useCases)`));
+      continue;
+    }
+
     const moduleDir = path.dirname(moduleYamlPath);
-    const domainOut = path.join(moduleDir, 'domain', 'entities');
+    const domainEntitiesOut = path.join(moduleDir, 'domain', 'entities');
+    const domainValueObjectsOut = path.join(moduleDir, 'domain', 'valueObjects');
     const appOut = path.join(moduleDir, 'application');
     const infraOut = path.join(moduleDir, 'infrastructure');
+    const viewsOut = path.join(moduleDir, 'views');
 
     const nextDomain = domainGen.generateFromYamlFile(moduleYamlPath);
-    const nextValidations = valGen.generateFromYamlFile(moduleYamlPath);
+    const nextDtos = dtoGen.generateFromYamlFile(moduleYamlPath);
+    const nextUseCases = useCaseGen.generateFromYamlFile(moduleYamlPath);
     const nextServices = svcGen.generateFromYamlFile(moduleYamlPath);
     const nextControllers = ctrlGen.generateFromYamlFile(moduleYamlPath);
     const nextStores = storeGen.generateFromYamlFile(moduleYamlPath);
@@ -107,12 +94,17 @@ export async function handleDiff(yamlPathArg?: string, moduleName?: string): Pro
       results.push({ file: rel, status: 'modified', hunks, note });
     };
 
-    Object.entries(nextDomain).forEach(([e, code]) => consider(path.join(domainOut, `${e}.ts`), code));
-    Object.entries(nextValidations).forEach(([e, code]) => consider(path.join(appOut, 'validation', `${e}Validation.ts`), code));
+    // Domain: entities and value objects
+    Object.entries(nextDomain).forEach(([name, { code, type }]) => {
+      const outDir = type === 'valueObject' ? domainValueObjectsOut : domainEntitiesOut;
+      consider(path.join(outDir, `${name}.ts`), code);
+    });
+    Object.entries(nextDtos).forEach(([name, code]) => consider(path.join(appOut, 'dto', `${name}.ts`), code));
+    Object.entries(nextUseCases).forEach(([name, code]) => consider(path.join(appOut, 'useCases', `${name}UseCase.ts`), code));
     Object.entries(nextServices).forEach(([e, code]) => consider(path.join(appOut, 'services', `${e}Service.ts`), code));
-    Object.entries(nextControllers).forEach(([e, code]) => consider(path.join(infraOut, 'controllers', `${e}Controller.ts`), code));
+    Object.entries(nextControllers).forEach(([name, code]) => consider(path.join(infraOut, 'controllers', `${name}Controller.ts`), code));
     Object.entries(nextStores).forEach(([e, code]) => consider(path.join(infraOut, 'stores', `${e}Store.ts`), code));
-    Object.entries(nextTemplates).forEach(([, { file, contents }]) => consider(file, contents));
+    Object.entries(nextTemplates).forEach(([name, code]) => consider(path.join(viewsOut, `${name}.html`), code));
   }
 
   if (results.length === 0) {
@@ -138,4 +130,3 @@ export async function handleDiff(yamlPathArg?: string, moduleName?: string): Pro
     }
   });
 }
-

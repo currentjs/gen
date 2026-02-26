@@ -12,13 +12,14 @@ import { handleMigrateCommit } from './commands/migrateCommit';
 
 function printHelp() {
   const title = colors.bold(colors.brightCyan('currentjs - Clean architecture CLI'));
+  const version = colors.bold(colors.brightCyan('v0.5.0'));
   const usage = colors.bold('Usage:');
   const options = colors.bold('Options:');
   const cmd = (s: string) => colors.green(s);
   const flag = (s: string) => colors.yellow(s);
   const help = `
 ${title}
-
+${version}
 ${usage}
   ${cmd('currentjs create app')} ${colors.gray('[name]')}
   ${cmd('currentjs create module')} ${colors.gray('<name>')}

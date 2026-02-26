@@ -6,45 +6,147 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 function moduleYamlTemplate(moduleName: string): string {
   const entityName = moduleName.charAt(0).toUpperCase() + moduleName.slice(1);
   const lower = moduleName.charAt(0).toLowerCase() + moduleName.slice(1);
+  
   const config = {
-    models: [
-      {
-        name: entityName,
-        fields: [] as any[]
+    domain: {
+      aggregates: {
+        [entityName]: {
+          root: true,
+          fields: {
+            // Add your fields here, e.g.:
+            // name: { type: 'string', required: true }
+          }
+        }
       }
-    ],
+    },
+    useCases: {
+      [entityName]: {
+        list: {
+          withChild: false,
+          input: {
+            pagination: {
+              type: 'offset',
+              defaults: {
+                limit: 20,
+                maxLimit: 100
+              }
+            }
+          },
+          output: {
+            from: entityName,
+            pagination: true
+          },
+          handlers: ['default:list']
+        },
+        get: {
+          withChild: false,
+          input: {
+            identifier: 'id'
+          },
+          output: {
+            from: entityName
+          },
+          handlers: ['default:get']
+        },
+        create: {
+          withChild: false,
+          input: {
+            from: entityName
+          },
+          output: {
+            from: entityName
+          },
+          handlers: ['default:create']
+        },
+        update: {
+          withChild: false,
+          input: {
+            identifier: 'id',
+            from: entityName,
+            partial: true
+          },
+          output: {
+            from: entityName
+          },
+          handlers: ['default:update']
+        },
+        delete: {
+          withChild: false,
+          input: {
+            identifier: 'id'
+          },
+          output: 'void',
+          handlers: ['default:delete']
+        }
+      }
+    },
     api: {
-      prefix: `/api/${lower}`,
-      model: entityName,
-      endpoints: [
-        { method: 'GET', path: '/', action: 'list' },
-        { method: 'GET', path: '/:id', action: 'get' },
-        { method: 'POST', path: '/', action: 'create' },
-        { method: 'PUT', path: '/:id', action: 'update' },
-        { method: 'DELETE', path: '/:id', action: 'delete' }
-      ]
+      [entityName]: {
+        prefix: `/api/${lower}`,
+        endpoints: [
+          // Public read access
+          { method: 'GET', path: '/', useCase: `${entityName}:list`, auth: 'all' },
+          { method: 'GET', path: '/:id', useCase: `${entityName}:get`, auth: 'all' },
+          // Authenticated users can create
+          { method: 'POST', path: '/', useCase: `${entityName}:create`, auth: 'authenticated' },
+          // Owner or admin can update/delete
+          { method: 'PUT', path: '/:id', useCase: `${entityName}:update`, auth: ['owner', 'admin'] },
+          { method: 'DELETE', path: '/:id', useCase: `${entityName}:delete`, auth: ['owner', 'admin'] }
+        ]
+      }
     },
-    routes: {
-      prefix: `/${lower}`,
-      model: entityName,
-      strategy: ['back', 'toast'],
-      endpoints: [
-        //bug: the order of the endpoints is important (to fix it in the router)
-        { path: '/create', action: 'empty', view: `${lower}Create` },
-        { path: '/', action: 'list', view: `${lower}List` },
-        { path: '/:id', action: 'get', view: `${lower}Detail` },
-        { path: '/:id/edit', action: 'get', view: `${lower}Update` },
-      ]
-    },
-    actions: {
-      list: { handlers: [`${entityName}:default:list`] },
-      get: { handlers: [`${entityName}:default:get`] },
-      create: { handlers: [`${entityName}:default:create`] },
-      update: { handlers: [`${entityName}:default:update`] },
-      delete: { handlers: [`${entityName}:default:delete`] }
-    },
-    permissions: [] as any[]
+    web: {
+      [entityName]: {
+        prefix: `/${lower}`,
+        layout: 'main_view',
+        pages: [
+          // Public list and detail views
+          { path: '/', useCase: `${entityName}:list`, view: `${lower}List`, auth: 'all' },
+          { path: '/:id', useCase: `${entityName}:get`, view: `${lower}Detail`, auth: 'all' },
+          // Authenticated users can access create form
+          { 
+            path: '/create', 
+            method: 'GET',
+            view: `${lower}Create`, 
+            auth: 'authenticated' 
+          },
+          { 
+            path: '/create', 
+            method: 'POST',
+            useCase: `${entityName}:create`, 
+            auth: 'authenticated',
+            onSuccess: {
+              redirect: `/${lower}/:id`,
+              toast: `${entityName} created successfully`
+            },
+            onError: {
+              stay: true,
+              toast: 'error'
+            }
+          },
+          // Owner or admin can edit
+          { 
+            path: '/:id/edit', 
+            method: 'GET',
+            useCase: `${entityName}:get`, 
+            view: `${lower}Edit`, 
+            auth: ['owner', 'admin']
+          },
+          { 
+            path: '/:id/edit', 
+            method: 'POST',
+            useCase: `${entityName}:update`, 
+            auth: ['owner', 'admin'],
+            onSuccess: {
+              back: true,
+              toast: `${entityName} updated successfully`
+            }
+          }
+        ]
+      }
+    }
   };
+  
   return stringifyYaml(config);
 }
 
@@ -56,10 +158,14 @@ export function handleCreateModule(name?: string): void {
   const moduleRoot = path.join(modulesRoot, name);
   ensureDir(toAbsolute(moduleRoot));
 
-  // Create standard subfolders
-  ensureDir(path.join(moduleRoot, 'domain'));
-  ensureDir(path.join(moduleRoot, 'application'));
-  ensureDir(path.join(moduleRoot, 'infrastructure'));
+  // Create standard subfolders for Clean Architecture
+  ensureDir(path.join(moduleRoot, 'domain', 'entities'));
+  ensureDir(path.join(moduleRoot, 'domain', 'valueObjects'));
+  ensureDir(path.join(moduleRoot, 'application', 'useCases'));
+  ensureDir(path.join(moduleRoot, 'application', 'services'));
+  ensureDir(path.join(moduleRoot, 'application', 'dto'));
+  ensureDir(path.join(moduleRoot, 'infrastructure', 'controllers'));
+  ensureDir(path.join(moduleRoot, 'infrastructure', 'stores'));
   ensureDir(path.join(moduleRoot, 'views'));
 
   // Create module yaml
@@ -70,22 +176,24 @@ export function handleCreateModule(name?: string): void {
 
   // Add to root app.yaml
   const appYamlPath = path.join(process.cwd(), 'app.yaml');
-  let appConfig: any = { modules: [] };
+  let appConfig: any = { modules: {} };
   if (fs.existsSync(appYamlPath)) {
     try {
       const content = fs.readFileSync(appYamlPath, 'utf8');
-      appConfig = parseYaml(content) || { modules: [] };
+      appConfig = parseYaml(content) || { modules: {} };
     } catch {
-      appConfig = { modules: [] };
+      appConfig = { modules: {} };
     }
   }
-  if (!Array.isArray(appConfig.modules)) appConfig.modules = [];
+  if (!appConfig.modules || typeof appConfig.modules !== 'object' || Array.isArray(appConfig.modules)) {
+    appConfig.modules = {};
+  }
 
-  // Use posix-style path in YAML
+  const moduleKey = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
   const moduleYamlRel = path.posix.join('src', 'modules', name, `${name.toLowerCase()}.yaml`);
-  const alreadyPresent = appConfig.modules.some((m: any) => (typeof m === 'string' ? m === moduleYamlRel : m?.module === moduleYamlRel));
+  const alreadyPresent = appConfig.modules[moduleKey]?.path === moduleYamlRel;
   if (!alreadyPresent) {
-    appConfig.modules.push({ module: moduleYamlRel });
+    appConfig.modules[moduleKey] = { path: moduleYamlRel };
   }
 
   fs.writeFileSync(appYamlPath, stringifyYaml(appConfig), 'utf8');

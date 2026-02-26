@@ -1,791 +1,287 @@
 import { parse as parseYaml } from 'yaml';
 import * as fs from 'fs';
 import * as path from 'path';
-import { serviceTemplates, serviceFileTemplate } from './templates/serviceTemplates';
 import { writeGeneratedFile } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
-import { COMMON_FILES, PATH_PATTERNS } from '../utils/constants';
-
-interface FieldConfig {
-  name: string;
-  type: string;
-  required?: boolean;
-  unique?: boolean;
-  auto?: boolean;
-  // Relationship configuration
-  displayFields?: string[];
-}
-
-interface ActionConfig {
-  handlers: string[];
-}
-
-interface PermissionConfig {
-  role: string;
-  actions: string[];
-}
-
-interface ModelConfig {
-  name: string;
-  fields: FieldConfig[];
-}
-
-type ModuleConfig = {
-  models?: ModelConfig[];
-  actions?: Record<string, ActionConfig>;
-  permissions?: PermissionConfig[];
-};
-
-type AppConfig =
-  | {
-      modules: Record<string, ModuleConfig>;
-    }
-  | ModuleConfig;
+import { 
+  ModuleConfig,
+  UseCaseDefinition,
+  AggregateConfig,
+  isValidModuleConfig 
+} from '../types/configTypes';
+import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
+import { capitalize, mapType as mapTypeUtil } from '../utils/typeUtils';
 
 export class ServiceGenerator {
-  private availableModels: Set<string> = new Set();
+  private availableAggregates: Map<string, AggregateConfig> = new Map();
 
-  private setAvailableModels(models: ModelConfig[]): void {
-    this.availableModels.clear();
-    models.forEach(model => {
-      this.availableModels.add(model.name);
-    });
+  private mapType(yamlType: string): string {
+    return mapTypeUtil(yamlType, this.availableAggregates);
   }
 
-  private isRelationshipField(field: FieldConfig): boolean {
-    return this.availableModels.has(field.type);
+  private generateListHandler(modelName: string, storeName: string): string {
+    return `  async list(page: number = 1, limit: number = 20): Promise<{ items: ${modelName}[]; total: number; page: number; limit: number }> {
+    const [items, total] = await Promise.all([
+      this.${storeName}.getAll(page, limit),
+      this.${storeName}.count()
+    ]);
+    return { items, total, page, limit };
+  }`;
   }
 
-  private getForeignKeyFieldName(field: FieldConfig): string {
-    // Convention: fieldName + 'Id' (e.g., owner -> ownerId)
-    return field.name + 'Id';
-  }
-
-  private hasPermissions(config: AppConfig): boolean {
-    if ((config as any).modules) {
-      return Object.values((config as any).modules as Record<string, ModuleConfig>).some(
-        module => module.permissions && module.permissions.length > 0
-      );
-    }
-    const module = config as ModuleConfig;
-    return !!(module.permissions && module.permissions.length > 0);
-  }
-
-  private getActionPermissions(moduleName: string, moduleConfig: ModuleConfig): Record<string, string[]> {
-    if (!moduleConfig.permissions || !moduleConfig.actions) {
-      return {};
-    }
-
-    const actionPermissions: Record<string, string[]> = {};
-
-    // Initialize all actions with empty permissions
-    Object.keys(moduleConfig.actions).forEach(action => {
-      actionPermissions[action] = [];
-    });
-
-    // Fill in permissions for each action
-    (moduleConfig.permissions || []).forEach(permission => {
-      (permission.actions || []).forEach(action => {
-        if (actionPermissions[action]) {
-          actionPermissions[action].push(permission.role);
-        }
-      });
-    });
-
-    return actionPermissions;
-  }
-
-  private generatePermissionCheck(action: string, roles: string[], entityName: string): string {
-    if (roles.length === 0 || roles.includes('all')) {
-      return '';
-    }
-
-    if (roles.includes('none')) {
-      return "    throw new Error('This action is not permitted');";
-    }
-
-    const nonOwnerRoles = roles.filter(role => !['all', 'none', 'owner'].includes(role));
-    const rolesArray = nonOwnerRoles.map(role => `'${role}'`).join(', ');
-
-    // Special-case: list action with owner → rely on store-level filtering; only enforce static role checks for other roles
-    if (action === 'list' && roles.includes('owner')) {
-      if (nonOwnerRoles.length === 0) {
-        return '';
-      }
-      return serviceTemplates.permissionCheck
-        .replace(/{{REQUIRED_ROLES}}/g, roles.join(', '))
-        .replace(/{{ACTION_NAME}}/g, action)
-        .replace(/{{ROLES_ARRAY}}/g, rolesArray);
-    }
-
-    // For resource-based owner permission (non-list), fetch resource first and verify ownership
-    if (roles.includes('owner')) {
-      const isResourceBased = ['get', 'update', 'delete'].includes(action);
-      if (!isResourceBased) {
-        // Not a resource-based action; fall back to static role checks only (if any non-owner roles)
-        if (nonOwnerRoles.length === 0) {
-          return '';
-        }
-        return serviceTemplates.permissionCheck
-          .replace(/{{REQUIRED_ROLES}}/g, roles.join(', '))
-          .replace(/{{ACTION_NAME}}/g, action)
-          .replace(/{{ROLES_ARRAY}}/g, rolesArray);
-      }
-      const entityLower = entityName.toLowerCase();
-      const resourceIdParam = this.getResourceIdForAction(action);
-      const notFoundMessage = `${entityName} not found`;
-
-      // If there are additional roles besides owner, allow them to bypass owner check
-      const maybeRoleBypass = nonOwnerRoles.length > 0
-        ? `    const allowedRoles = [${rolesArray}];
-    if (allowedRoles.includes(user.role)) {
-      // Explicit role allowed; skip owner check
-    } else {
-      const ${entityLower} = await this.${entityLower}Store.getById(${resourceIdParam});
-      if (!${entityLower}) {
-        throw new Error('${notFoundMessage}');
-      }
-      if ((${entityLower} as any).userId !== user.id) {
-        throw new Error('You can only access your own resources');
-      }
-    }`
-        : `    const ${entityLower} = await this.${entityLower}Store.getById(${resourceIdParam});
+  private generateGetHandler(modelName: string, storeName: string, entityLower: string): string {
+    return `  async get(id: number): Promise<${modelName}> {
+    const ${entityLower} = await this.${storeName}.getById(id);
     if (!${entityLower}) {
-      throw new Error('${notFoundMessage}');
+      throw new Error('${modelName} not found');
     }
-    if ((${entityLower} as any).userId !== user.id) {
-      throw new Error('You can only access your own resources');
-    }`;
-
-      return maybeRoleBypass;
-    }
-
-    // Static role check for non-owner roles
-    return serviceTemplates.permissionCheck
-      .replace(/{{REQUIRED_ROLES}}/g, roles.join(', '))
-      .replace(/{{ACTION_NAME}}/g, action)
-      .replace(/{{ROLES_ARRAY}}/g, rolesArray);
+    return ${entityLower};
+  }`;
   }
 
-  private getResourceIdForAction(action: string): string {
-    switch (action) {
-      case 'get':
-      case 'update':
-      case 'delete':
-        return 'id';
-      default:
-        return 'id';
-    }
-  }
-
-  private generateMethodParams(action: string, entityName: string): string {
-    const entityParam = `${entityName.toLowerCase()}Data`;
-    switch (action) {
-      case 'list':
-        return 'page: number = 1, limit: number = 10';
-      case 'get':
-      case 'getById':
-        return 'id: number';
-      case 'create':
-        return `${entityParam}: ${entityName}DTO`;
-      case 'update':
-        return `id: number, ${entityParam}: ${entityName}DTO`;
-      case 'delete':
-        return 'id: number';
-      default:
-        return '';
-    }
-  }
-
-  private generateReturnType(action: string, entityName: string): string {
-    switch (action) {
-      case 'list':
-        return `${entityName}[]`;
-      case 'get':
-      case 'getById':
-      case 'create':
-      case 'update':
-        return entityName;
-      case 'delete':
-        return '{ success: boolean; message: string }';
-      default:
-        return 'void';
-    }
-  }
-
-  private generateMethodImplementation(
-    action: string,
-    entityName: string,
-    handlers: string[],
-    moduleName: string,
-    roles: string[],
-    moduleConfig: ModuleConfig
+  private generateCreateHandler(
+    modelName: string,
+    storeName: string,
+    entityLower: string,
+    aggregateConfig: AggregateConfig,
+    childInfo?: ChildEntityInfo
   ): string {
-    if (!handlers || handlers.length === 0) {
-      return `// TODO: Implement ${action} method`;
-    }
-
-    const implementations: string[] = [];
-    const entityLower = entityName.toLowerCase();
-
-    handlers.forEach(handler => {
-      // Handle new explicit format: modelname:default:action or modelname:custommethod
-      if (handler.includes(':')) {
-        const parts = handler.split(':');
-        
-        if (parts.length === 3 && parts[1] === 'default') {
-          // Format: modelname:default:action
-          const [modelName, , actionName] = parts;
-          
-          // Check if this handler applies to current model
-          if (modelName.toLowerCase() === entityLower || modelName === entityName) {
-            const template = serviceTemplates.defaultImplementations[
-              actionName as keyof typeof serviceTemplates.defaultImplementations
-            ];
-            if (template) {
-              let processedTemplate = template
-                .replace(/{{ENTITY_NAME}}/g, entityName)
-                .replace(/{{ENTITY_LOWER}}/g, entityLower);
-
-              // Handle constructor args for create action
-              if (actionName === 'create') {
-                const relationshipLoading = this.generateRelationshipLoading(moduleConfig, entityName);
-                const constructorArgs = this.generateConstructorArgs(moduleConfig, entityName);
-                
-                if (relationshipLoading) {
-                  // Insert relationship loading before the entity creation
-                  processedTemplate = relationshipLoading + '\n    ' + processedTemplate;
-                }
-                
-                processedTemplate = processedTemplate.replace(/{{CONSTRUCTOR_ARGS}}/g, constructorArgs);
-              }
-
-              // Handle setter calls for update action
-              if (actionName === 'update') {
-                const setterCalls = this.generateUpdateSetterCalls(moduleConfig, entityName, true);
-                processedTemplate = processedTemplate.replace(/{{UPDATE_SETTER_CALLS}}/g, setterCalls);
-              }
-
-              // Special-case: list action with only owner role → fetch by userId
-              if (actionName === 'list') {
-                const onlyOwner = roles.length > 0 && roles.every(r => r === 'owner');
-                if (onlyOwner) {
-                  processedTemplate = `const ${entityLower}s = await this.${entityLower}Store.getAllByUserId(user.id, page, limit);\n    return ${entityLower}s;`;
-                }
-              }
-
-              implementations.push(processedTemplate);
-            } else {
-              implementations.push(`// TODO: Implement default ${actionName} method for ${entityName}`);
-            }
-          } else {
-            // Cross-model default call
-            const targetModel = moduleConfig.models?.find(m => m.name.toLowerCase() === modelName.toLowerCase() || m.name === modelName);
-            if (targetModel) {
-              const targetServiceVar = `${targetModel.name.toLowerCase()}Service`;
-              const customImpl = `// Cross-model call to ${targetModel.name}Service
-    const result = await this.${targetServiceVar}.${actionName}(${this.getMethodCallParams(action)});
-    return result;`;
-              implementations.push(customImpl);
-            } else {
-              implementations.push(`// TODO: Model ${modelName} not found for handler ${handler}`);
-            }
-          }
-        } else if (parts.length === 2) {
-          // Format: modelname:custommethod  
-          const [modelName, methodName] = parts;
-          
-          // Check if this handler applies to current model
-          if (modelName.toLowerCase() === entityLower || modelName === entityName) {
-            // Same model - this indicates a custom method should be implemented in this service
-            implementations.push(`// TODO: Implement custom ${methodName} method for ${entityName}`);
-          } else {
-            // Cross-model custom call
-            const targetModel = moduleConfig.models?.find(m => m.name.toLowerCase() === modelName.toLowerCase() || m.name === modelName);
-            if (targetModel) {
-              const targetServiceVar = `${targetModel.name.toLowerCase()}Service`;
-              const customImpl = `// Cross-model call to ${targetModel.name}Service
-    const result = await this.${targetServiceVar}.${methodName}(${this.getMethodCallParams(action)});
-    return result;`;
-              implementations.push(customImpl);
-            } else {
-              implementations.push(`// TODO: Model ${modelName} not found for handler ${handler}`);
-            }
-          }
-        } else {
-          implementations.push(`// TODO: Invalid handler format ${handler}. Use modelname:default:action or modelname:custommethod`);
-        }
-      } 
-      else {
-        implementations.push(`// TODO: Invalid handler format ${handler}. Use modelname:default:action or modelname:custommethod`);
-      }
-    });
-
-    return implementations.join('\n    ');
-  }
-
-  private extractFunctionName(filePath: string): string {
-    const parts = filePath.split('/');
-    const fileName = parts[parts.length - 1];
-    return fileName;
-  }
-
-  private getMethodCallParams(action: string): string {
-    switch (action) {
-      case 'list':
-        return 'page, limit';
-      case 'get':
-        return 'id';
-      case 'create':
-        return 'userData';
-      case 'update':
-        return 'id, updates';
-      case 'delete':
-        return 'id';
-      default:
-        return '/* custom params */';
-    }
-  }
-
-  private sortFieldsByRequired(fields: any[]): any[] {
-    // Sort fields: required fields first, then optional fields
-    // This must match the order used in domainModelGenerator
-    return [...fields].sort((a, b) => {
-      const aRequired = a.required !== false && !a.auto;
-      const bRequired = b.required !== false && !b.auto;
-      
-      if (aRequired === bRequired) {
-        return 0; // Keep original order if both have same required status
-      }
-      return aRequired ? -1 : 1; // Required fields come first
-    });
-  }
-
-  private generateConstructorArgs(moduleConfig: ModuleConfig, entityName: string): string {
-    if (!moduleConfig.models || moduleConfig.models.length === 0) {
-      return '';
-    }
-    
-    // Find the correct model by entityName instead of always using first model
-    const model = moduleConfig.models.find((m: ModelConfig) => m.name === entityName) || moduleConfig.models[0];
-    const entityLower = entityName.toLowerCase();
-    
-    // Sort fields to match the constructor parameter order
-    const sortedFields = this.sortFieldsByRequired(model.fields);
-    
-    const args: string[] = [];
-    sortedFields
-      .filter(field => !field.auto && field.name !== 'id')
-      .forEach(field => {
-        // For relationship fields, reference the loaded object variable
-        if (this.isRelationshipField(field)) {
-          args.push(`${field.name}Object`);
-        } else {
-          args.push(`${entityLower}Data.${field.name}`);
-        }
+    const firstArgField = childInfo ? childInfo.parentIdField : 'ownerId';
+    const fields = Object.entries(aggregateConfig.fields)
+      .filter(([fieldName, fieldConfig]) => !fieldConfig.auto && fieldName !== 'id')
+      .sort((a, b) => {
+        const aRequired = a[1].required !== false;
+        const bRequired = b[1].required !== false;
+        if (aRequired === bRequired) return 0;
+        return aRequired ? -1 : 1;
       });
-    
-    return args.join(', ');
+    const fieldArgs = fields.map(([fieldName]) => `input.${fieldName}`).join(', ');
+    const constructorArgs = `input.${firstArgField}, ${fieldArgs}`;
+    return `  async create(input: any): Promise<${modelName}> {
+    const ${entityLower} = new ${modelName}(0, ${constructorArgs});
+    return await this.${storeName}.insert(${entityLower});
+  }`;
   }
 
-  private generateRelationshipLoading(moduleConfig: ModuleConfig, entityName: string): string {
-    if (!moduleConfig.models || moduleConfig.models.length === 0) {
-      return '';
-    }
-    
-    const model = moduleConfig.models.find((m: ModelConfig) => m.name === entityName) || moduleConfig.models[0];
-    const entityLower = entityName.toLowerCase();
-    const relationshipFields = model.fields.filter(f => this.isRelationshipField(f));
-    
-    if (relationshipFields.length === 0) {
-      return '';
-    }
-
-    const loadingCode = relationshipFields.map(field => {
-      const foreignKeyName = this.getForeignKeyFieldName(field);
-      const relatedModel = field.type;
-      const relatedModelLower = relatedModel.toLowerCase();
-      const varName = `${field.name}Object`;
-      
-      if (field.required) {
-        return `const ${varName} = await this.${relatedModelLower}Store.getById(${entityLower}Data.${foreignKeyName});
-    if (!${varName}) {
-      throw new Error('${relatedModel} not found with id ' + ${entityLower}Data.${foreignKeyName});
+  private generateUpdateHandler(
+    modelName: string,
+    storeName: string,
+    aggregateConfig: AggregateConfig
+  ): string {
+    const setterCalls = Object.entries(aggregateConfig.fields)
+      .filter(([fieldName, fieldConfig]) => !fieldConfig.auto && fieldName !== 'id')
+      .map(([fieldName]) => {
+        const methodName = `set${capitalize(fieldName)}`;
+        return `    if (input.${fieldName} !== undefined) {
+      existing${modelName}.${methodName}(input.${fieldName});
     }`;
-      } else {
-        return `const ${varName} = ${entityLower}Data.${foreignKeyName} 
-      ? await this.${relatedModelLower}Store.getById(${entityLower}Data.${foreignKeyName})
-      : null;`;
-      }
-    }).join('\n    ');
-
-    return '    // Load relationship objects\n    ' + loadingCode;
-  }
-
-  private generateUpdateSetterCalls(moduleConfig: ModuleConfig, entityName: string, includeRelationshipLoading: boolean = false): string {
-    if (!moduleConfig.models || moduleConfig.models.length === 0) {
-      return '';
-    }
-    
-    // Find the correct model by entityName instead of always using first model
-    const model = moduleConfig.models.find(m => m.name === entityName) || moduleConfig.models[0];
-    const entityLower = entityName.toLowerCase();
-    
-    let code = '';
-    
-    // Add relationship loading if requested
-    if (includeRelationshipLoading) {
-      const relationshipLoading = this.generateRelationshipLoading(moduleConfig, entityName);
-      if (relationshipLoading) {
-        code = relationshipLoading + '\n    ';
-      }
-    }
-    
-    const setterCalls = model.fields
-      .filter(field => !field.auto && field.name !== 'id')
-      .map(field => {
-        // For relationship fields, set the loaded object
-        if (this.isRelationshipField(field)) {
-          const foreignKeyName = this.getForeignKeyFieldName(field);
-          const methodName = `set${field.name.charAt(0).toUpperCase() + field.name.slice(1)}`;
-          return `if (${entityLower}Data.${foreignKeyName} !== undefined) {
-      existing${entityName}.${methodName}(${field.name}Object);
-    }`;
-        } else {
-          const methodName = `set${field.name.charAt(0).toUpperCase() + field.name.slice(1)}`;
-          return `if (${entityLower}Data.${field.name} !== undefined) {
-      existing${entityName}.${methodName}(${entityLower}Data.${field.name});
-    }`;
-        }
       })
-      .join('\n    ');
+      .join('\n');
+    return `  async update(id: number, input: any): Promise<${modelName}> {
+    const existing${modelName} = await this.${storeName}.getById(id);
+    if (!existing${modelName}) {
+      throw new Error('${modelName} not found');
+    }
     
-    return code + setterCalls;
+${setterCalls}
+    
+    return await this.${storeName}.update(id, existing${modelName});
+  }`;
   }
 
-  private replaceTemplateVars(template: string, variables: Record<string, string | boolean>): string {
-    let result = template;
+  private generateDeleteHandler(modelName: string, storeName: string): string {
+    return `  async delete(id: number): Promise<{ success: boolean; message: string }> {
+    const success = await this.${storeName}.softDelete(id);
+    if (!success) {
+      throw new Error('${modelName} not found or could not be deleted');
+    }
+    return { success: true, message: '${modelName} deleted successfully' };
+  }`;
+  }
 
-    Object.entries(variables).forEach(([key, value]) => {
-      const regex = new RegExp(`{{${key}}}`, 'g');
-      result = result.replace(regex, String(value));
+  private generateDefaultHandlerMethod(
+    modelName: string,
+    actionName: string,
+    aggregateConfig: AggregateConfig,
+    childInfo?: ChildEntityInfo
+  ): string {
+    const entityLower = modelName.toLowerCase();
+    const storeName = `${entityLower}Store`;
+
+    switch (actionName) {
+      case 'list':
+        return this.generateListHandler(modelName, storeName);
+      case 'get':
+        return this.generateGetHandler(modelName, storeName, entityLower);
+      case 'create':
+        return this.generateCreateHandler(modelName, storeName, entityLower, aggregateConfig, childInfo);
+      case 'update':
+        return this.generateUpdateHandler(modelName, storeName, aggregateConfig);
+      case 'delete':
+        return this.generateDeleteHandler(modelName, storeName);
+      default:
+        return `  async ${actionName}(input: any): Promise<any> {
+    // TODO: Implement default ${actionName} handler
+    throw new Error('Not implemented');
+  }`;
+    }
+  }
+
+  private generateCustomHandlerMethod(
+    modelName: string,
+    handlerName: string
+  ): string {
+    return `  async ${handlerName}(result: any, input: any): Promise<any> {
+    // TODO: Implement custom ${handlerName} handler
+    // This method receives the result from the previous handler (or null if first)
+    // and the input context
+    return result;
+  }`;
+  }
+
+  private collectHandlers(useCases: Record<string, UseCaseDefinition>): Set<string> {
+    const handlers = new Set<string>();
+    
+    Object.values(useCases).forEach(useCaseConfig => {
+      useCaseConfig.handlers.forEach(handler => {
+        handlers.add(handler);
+      });
+    });
+
+    return handlers;
+  }
+
+  private generateListByParentMethod(modelName: string, childInfo?: ChildEntityInfo): string {
+    if (!childInfo) return '';
+    const storeVar = `${modelName.toLowerCase()}Store`;
+    return `
+  async listByParent(parentId: number): Promise<${modelName}[]> {
+    return await this.${storeVar}.getByParentId(parentId);
+  }`;
+  }
+
+  private generateGetResourceOwnerMethod(modelName: string): string {
+    const storeVar = `${modelName.toLowerCase()}Store`;
+    
+    return `
+  /**
+   * Get the owner ID of a resource by its ID.
+   * Used for pre-mutation authorization checks.
+   */
+  async getResourceOwner(id: number): Promise<number | null> {
+    return await this.${storeVar}.getResourceOwner(id);
+  }`;
+  }
+
+  private generateService(
+    modelName: string,
+    useCases: Record<string, UseCaseDefinition>,
+    aggregateConfig: AggregateConfig,
+    childInfo?: ChildEntityInfo
+  ): string {
+    const serviceName = `${modelName}Service`;
+    const storeName = `${modelName}Store`;
+    const storeVar = `${modelName.toLowerCase()}Store`;
+
+    // Collect all unique handlers
+    const handlers = this.collectHandlers(useCases);
+
+    // Generate methods for each handler
+    const methods: string[] = [];
+    
+    handlers.forEach(handler => {
+      if (handler.startsWith('default:')) {
+        const actionName = handler.replace('default:', '');
+        methods.push(this.generateDefaultHandlerMethod(modelName, actionName, aggregateConfig, childInfo));
+      } else {
+        methods.push(this.generateCustomHandlerMethod(modelName, handler));
+      }
+    });
+
+    const listByParentMethod = this.generateListByParentMethod(modelName, childInfo);
+    if (listByParentMethod) {
+      methods.push(listByParentMethod);
+    }
+
+    const getResourceOwnerMethod = this.generateGetResourceOwnerMethod(modelName);
+    if (getResourceOwnerMethod) {
+      methods.push(getResourceOwnerMethod);
+    }
+
+    return `import { Injectable } from '../../../../system';
+import { ${modelName} } from '../../domain/entities/${modelName}';
+import { ${storeName} } from '../../infrastructure/stores/${storeName}';
+
+/**
+ * Service layer for ${modelName}
+ * Contains business logic handlers that can be composed in use cases
+ */
+@Injectable()
+export class ${serviceName} {
+  constructor(
+    private ${storeVar}: ${storeName}
+  ) {}
+
+${methods.join('\n\n')}
+}`;
+  }
+
+  public generateFromConfig(config: ModuleConfig): Record<string, string> {
+    const result: Record<string, string> = {};
+
+    // Collect all aggregates
+    if (config.domain.aggregates) {
+      Object.entries(config.domain.aggregates).forEach(([name, aggConfig]) => {
+        this.availableAggregates.set(name, aggConfig);
+      });
+    }
+
+    const childEntityMap = buildChildEntityMap(config);
+
+    // Generate a Service file for each model
+    Object.entries(config.useCases).forEach(([modelName, useCases]) => {
+      const aggregateConfig = this.availableAggregates.get(modelName);
+      
+      if (!aggregateConfig) {
+        console.warn(`Warning: No aggregate found for model ${modelName}`);
+        return;
+      }
+
+      const childInfo = childEntityMap.get(modelName);
+      result[modelName] = this.generateService(modelName, useCases, aggregateConfig, childInfo);
     });
 
     return result;
-  }
-
-  private getServiceMethodName(action: string, entityName: string, handlers: string[]): string {
-    const entityLower = entityName.toLowerCase();
-    
-    // Find handler that applies to this model
-    const relevantHandler = handlers.find(h => {
-      const parts = h.split(':');
-      if (parts.length === 3 && parts[1] === 'default') {
-        const [modelName] = parts;
-        return modelName.toLowerCase() === entityLower || modelName === entityName;
-      } else if (parts.length === 2) {
-        const [modelName] = parts;
-        return modelName.toLowerCase() === entityLower || modelName === entityName;
-      }
-      return false;
-    });
-
-    if (relevantHandler) {
-      const parts = relevantHandler.split(':');
-      if (parts.length === 3 && parts[1] === 'default') {
-        // Format: modelname:default:action -> use action name as method
-        return parts[2];
-      } else if (parts.length === 2) {
-        // Format: modelname:custommethod -> use custom method name
-        return parts[1];
-      }
-    }
-
-    // Fallback to action name
-    return action;
-  }
-
-  private generateHandlerMethod(
-    handler: string,
-    entityName: string,
-    roles: string[],
-    hasPermissions: boolean,
-    moduleConfig: ModuleConfig
-  ): string {
-    const parts = handler.split(':');
-    if (parts.length < 2) {
-      return '';
-    }
-
-    let methodName: string;
-    let isDefault = false;
-    let actionName = '';
-
-    if (parts.length === 3 && parts[1] === 'default') {
-      // Format: modelname:default:action
-      actionName = parts[2];
-      methodName = actionName === 'getById' ? 'get' : actionName; // Use 'get' instead of 'getById'
-      isDefault = true;
-    } else if (parts.length === 2) {
-      // Format: modelname:custommethod
-      methodName = parts[1];
-      isDefault = false;
-    } else {
-      return '';
-    }
-
-    const entityLower = entityName.toLowerCase();
-    
-    // Generate method parameters based on whether it's default or custom
-    let methodParams: string;
-    let returnType: string;
-    let methodImplementation: string;
-
-    if (isDefault) {
-      // For default handlers, use standard parameters
-      methodParams = this.generateMethodParams(actionName, entityName);
-      returnType = this.generateReturnType(actionName, entityName);
-      
-      // Get the default implementation template
-      const template = serviceTemplates.defaultImplementations[
-        actionName as keyof typeof serviceTemplates.defaultImplementations
-      ];
-      
-      if (template) {
-        methodImplementation = template
-          .replace(/{{ENTITY_NAME}}/g, entityName)
-          .replace(/{{ENTITY_LOWER}}/g, entityLower);
-
-        // Handle constructor args for create action
-        if (actionName === 'create') {
-          const relationshipLoading = this.generateRelationshipLoading(moduleConfig, entityName);
-          const constructorArgs = this.generateConstructorArgs(moduleConfig, entityName);
-          
-          if (relationshipLoading) {
-            // Insert relationship loading before the entity creation
-            methodImplementation = relationshipLoading + '\n    ' + methodImplementation;
-          }
-          
-          methodImplementation = methodImplementation.replace(/{{CONSTRUCTOR_ARGS}}/g, constructorArgs);
-        }
-
-        // Handle setter calls for update action
-        if (actionName === 'update') {
-          const setterCalls = this.generateUpdateSetterCalls(moduleConfig, entityName, true);
-          methodImplementation = methodImplementation.replace(/{{UPDATE_SETTER_CALLS}}/g, setterCalls);
-        }
-
-        // Special-case: list action with only owner role → fetch by userId
-        if (actionName === 'list') {
-          const onlyOwner = roles.length > 0 && roles.every(r => r === 'owner');
-          if (onlyOwner) {
-            methodImplementation = `const ${entityLower}s = await this.${entityLower}Store.getAllByUserId(user.id, page, limit);\n    return ${entityLower}s;`;
-          }
-        }
-      } else {
-        methodImplementation = `// TODO: Implement default ${actionName} method for ${entityName}`;
-      }
-    } else {
-      // For custom handlers, use result and context parameters
-      methodParams = 'result: any, context: any';
-      returnType = 'any';
-      methodImplementation = `// TODO: Implement custom ${methodName} method for ${entityName}`;
-    }
-
-    const permissionCheck = isDefault ? this.generatePermissionCheck(actionName, roles, entityName) : '';
-    const hasUserParam = roles.length > 0 && !roles.includes('all');
-
-    const variables = {
-      METHOD_NAME: methodName,
-      METHOD_PARAMS: methodParams,
-      USER_PARAM: hasUserParam ? ', user: AuthenticatedUser' : '',
-      RETURN_TYPE: returnType,
-      PERMISSION_CHECK: permissionCheck,
-      METHOD_IMPLEMENTATION: methodImplementation
-    };
-
-    return this.replaceTemplateVars(serviceTemplates.serviceMethod, variables);
-  }
-
-  public generateServiceForModel(model: ModelConfig, moduleName: string, moduleConfig: ModuleConfig, hasGlobalPermissions: boolean): string {
-    if (!moduleConfig.actions) {
-      return '';
-    }
-
-    const entityName = model.name;
-    const entityLower = entityName.toLowerCase();
-    const actionPermissions = this.getActionPermissions(moduleName, moduleConfig);
-    const hasPermissions = !!(hasGlobalPermissions && moduleConfig.permissions && moduleConfig.permissions.length > 0);
-
-    // Collect all unique handlers for this model
-    const modelHandlers = new Set<string>();
-    Object.entries(moduleConfig.actions || {}).forEach(([action, actionConfig]) => {
-      const handlers = actionConfig.handlers || [];
-      handlers.forEach(handler => {
-        // Only include handlers that apply to this model
-        if (handler.startsWith(`${entityLower}:`) || handler.startsWith(`${entityName}:`)) {
-          modelHandlers.add(handler);
-        }
-      });
-    });
-
-    // Generate a method for each unique handler
-    const serviceMethods = Array.from(modelHandlers)
-      .map(handler => {
-        // Determine which actions use this handler to get permissions
-        const actionsUsingHandler = Object.entries(moduleConfig.actions || {})
-          .filter(([, actionConfig]) => (actionConfig.handlers || []).includes(handler))
-          .map(([action]) => action);
-        
-        // Use permissions from the first action that uses this handler
-        const firstAction = actionsUsingHandler[0];
-        const roles = firstAction ? (actionPermissions[firstAction] || []) : [];
-        
-        return this.generateHandlerMethod(handler, entityName, roles, hasPermissions, moduleConfig);
-      })
-      .filter(method => method) // Remove empty methods
-      .join('\n\n');
-
-    // Add foreign store constructor params
-    const foreignStoreParams = this.generateForeignStoreConstructorParams(model);
-    
-    const serviceClass = this.replaceTemplateVars(serviceTemplates.serviceClass, {
-      ENTITY_NAME: entityName,
-      ENTITY_LOWER: entityLower,
-      AUTH_SERVICE_PARAM: foreignStoreParams,
-      SERVICE_METHODS: serviceMethods
-    });
-
-    const customImports = this.generateCustomImports(moduleConfig);
-    const foreignStoreImports = this.generateForeignStoreImports(model);
-
-    return this.replaceTemplateVars(serviceFileTemplate, {
-      ENTITY_NAME: entityName,
-      PERMISSIONS_IMPORT: hasPermissions ? "\nimport type { AuthenticatedUser } from '@currentjs/router';" : '',
-      CUSTOM_IMPORTS: customImports + foreignStoreImports,
-      SERVICE_CLASS: serviceClass
-    });
-  }
-
-  public generateService(moduleName: string, moduleConfig: ModuleConfig, hasGlobalPermissions: boolean): string {
-    // Legacy method for backward compatibility - use first model
-    if (!moduleConfig.models || moduleConfig.models.length === 0) {
-      return '';
-    }
-    return this.generateServiceForModel(moduleConfig.models[0], moduleName, moduleConfig, hasGlobalPermissions);
-  }
-
-  private generateForeignStoreImports(model: ModelConfig): string {
-    const relationshipFields = model.fields.filter(f => this.isRelationshipField(f));
-    
-    if (relationshipFields.length === 0) {
-      return '';
-    }
-
-    const imports = relationshipFields.map(field => {
-      const relatedModel = field.type;
-      return `import { ${relatedModel}Store } from '../../infrastructure/stores/${relatedModel}Store';`;
-    });
-    
-    return '\n' + imports.join('\n');
-  }
-
-  private generateForeignStoreConstructorParams(model: ModelConfig): string {
-    const relationshipFields = model.fields.filter(f => this.isRelationshipField(f));
-    
-    if (relationshipFields.length === 0) {
-      return '';
-    }
-
-    const params = relationshipFields.map(field => {
-      const relatedModel = field.type;
-      const relatedModelLower = relatedModel.toLowerCase();
-      return `,\n    private ${relatedModelLower}Store: ${relatedModel}Store`;
-    });
-    
-    return params.join('');
-  }
-
-  private generateCustomImports(moduleConfig: ModuleConfig): string {
-    if (!moduleConfig.actions) return '';
-
-    const imports: string[] = [];
-
-    Object.values(moduleConfig.actions).forEach(actionConfig => {
-      if (actionConfig.handlers) {
-        actionConfig.handlers.forEach(handler => {
-          if (handler.startsWith(PATH_PATTERNS.MODULES_DIRECTIVE)) {
-            const functionName = this.extractFunctionName(handler);
-            const importPath = handler.replace(PATH_PATTERNS.MODULES_DIRECTIVE, '../../');
-            imports.push(`import ${functionName} from '${importPath}';`);
-          }
-        });
-      }
-    });
-
-    return imports.length > 0 ? '\n' + imports.join('\n') : '';
   }
 
   public generateFromYamlFile(yamlFilePath: string): Record<string, string> {
     const yamlContent = fs.readFileSync(yamlFilePath, 'utf8');
-    const config = parseYaml(yamlContent) as AppConfig;
+    const config = parseYaml(yamlContent);
 
-    const result: Record<string, string> = {};
-    const hasGlobalPermissions = this.hasPermissions(config);
-
-    if ((config as any).modules) {
-      Object.entries((config as any).modules as Record<string, ModuleConfig>).forEach(([moduleName, moduleConfig]) => {
-        if (moduleConfig.models && moduleConfig.models.length > 0) {
-          // Set available models for relationship detection
-          this.setAvailableModels(moduleConfig.models);
-          // Generate a service for each model
-          moduleConfig.models.forEach(model => {
-            const serviceCode = this.generateServiceForModel(model, moduleName, moduleConfig, hasGlobalPermissions);
-            if (serviceCode) {
-              result[model.name] = serviceCode;
-            }
-          });
-        }
-      });
-    } else {
-      const moduleName = 'Module';
-      const moduleConfig = config as ModuleConfig;
-      if (moduleConfig.models && moduleConfig.models.length > 0) {
-        // Set available models for relationship detection
-        this.setAvailableModels(moduleConfig.models);
-        // Generate a service for each model
-        moduleConfig.models.forEach(model => {
-          const serviceCode = this.generateServiceForModel(model, moduleName, moduleConfig, hasGlobalPermissions);
-          if (serviceCode) {
-            result[model.name] = serviceCode;
-          }
-        });
-      }
+    if (!isValidModuleConfig(config)) {
+      throw new Error('Configuration does not match new module format. Expected useCases structure.');
     }
 
-    return result;
+    return this.generateFromConfig(config);
   }
 
   public async generateAndSaveFiles(
-    yamlFilePath: string = COMMON_FILES.APP_YAML,
-    outputDir: string = 'application',
+    yamlFilePath: string,
+    moduleDir: string,
     opts?: { force?: boolean; skipOnConflict?: boolean }
   ): Promise<void> {
-    const services = this.generateFromYamlFile(yamlFilePath);
-
-    const servicesDir = path.join(outputDir, 'services');
-
+    const servicesByModel = this.generateFromYamlFile(yamlFilePath);
+    
+    const servicesDir = path.join(moduleDir, 'application', 'services');
     fs.mkdirSync(servicesDir, { recursive: true });
 
-    for (const [moduleName, serviceCode] of Object.entries(services)) {
-      const fileName = `${moduleName}Service.ts`;
-      const filePath = path.join(servicesDir, fileName);
+    for (const [modelName, code] of Object.entries(servicesByModel)) {
+      const filePath = path.join(servicesDir, `${modelName}Service.ts`);
       // eslint-disable-next-line no-await-in-loop
-      await writeGeneratedFile(filePath, serviceCode, { force: !!opts?.force, skipOnConflict: !!opts?.skipOnConflict });
+      await writeGeneratedFile(filePath, code, { force: !!opts?.force, skipOnConflict: !!opts?.skipOnConflict });
     }
 
     // eslint-disable-next-line no-console
     console.log('\n' + colors.green('Service files generated successfully!') + '\n');
   }
 }
-

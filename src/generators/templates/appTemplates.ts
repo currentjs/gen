@@ -2,6 +2,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+function loadTemplate(filename: string): string {
+  return fs.readFileSync(path.join(__dirname, 'data', filename), 'utf8');
+}
+
 export const packageJsonTemplate = (appName: string) => JSON.stringify(
   {
     name: appName || 'my-app',
@@ -31,21 +35,15 @@ export const packageJsonTemplate = (appName: string) => JSON.stringify(
   2
 );
 
-export const tsconfigTemplate = fs.readFileSync(path.join(__dirname, 'data', 'tsConfigTemplate'), 'utf8');
-
-export const appYamlTemplate = fs.readFileSync(path.join(__dirname, 'data', 'appYamlTemplate'), 'utf8');
-
-export const appTsTemplate = fs.readFileSync(path.join(__dirname, 'data', 'appTsTemplate'), 'utf8');
-
-export const mainViewTemplate = fs.readFileSync(path.join(__dirname, 'data', 'mainViewTemplate'), 'utf8');
-
-export const errorTemplate = fs.readFileSync(path.join(__dirname, 'data', 'errorTemplate'), 'utf8');
-
-export const frontendScriptTemplate = fs.readFileSync(path.join(__dirname, 'data', 'frontendScriptTemplate'), 'utf8');
-
-export const translationsTemplate = fs.readFileSync(path.join(__dirname, 'data', 'translationsTemplate'), 'utf8');
-
-export const cursorRulesTemplate = fs.readFileSync(path.join(__dirname, 'data', 'cursorRulesTemplate'), 'utf8');
+export const tsconfigTemplate = loadTemplate('tsConfigTemplate');
+export const appYamlTemplate = loadTemplate('appYamlTemplate');
+export const appTsTemplate = loadTemplate('appTsTemplate');
+export const mainViewTemplate = loadTemplate('mainViewTemplate');
+export const errorTemplate = loadTemplate('errorTemplate');
+export const frontendScriptTemplate = loadTemplate('frontendScriptTemplate');
+export const translationsTemplate = loadTemplate('translationsTemplate');
+export const cursorRulesTemplate = loadTemplate('cursorRulesTemplate');
+export const systemTsTemplate = loadTemplate('systemTsTemplate');
 
 // Directory structure constants
 export const DEFAULT_DIRECTORIES = {
@@ -67,5 +65,6 @@ export const DEFAULT_FILES = {
   ERROR_TEMPLATE: 'error.html',
   FRONTEND_SCRIPT: 'app.js',
   TRANSLATIONS: 'translations.json',
-  CURSOR_RULES: '.cursorrules'
+  CURSOR_RULES: 'AGENTS.md',
+  SYSTEM_TS: 'system.ts'
 } as const;

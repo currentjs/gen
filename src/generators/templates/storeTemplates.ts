@@ -2,260 +2,141 @@ export const storeTemplates = {
   rowInterface: `export interface {{ENTITY_NAME}}Row {
   id: number;
 {{ROW_FIELDS}}
-  created_at: Date;
-  updated_at: Date;
-  deleted_at?: Date;
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string;
 }`,
 
-  storeClass: `export class {{ENTITY_NAME}}Store implements StoreInterface<{{ENTITY_NAME}}, {{ENTITY_NAME}}Row> {
-  private static readonly FILTERABLE_FIELDS = [{{FILTERABLE_FIELDS_ARRAY}}];
-  private static readonly UPDATABLE_FIELDS = [{{UPDATABLE_FIELDS_ARRAY}}];
-  
+  storeClass: `/**
+ * Data access layer for {{ENTITY_NAME}}
+ */
+@Injectable()
+export class {{ENTITY_NAME}}Store {
+  private tableName = '{{TABLE_NAME}}';
+
   constructor(private db: ISqlProvider) {}
 
-  async getById(id: number): Promise<{{ENTITY_NAME}} | null> {
-    try {
-      const query = 'SELECT * FROM {{TABLE_NAME}} WHERE id = :id AND deleted_at IS NULL';
-      const result = await this.db.query(query, { id });
-      
-      if (!result.success || result.data.length === 0) {
-        return null;
-      }
-      
-      return {{ENTITY_NAME}}Store.rowToModel(result.data[0] as {{ENTITY_NAME}}Row);
-    } catch (error) {
-      if (error instanceof MySQLConnectionError) {
-        throw new Error(\`Database connection error while fetching {{ENTITY_NAME}} with id \${id}: \${error.message}\`);
-      } else if (error instanceof MySQLQueryError) {
-        throw new Error(\`Query error while fetching {{ENTITY_NAME}} with id \${id}: \${error.message}\`);
-      }
-      throw error;
-    }
+  private toMySQLDatetime(date: Date): string {
+    return date.toISOString().slice(0, 19).replace('T', ' ');
   }
 
-  async getAll(page: number = 1, limit: number = 10): Promise<{{ENTITY_NAME}}[]> {
-    const offset = (page - 1) * limit;
-    const query = \`SELECT * FROM {{TABLE_NAME}} WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT \${limit} OFFSET \${offset}\`;
-    const result = await this.db.query(query, {});
-    
-    if (!result.success) {
-      return [];
-    }
-    
-    return result.data.map((row: {{ENTITY_NAME}}Row) => {{ENTITY_NAME}}Store.rowToModel(row));
-  }
-
-  async getAllByUserId(userId: number, page: number = 1, limit: number = 10): Promise<{{ENTITY_NAME}}[]> {
-    const offset = (page - 1) * limit;
-    const query = \`SELECT * FROM {{TABLE_NAME}} WHERE user_id = :userId AND deleted_at IS NULL ORDER BY created_at DESC LIMIT \${limit} OFFSET \${offset}\`;
-    const result = await this.db.query(query, { userId });
-    
-    if (!result.success) {
-      return [];
-    }
-    
-    return result.data.map((row: {{ENTITY_NAME}}Row) => {{ENTITY_NAME}}Store.rowToModel(row));
-  }
-
-  async getBy(filters: Partial<Pick<{{ENTITY_NAME}}Row, {{FILTERABLE_FIELDS}}>>): Promise<{{ENTITY_NAME}} | null> {
-    const filterKeys = Object.keys(filters);
-    
-    // Runtime validation against SQL injection
-    for (const key of filterKeys) {
-      if (!{{ENTITY_NAME}}Store.FILTERABLE_FIELDS.includes(key)) {
-        throw new Error(\`Invalid filter field: \${key}\`);
-      }
-    }
-    
-    const whereConditions = filterKeys.map(key => \`\${key} = :\${key}\`);
-    
-    if (whereConditions.length === 0) {
-      throw new Error('At least one filter condition is required');
-    }
-    
-    const query = \`SELECT * FROM {{TABLE_NAME}} WHERE \${whereConditions.join(' AND ')} AND deleted_at IS NULL LIMIT 1\`;
-    const result = await this.db.query(query, filters);
-    
-    if (!result.success || result.data.length === 0) {
-      return null;
-    }
-    
-    return {{ENTITY_NAME}}Store.rowToModel(result.data[0] as {{ENTITY_NAME}}Row);
-  }
-
-  async getAllBy(filters: Partial<Pick<{{ENTITY_NAME}}Row, {{FILTERABLE_FIELDS}}>>): Promise<{{ENTITY_NAME}}[]> {
-    const filterKeys = Object.keys(filters);
-    
-    // Runtime validation against SQL injection
-    for (const key of filterKeys) {
-      if (!{{ENTITY_NAME}}Store.FILTERABLE_FIELDS.includes(key)) {
-        throw new Error(\`Invalid filter field: \${key}\`);
-      }
-    }
-    
-    const whereConditions = filterKeys.map(key => \`\${key} = :\${key}\`);
-    
-    if (whereConditions.length === 0) {
-      return this.getAll();
-    }
-    
-    const query = \`SELECT * FROM {{TABLE_NAME}} WHERE \${whereConditions.join(' AND ')} AND deleted_at IS NULL ORDER BY created_at DESC\`;
-    const result = await this.db.query(query, filters);
-    
-    if (!result.success) {
-      return [];
-    }
-    
-    return result.data.map((row: {{ENTITY_NAME}}Row) => {{ENTITY_NAME}}Store.rowToModel(row));
-  }
-
-  async insert(model: Omit<{{ENTITY_NAME}}, 'id'>): Promise<{{ENTITY_NAME}}> {
-    try {
-      const row = {{ENTITY_NAME}}Store.modelToRow(model as {{ENTITY_NAME}});
-      delete row.id; // Remove id for insert
-      row.created_at = new Date();
-      row.updated_at = new Date();
-      
-      const fields = Object.keys(row);
-      const placeholders = fields.map(field => \`:\${field}\`).join(', ');
-      
-      const query = \`INSERT INTO {{TABLE_NAME}} (\${fields.join(', ')}) VALUES (\${placeholders})\`;
-      const result = await this.db.query(query, row);
-      
-      if (!result.success || !result.insertId) {
-        throw new Error('Failed to insert {{ENTITY_NAME}}: Insert operation did not return a valid ID');
-      }
-      
-      return this.getById(Number(result.insertId));
-    } catch (error) {
-      if (error instanceof MySQLQueryError) {
-        throw new Error(\`Failed to insert {{ENTITY_NAME}}: \${error.message}\`);
-      } else if (error instanceof MySQLConnectionError) {
-        throw new Error(\`Database connection error while inserting {{ENTITY_NAME}}: \${error.message}\`);
-      }
-      throw error;
-    }
-  }
-
-  async update(id: number, updates: Partial<Omit<{{ENTITY_NAME}}, 'id' | 'createdAt'>>): Promise<{{ENTITY_NAME}} | null> {
-    const existing = await this.getById(id);
-    if (!existing) {
-      return null;
-    }
-    
-    // Extract only data properties, not methods
-    const updateData = this.extractDataProperties(updates);
-    const updateKeys = Object.keys(updateData);
-    
-    // Runtime validation against SQL injection
-    for (const key of updateKeys) {
-      if (!{{ENTITY_NAME}}Store.UPDATABLE_FIELDS.includes(key)) {
-        throw new Error(\`Invalid update field: \${key}\`);
-      }
-    }
-    
-    const updateFields = updateKeys.map(key => \`\${key} = :\${key}\`);
-    
-    if (updateFields.length === 0) {
-      return existing;
-    }
-    
-    const params = { ...updateData, updated_at: new Date(), id };
-    
-    const query = \`UPDATE {{TABLE_NAME}} SET \${updateFields.join(', ')}, updated_at = :updated_at WHERE id = :id\`;
-    await this.db.query(query, params);
-    
-    return this.getById(id);
-  }
-
-  async upsert(model: Partial<{{ENTITY_NAME}}>): Promise<{{ENTITY_NAME}}> {
-    if (model.id) {
-      const existing = await this.getById(model.id);
-      if (existing) {
-        return this.update(model.id, model) as Promise<{{ENTITY_NAME}}>;
-      }
-    }
-    
-    return this.insert(model as Omit<{{ENTITY_NAME}}, 'id'>);
-  }
-
-  async softDelete(id: number): Promise<boolean> {
-    const query = 'UPDATE {{TABLE_NAME}} SET deleted_at = :deleted_at WHERE id = :id AND deleted_at IS NULL';
-    const result = await this.db.query(query, { deleted_at: new Date(), id });
-    
-    return result.success && (result.affectedRows || 0) > 0;
-  }
-
-  async count(filters?: Partial<Pick<{{ENTITY_NAME}}Row, {{FILTERABLE_FIELDS}}>>): Promise<number> {
-    let query = 'SELECT COUNT(*) as count FROM {{TABLE_NAME}} WHERE deleted_at IS NULL';
-    let params: Record<string, any> = {};
-    
-    if (filters && Object.keys(filters).length > 0) {
-      const whereConditions = Object.keys(filters).map(key => \`\${key} = :\${key}\`);
-      params = { ...filters };
-      query += \` AND \${whereConditions.join(' AND ')}\`;
-    }
-    
-    const result = await this.db.query(query, params);
-    
-    if (!result.success || result.data.length === 0) {
-      return 0;
-    }
-    
-    return result.data[0].count;
-  }
-
-{{CONVERSION_METHODS}}
-}`,
-
-  conversionMethods: `  static rowToModel(row: {{ENTITY_NAME}}Row): {{ENTITY_NAME}} {
+  private rowToModel(row: {{ENTITY_NAME}}Row): {{ENTITY_NAME}} {
     return new {{ENTITY_NAME}}(
       row.id,
 {{ROW_TO_MODEL_MAPPING}}
     );
   }
 
-  static modelToRow(model: {{ENTITY_NAME}}): Partial<{{ENTITY_NAME}}Row> {
-    return {
-      id: model.id,
-{{MODEL_TO_ROW_MAPPING}},
-      updated_at: new Date()
-    };
+  async getAll(page: number = 1, limit: number = 20): Promise<{{ENTITY_NAME}}[]> {
+    const offset = (page - 1) * limit;
+    const result = await this.db.query(
+      \`SELECT {{FIELD_NAMES}} FROM \\\`\${this.tableName}\\\` WHERE deleted_at IS NULL LIMIT :limit OFFSET :offset\`,
+      { limit: String(limit), offset: String(offset) }
+    );
+
+    if (result.success && result.data) {
+      return result.data.map((row: {{ENTITY_NAME}}Row) => this.rowToModel(row));
+    }
+    return [];
   }
 
-  private extractDataProperties(obj: any): Record<string, any> {
-    const result: Record<string, any> = {};
-    
-    for (const [key, value] of Object.entries(obj)) {
-      // Only include properties that are not functions and are in updatable fields
-      if (typeof value !== 'function' && {{ENTITY_NAME}}Store.UPDATABLE_FIELDS.includes(key)) {
-        result[key] = value;
-      }
+  async count(): Promise<number> {
+    const result = await this.db.query(
+      \`SELECT COUNT(*) as count FROM \\\`\${this.tableName}\\\` WHERE deleted_at IS NULL\`,
+      {}
+    );
+
+    if (result.success && result.data && result.data.length > 0) {
+      return parseInt(result.data[0].count, 10);
     }
-    
-    return result;
-  }`
+    return 0;
+  }
+
+  async getById(id: number): Promise<{{ENTITY_NAME}} | null> {
+    const result = await this.db.query(
+      \`SELECT {{FIELD_NAMES}} FROM \\\`\${this.tableName}\\\` WHERE id = :id AND deleted_at IS NULL\`,
+      { id }
+    );
+
+    if (result.success && result.data && result.data.length > 0) {
+      return this.rowToModel(result.data[0] as {{ENTITY_NAME}}Row);
+    }
+    return null;
+  }
+
+  async insert(entity: {{ENTITY_NAME}}): Promise<{{ENTITY_NAME}}> {
+    const now = new Date();
+    const data: Partial<{{ENTITY_NAME}}Row> = {
+{{INSERT_DATA_MAPPING}},
+      created_at: this.toMySQLDatetime(now),
+      updated_at: this.toMySQLDatetime(now)
+    };
+
+    const fieldsList = Object.keys(data).map(f => \`\\\`\${f}\\\`\`).join(', ');
+    const placeholders = Object.keys(data).map(f => \`:\${f}\`).join(', ');
+
+    const result = await this.db.query(
+      \`INSERT INTO \\\`\${this.tableName}\\\` (\${fieldsList}) VALUES (\${placeholders})\`,
+      data
+    );
+
+    if (result.success && result.insertId) {
+      const newId = typeof result.insertId === 'string' ? parseInt(result.insertId, 10) : result.insertId;
+      return this.getById(newId) as Promise<{{ENTITY_NAME}}>;
+    }
+
+    throw new Error('Failed to insert {{ENTITY_NAME}}');
+  }
+
+  async update(id: number, entity: {{ENTITY_NAME}}): Promise<{{ENTITY_NAME}}> {
+    const now = new Date();
+    const data: Partial<{{ENTITY_NAME}}Row> & { id: number } = {
+{{UPDATE_DATA_MAPPING}},
+      updated_at: this.toMySQLDatetime(now),
+      id
+    };
+
+    const updateFields = {{UPDATE_FIELDS_ARRAY}}.map(f => \`\\\`\${f}\\\` = :\${f}\`).join(', ');
+
+    const result = await this.db.query(
+      \`UPDATE \\\`\${this.tableName}\\\` SET \${updateFields}, updated_at = :updated_at WHERE id = :id\`,
+      data
+    );
+
+    if (result.success) {
+      return this.getById(id) as Promise<{{ENTITY_NAME}}>;
+    }
+
+    throw new Error('Failed to update {{ENTITY_NAME}}');
+  }
+
+  async softDelete(id: number): Promise<boolean> {
+    const now = new Date();
+    const result = await this.db.query(
+      \`UPDATE \\\`\${this.tableName}\\\` SET deleted_at = :deleted_at WHERE id = :id\`,
+      { deleted_at: this.toMySQLDatetime(now), id }
+    );
+
+    return result.success;
+  }
+
+  async hardDelete(id: number): Promise<boolean> {
+    const result = await this.db.query(
+      \`DELETE FROM \\\`\${this.tableName}\\\` WHERE id = :id\`,
+      { id }
+    );
+
+    return result.success;
+  }
+{{GET_BY_PARENT_ID_METHOD}}
+{{GET_RESOURCE_OWNER_METHOD}}}`
 };
 
-export const fileTemplates = {
-  storeFile: `import { {{ENTITY_NAME}} } from '../../domain/entities/{{ENTITY_NAME}}';
-import { StoreInterface } from '../interfaces/StoreInterface';
-import { ProviderMysql, ISqlProvider, MySQLQueryError, MySQLConnectionError } from '@currentjs/provider-mysql';
+export const storeFileTemplate = `import { Injectable } from '../../../../system';
+import { {{ENTITY_NAME}} } from '../../domain/entities/{{ENTITY_NAME}}';
+import type { ISqlProvider } from '@currentjs/provider-mysql';{{VALUE_OBJECT_IMPORTS}}
 
 {{ROW_INTERFACE}}
 
-{{STORE_CLASS}}`,
-
-  storeInterface: `export interface StoreInterface<TModel, TRow> {
-  getById(id: number): Promise<TModel | null>;
-  getAll(page?: number, limit?: number): Promise<TModel[]>;
-  getAllByUserId(userId: number, page?: number, limit?: number): Promise<TModel[]>;
-  getBy(filters: Partial<TRow>): Promise<TModel | null>;
-  getAllBy(filters: Partial<TRow>): Promise<TModel[]>;
-  insert(model: Omit<TModel, 'id'>): Promise<TModel>;
-  update(id: number, updates: Partial<Omit<TModel, 'id' | 'createdAt'>>): Promise<TModel | null>;
-  upsert(model: Partial<TModel>): Promise<TModel>;
-  softDelete(id: number): Promise<boolean>;
-  count(filters?: Partial<TRow>): Promise<number>;
-}`
-};
+{{STORE_CLASS}}
+`;

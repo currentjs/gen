@@ -2,416 +2,533 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { parse as parseYaml } from 'yaml';
 import { writeGeneratedFile } from '../utils/generationRegistry';
-import {
-  toFileNameFromTemplateName,
-  renderListTemplate,
-  renderDetailTemplate,
-  renderCreateTemplate,
-  renderUpdateTemplate,
-  renderDeleteTemplate,
-  renderLayoutTemplate,
-  setAvailableModels,
-  setRelationshipContext,
-} from './templates/viewTemplates';
 import { colors } from '../utils/colors';
-
-type EndpointConfig = {
-  path: string;
-  action: string;
-  view?: string;
-  layout?: string;
-  model?: string;
-};
-
-type RoutesConfig = {
-  prefix?: string;
-  strategy?: string[];
-  endpoints: EndpointConfig[];
-  model?: string;
-};
-
-type FieldConfig = {
-  name: string;
-  type: string;
-  required?: boolean;
-  auto?: boolean;
-  unique?: boolean;
-  enum?: string[];
-};
-
-type ModelConfig = {
-  name: string;
-  fields?: FieldConfig[];
-};
-
-type ActionConfig = {
-  handlers: string[];
-};
-
-type ApiConfig = {
-  prefix?: string;
-  endpoints?: EndpointConfig[];
-  model?: string;
-};
-
-type ModuleConfig = {
-  models?: ModelConfig[];
-  api?: ApiConfig | ApiConfig[];
-  routes?: RoutesConfig | RoutesConfig[];
-  actions?: Record<string, ActionConfig>;
-};
-
-type AppConfig =
-  | { modules: Record<string, ModuleConfig> }
-  | ModuleConfig;
-
+import { ModuleConfig, WebPageConfig, AggregateConfig, AggregateFieldConfig, ValueObjectConfig, isValidModuleConfig } from '../types/configTypes';
+import { getChildrenOfParent, ParentChildInfo } from '../utils/childEntityUtils';
+import { capitalize } from '../utils/typeUtils';
 
 export class TemplateGenerator {
+  private valueObjects: Record<string, ValueObjectConfig> = {};
+
   /**
-   * Helper method to infer model from action handlers
+   * Convert a route prefix like "/invoice/:invoiceId/items" into a
+   * template-ready path like "/invoice/{{ invoiceId }}/items".
    */
-  private inferModelFromAction(action: string, moduleConfig: ModuleConfig): ModelConfig | null {
-    if (!moduleConfig.actions || !moduleConfig.actions[action]) {
-      return null;
-    }
-
-    const handlers = moduleConfig.actions[action].handlers;
-    if (!handlers || handlers.length === 0) {
-      return null;
-    }
-
-    // Get the first handler and extract model name
-    const firstHandler = handlers[0];
-    const parts = firstHandler.split(':');
-    if (parts.length < 2) {
-      return null;
-    }
-
-    const modelName = parts[0];
-    const model = moduleConfig.models?.find(m => 
-      m.name === modelName || m.name.toLowerCase() === modelName.toLowerCase()
-    );
-
-    return model || null;
+  private prefixToTemplatePath(prefix: string): string {
+    return prefix.replace(/:([a-zA-Z_]\w*)/g, '{{ $1 }}');
   }
 
   /**
-   * Find the actual API endpoint path for a given action and model
+   * Replace a single path param in prefix with a template expression (e.g. for list: item.id, for detail: id).
    */
-  private findApiEndpointPath(action: string, modelName: string, moduleConfig: ModuleConfig): string | null {
-    if (!moduleConfig.api) {
-      return null;
+  private prefixWithParam(prefix: string, paramName: string, templateExpr: string): string {
+    return prefix.replace(new RegExp(':' + paramName + '(?=/|$)'), templateExpr);
+  }
+
+  private renderListTemplate(
+    modelName: string,
+    viewName: string,
+    fields: [string, any][],
+    basePath: string,
+    withChildChildren?: ParentChildInfo[]
+  ): string {
+    const fieldHeaders = fields
+      .filter(([name]) => name !== 'id')
+      .slice(0, 5)
+      .map(([name]) => `    <th>${capitalize(name)}</th>`)
+      .join('\n');
+
+    const fieldCells = fields
+      .filter(([name]) => name !== 'id')
+      .slice(0, 5)
+      .map(([name, config]) => {
+        const voConfig = this.valueObjects[capitalize((config.type || 'string'))];
+        if (voConfig) {
+          const parts = Object.keys(voConfig.fields)
+            .map(sub => `{{ item.${name}.${sub} }}`)
+            .join(' ');
+          return `      <td>${parts}</td>`;
+        }
+        return `      <td>{{ item.${name} }}</td>`;
+      })
+      .join('\n');
+
+    const childLinkHeaders = (withChildChildren || [])
+      .map(child => `        <th>${child.childEntityName}</th>`)
+      .join('\n');
+    const childLinkCells = (withChildChildren || [])
+      .map(child => {
+        const childPath = child.childWebPrefix
+          ? this.prefixWithParam(child.childWebPrefix, child.parentIdField, '{{ item.id }}')
+          : '#';
+        return `        <td><a href="${childPath}" class="btn btn-sm btn-outline-secondary">Items</a></td>`;
+      })
+      .join('\n');
+
+    const childHeaderBlock = childLinkHeaders ? '\n' + childLinkHeaders : '';
+    const childCellBlock = childLinkCells ? '\n' + childLinkCells : '';
+
+    return `<!-- @template name="${viewName}" -->
+<div class="container mt-4">
+  <h1>${modelName} List</h1>
+  
+  <div class="mb-3">
+    <a href="${basePath}/create" class="btn btn-primary">Create New ${modelName}</a>
+  </div>
+
+  <table class="table table-striped">
+    <thead>
+      <tr>
+${fieldHeaders}
+        <th>Actions</th>${childHeaderBlock}
+      </tr>
+    </thead>
+    <tbody x-for="items" x-row="item">
+      <tr>
+${fieldCells}
+        <td>
+          <a href="${basePath}/{{ item.id }}" class="btn btn-sm btn-info">View</a>
+          <a href="${basePath}/{{ item.id }}/edit" class="btn btn-sm btn-warning">Edit</a>
+        </td>${childCellBlock}
+      </tr>
+    </tbody>
+  </table>
+
+  <div x-if="total > limit">
+    <nav>
+      <ul class="pagination">
+        <!-- Pagination controls -->
+      </ul>
+    </nav>
+  </div>
+</div>`;
+  }
+
+  private renderChildTableSection(child: ParentChildInfo, parentIdTemplateExpr: string): string {
+    const childVar = child.childEntityName.charAt(0).toLowerCase() + child.childEntityName.slice(1);
+    const childItemsKey = `${childVar}Items`;
+    const childBasePath = child.childWebPrefix
+      ? this.prefixWithParam(child.childWebPrefix, child.parentIdField, parentIdTemplateExpr)
+      : '';
+    const fieldEntries = Object.entries(child.childFields).filter(([name]) => name !== 'id').slice(0, 5);
+    const headers = fieldEntries.map(([name]) => `      <th>${capitalize(name)}</th>`).join('\n');
+    const cells = fieldEntries.map(([name, config]) => {
+      const voConfig = this.valueObjects[capitalize((config?.type || 'string') as string)];
+      if (voConfig) {
+        const parts = Object.keys(voConfig.fields)
+          .map(sub => `{{ childItem.${name}.${sub} }}`)
+          .join(' ');
+        return `      <td>${parts}</td>`;
+      }
+      return `      <td>{{ childItem.${name} }}</td>`;
+    }).join('\n');
+    const addLink = childBasePath
+      ? `  <div class="mb-3">
+    <a href="${childBasePath}/create" class="btn btn-primary btn-sm">Add ${child.childEntityName}</a>
+  </div>`
+      : '';
+    const actionLinks = childBasePath
+      ? `        <td>
+          <a href="${childBasePath}/{{ childItem.id }}" class="btn btn-sm btn-info">View</a>
+          <a href="${childBasePath}/{{ childItem.id }}/edit" class="btn btn-sm btn-warning">Edit</a>
+        </td>`
+      : '        <td></td>';
+    return `
+  <h2 class="mt-4">${child.childEntityName} List</h2>
+${addLink}
+  <table class="table table-striped">
+    <thead>
+      <tr>
+${headers}
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody x-for="${childItemsKey}" x-row="childItem">
+      <tr>
+${cells}
+${actionLinks}
+      </tr>
+    </tbody>
+  </table>`;
+  }
+
+  private renderDetailTemplate(
+    modelName: string,
+    viewName: string,
+    fields: [string, any][],
+    basePath: string,
+    withChildChildren?: ParentChildInfo[]
+  ): string {
+    const fieldRows = fields
+      .map(([name, config]) => {
+        const voConfig = this.valueObjects[capitalize((config.type || 'string'))];
+        if (voConfig) {
+          const parts = Object.keys(voConfig.fields)
+            .map(sub => `{{ ${name}.${sub} }}`)
+            .join(' ');
+          return `  <div class="row mb-2">
+    <div class="col-4"><strong>${capitalize(name)}:</strong></div>
+    <div class="col-8">${parts}</div>
+  </div>`;
+        }
+        return `  <div class="row mb-2">
+    <div class="col-4"><strong>${capitalize(name)}:</strong></div>
+    <div class="col-8">{{ ${name} }}</div>
+  </div>`;
+      })
+      .join('\n');
+
+    const childSections = (withChildChildren || [])
+      .map(child => this.renderChildTableSection(child, '{{ id }}'))
+      .join('');
+
+    return `<!-- @template name="${viewName}" -->
+<div class="container mt-4">
+  <h1>${modelName} Details</h1>
+  
+  <div class="card">
+    <div class="card-body">
+${fieldRows}
+    </div>
+  </div>
+
+  <div class="mt-3">
+    <a href="${basePath}/{{ id }}/edit" class="btn btn-warning">Edit</a>
+    <a href="${basePath}" class="btn btn-secondary">Back to List</a>
+  </div>${childSections}
+</div>`;
+  }
+
+  private buildFieldTypesJson(safeFields: [string, AggregateFieldConfig | Record<string, unknown>][]): string {
+    return JSON.stringify(
+      safeFields.reduce((acc, [name, config]) => {
+        const typeStr = typeof config?.type === 'string' ? config.type : 'string';
+        const capitalizedType = capitalize(typeStr);
+        const voConfig = this.valueObjects[capitalizedType];
+        if (voConfig) {
+          for (const [subName, subConfig] of Object.entries(voConfig.fields)) {
+            if (typeof subConfig === 'object' && 'values' in subConfig) {
+              acc[`${name}.${subName}`] = 'enum';
+            } else {
+              acc[`${name}.${subName}`] = (subConfig as { type?: string }).type || 'string';
+            }
+          }
+        } else {
+          acc[name] = typeStr;
+        }
+        return acc;
+      }, {} as Record<string, string>)
+    );
+  }
+
+  private renderFormTemplate(
+    mode: 'create' | 'edit',
+    modelName: string,
+    viewName: string,
+    fields: [string, any][],
+    basePath: string,
+    onSuccess?: WebPageConfig['onSuccess'],
+    onError?: WebPageConfig['onError'],
+    enumValuesMap: Record<string, string[]> = {}
+  ): string {
+    const safeFields = fields.filter(([name, config]) => name !== 'id' && !config.auto);
+    const isEdit = mode === 'edit';
+    const formFields = safeFields
+      .map(([name, config]) => this.renderFormField(name, config, enumValuesMap[name] || [], isEdit))
+      .join('\n');
+
+    const fieldTypesJson = this.buildFieldTypesJson(safeFields);
+
+    const strategies: string[] = [];
+    if (onSuccess?.toast) strategies.push('toast');
+    if (onSuccess?.back) strategies.push('back');
+    if (mode === 'create' && onSuccess?.redirect) strategies.push('redirect');
+    const strategyAttr = strategies.length > 0 ? `data-strategy='${JSON.stringify(strategies)}'` : '';
+    const redirectAttr = mode === 'create' && onSuccess?.redirect
+      ? `data-redirect="${this.prefixToTemplatePath(onSuccess.redirect)}"`
+      : '';
+
+    const title = mode === 'create' ? `Create ${modelName}` : `Edit ${modelName}`;
+    const formAction = mode === 'create' ? `${basePath}/create` : `${basePath}/{{ id }}/edit`;
+    const submitLabel = mode === 'create' ? 'Create' : 'Update';
+    const cancelHref = mode === 'create' ? basePath : `${basePath}/{{ id }}`;
+
+    return `<!-- @template name="${viewName}" -->
+<div class="container mt-4">
+  <h1>${title}</h1>
+  
+  <form method="POST" action="${formAction}" ${strategyAttr} ${redirectAttr} data-entity-name="${modelName}" data-field-types='${fieldTypesJson}'>
+${formFields}
+    
+    <div class="d-flex gap-2">
+      <button type="submit" class="btn btn-primary">${submitLabel}</button>
+      <a href="${cancelHref}" class="btn btn-secondary">Cancel</a>
+    </div>
+  </form>
+</div>`;
+  }
+
+  private renderCreateTemplate(
+    modelName: string,
+    viewName: string,
+    fields: [string, any][],
+    basePath: string,
+    onSuccess?: WebPageConfig['onSuccess'],
+    onError?: WebPageConfig['onError'],
+    enumValuesMap: Record<string, string[]> = {}
+  ): string {
+    return this.renderFormTemplate('create', modelName, viewName, fields, basePath, onSuccess, onError, enumValuesMap);
+  }
+
+  private renderEditTemplate(
+    modelName: string,
+    viewName: string,
+    fields: [string, any][],
+    basePath: string,
+    onSuccess?: WebPageConfig['onSuccess'],
+    onError?: WebPageConfig['onError'],
+    enumValuesMap: Record<string, string[]> = {}
+  ): string {
+    return this.renderFormTemplate('edit', modelName, viewName, fields, basePath, onSuccess, onError, enumValuesMap);
+  }
+
+  private getInputType(fieldType: string): string {
+    switch (fieldType) {
+      case 'string': return 'text';
+      case 'number':
+      case 'integer':
+      case 'float':
+      case 'decimal':
+      case 'id': return 'number';
+      case 'datetime':
+      case 'date': return 'datetime-local';
+      default: return 'text';
+    }
+  }
+
+  private renderValueObjectField(name: string, label: string, voConfig: ValueObjectConfig, required: string, isEdit: boolean): string {
+    const subFields = Object.entries(voConfig.fields);
+
+    const columns = subFields.map(([subName, subConfig]) => {
+      const fullName = `${name}.${subName}`;
+      const subLabel = capitalize(subName);
+
+      if (typeof subConfig === 'object' && 'values' in subConfig) {
+        const uniqueValues = [...new Set(subConfig.values)];
+        const options = uniqueValues.map(v => {
+          const sel = isEdit ? ` {{ ${name}.${subName} === '${v}' ? 'selected' : '' }}` : '';
+          return `          <option value="${v}"${sel}>${v}</option>`;
+        }).join('\n');
+
+        return `      <div class="col-auto">
+        <select class="form-select" id="${fullName}" name="${fullName}" ${required}>
+          <option value="">-- ${subLabel} --</option>
+${options}
+        </select>
+      </div>`;
+      } else {
+        const type = this.getInputType(subConfig.type);
+        const value = isEdit ? ` value="{{ ${name}.${subName} || '' }}"` : '';
+        return `      <div class="col">
+        <input type="${type}" class="form-control" id="${fullName}" name="${fullName}" placeholder="${subLabel}"${value} ${required}>
+      </div>`;
+      }
+    }).join('\n');
+
+    return `  <div class="mb-3">
+    <label class="form-label">${label}</label>
+    <div class="row g-2">
+${columns}
+    </div>
+  </div>`;
+  }
+
+  private renderFormField(name: string, config: any, enumValues: string[] = [], isEdit = false): string {
+    const required = config.required ? 'required' : '';
+    const label = capitalize(name);
+    const fieldType = (config.type || 'string').toLowerCase();
+
+    const capitalizedType = capitalize(fieldType);
+    const voConfig = this.valueObjects[capitalizedType];
+    if (voConfig) {
+      return this.renderValueObjectField(name, label, voConfig, required, isEdit);
     }
 
-    // Map web route actions to API operation types
-    const actionMap: Record<string, string[]> = {
-      'empty': ['create'],  // empty form -> create operation
-      'create': ['create'],
-      'update': ['update'],
-      'delete': ['delete'],
-      'list': ['list'],
-      'get': ['get', 'update']  // get can be for detail view or edit form
-    };
+    switch (fieldType) {
+      case 'boolean':
+      case 'bool': {
+        const checked = isEdit ? ` {{ ${name} ? 'checked' : '' }}` : '';
+        return `  <div class="mb-3">
+    <div class="form-check">
+      <input type="checkbox" class="form-check-input" id="${name}" name="${name}" value="true"${checked} ${required}>
+      <label for="${name}" class="form-check-label">${label}</label>
+    </div>
+  </div>`;
+      }
 
-    // Get possible API action names to look for
-    const searchActions = actionMap[action] || [action];
+      case 'enum': {
+        if (enumValues.length > 0) {
+          const options = enumValues.map(v => {
+            const sel = isEdit ? ` {{ ${name} === '${v}' ? 'selected' : '' }}` : '';
+            return `      <option value="${v}"${sel}>${capitalize(v)}</option>`;
+          }).join('\n');
+          return `  <div class="mb-3">
+    <label for="${name}" class="form-label">${label}</label>
+    <select class="form-select" id="${name}" name="${name}" ${required}>
+      <option value="">-- Select ${label} --</option>
+${options}
+    </select>
+  </div>`;
+        }
+        const value = isEdit ? ` value="{{ ${name} || '' }}"` : '';
+        return `  <div class="mb-3">
+    <label for="${name}" class="form-label">${label}</label>
+    <input type="text" class="form-control" id="${name}" name="${name}"${value} ${required}>
+  </div>`;
+      }
 
-    // Also check if there's a specific action defined in the actions section that handles this model
-    if (moduleConfig.actions) {
-      for (const [actionName, actionConfig] of Object.entries(moduleConfig.actions)) {
-        if (actionConfig.handlers && actionConfig.handlers.length > 0) {
-          const firstHandler = actionConfig.handlers[0];
-          const parts = firstHandler.split(':');
-          const handlerModel = parts[0];
-          
-          // If this action's handler targets our model, include it in search
-          if (handlerModel === modelName || handlerModel.toLowerCase() === modelName.toLowerCase()) {
-            // If it's a default handler, get the operation type
-            if (parts.length === 3 && parts[1] === 'default') {
-              const operation = parts[2]; // e.g., 'create', 'list', etc.
-              if (searchActions.includes(operation)) {
-                searchActions.push(actionName);
-              }
+      default: {
+        const type = this.getInputType(config.type);
+        const value = isEdit ? ` value="{{ ${name} || '' }}"` : '';
+        return `  <div class="mb-3">
+    <label for="${name}" class="form-label">${label}</label>
+    <input type="${type}" class="form-control" id="${name}" name="${name}"${value} ${required}>
+  </div>`;
+      }
+    }
+  }
+
+  private getEnumValuesMap(config: ModuleConfig, resourceName: string): Record<string, string[]> {
+    const enumMap: Record<string, string[]> = {};
+
+    const aggregate = config.domain.aggregates[resourceName];
+    if (!aggregate) return enumMap;
+
+    for (const [fieldName, fieldConfig] of Object.entries(aggregate.fields)) {
+      if (fieldConfig.type === 'enum' && (fieldConfig as any).values) {
+        enumMap[fieldName] = (fieldConfig as any).values;
+      }
+    }
+
+    const modelUseCases = config.useCases[resourceName];
+    if (modelUseCases) {
+      for (const useCase of Object.values(modelUseCases)) {
+        if (useCase.input?.filters) {
+          for (const [filterName, filterConfig] of Object.entries(useCase.input.filters)) {
+            if (filterConfig.enum && !enumMap[filterName]) {
+              enumMap[filterName] = filterConfig.enum;
             }
           }
         }
       }
     }
 
-    // Support both single api object and array
-    const apiConfigs = Array.isArray(moduleConfig.api) ? moduleConfig.api : [moduleConfig.api];
-
-    for (const apiConfig of apiConfigs) {
-      if (!apiConfig.endpoints) continue;
-
-      // Look for an endpoint with matching action
-      for (const endpoint of apiConfig.endpoints) {
-        if (!searchActions.includes(endpoint.action)) continue;
-
-        // Check if this endpoint's model matches (explicit or default)
-        const endpointModel = endpoint.model || apiConfig.model || (moduleConfig.models && moduleConfig.models[0] ? moduleConfig.models[0].name : null);
-        
-        if (endpointModel === modelName || endpointModel?.toLowerCase() === modelName.toLowerCase()) {
-          // Found a match - construct the full path
-          const prefix = (apiConfig.prefix || `/api/${modelName.toLowerCase()}`).replace(/\/$/, '');
-          const path = endpoint.path || '';
-          // Return full path without trailing slash
-          return `${prefix}${path}`.replace(/\/$/, '');
-        }
-      }
-    }
-
-    return null;
+    return enumMap;
   }
 
-  /**
-   * Build relationship context for finding create routes and list API endpoints
-   */
-  private buildRelationshipContext(moduleConfig: ModuleConfig): void {
-    const routePaths = new Map<string, string>();
-    const apiPaths = new Map<string, string>();
-
-    // Build route paths for create actions
-    const routeConfigs = moduleConfig.routes 
-      ? (Array.isArray(moduleConfig.routes) ? moduleConfig.routes : [moduleConfig.routes])
-      : [];
-
-    for (const routeConfig of routeConfigs) {
-      const prefix = (routeConfig.prefix || '').replace(/\/$/, '');
-      const configModel = routeConfig.model || (moduleConfig.models && moduleConfig.models[0] ? moduleConfig.models[0].name : null);
-
-      for (const endpoint of routeConfig.endpoints || []) {
-        const endpointModel = endpoint.model || configModel;
-        if (!endpointModel) continue;
-
-        // Look for create or empty actions (both lead to create forms)
-        if (endpoint.action === 'empty' || endpoint.action === 'create') {
-          const fullPath = `${prefix}${endpoint.path}`;
-          // Store only if we haven't found a path for this model yet, or if this is more specific
-          if (!routePaths.has(endpointModel) || endpoint.action === 'empty') {
-            routePaths.set(endpointModel, fullPath);
-          }
-        }
-      }
-    }
-
-    // Build API paths for list actions
-    const apiConfigs = moduleConfig.api
-      ? (Array.isArray(moduleConfig.api) ? moduleConfig.api : [moduleConfig.api])
-      : [];
-
-    for (const apiConfig of apiConfigs) {
-      const prefix = (apiConfig.prefix || '').replace(/\/$/, '');
-      const configModel = apiConfig.model || (moduleConfig.models && moduleConfig.models[0] ? moduleConfig.models[0].name : null);
-
-      for (const endpoint of apiConfig.endpoints || []) {
-        const endpointModel = endpoint.model || configModel;
-        if (!endpointModel) continue;
-
-        // Look for list actions
-        if (endpoint.action === 'list' || endpoint.action === 'getOwner' || endpoint.action.toLowerCase().includes('list')) {
-          const fullPath = `${prefix}${endpoint.path || ''}`;
-          // Store only if we haven't found a path for this model yet
-          if (!apiPaths.has(endpointModel)) {
-            apiPaths.set(endpointModel, fullPath);
-          }
-        }
-      }
-    }
-
-    setRelationshipContext({ routePaths, apiPaths });
-  }
-
-  /**
-   * Generate templates for a single routes configuration
-   */
-  private generateForRoutesConfig(
-    routesConfig: RoutesConfig, 
-    moduleConfig: ModuleConfig, 
-    seenLayouts: Set<string>
-  ): Record<string, string> {
+  public generateFromConfig(config: ModuleConfig): Record<string, string> {
     const result: Record<string, string> = {};
-    
-    if (!moduleConfig.models || moduleConfig.models.length === 0) return result;
+    this.valueObjects = config.domain.valueObjects || {};
 
-    // Set available models for relationship detection in view templates
-    const modelNames = moduleConfig.models.map(m => m.name);
-    setAvailableModels(modelNames);
-
-    // Build context for relationship field paths
-    this.buildRelationshipContext(moduleConfig);
-
-    // Get top-level model for this routes config
-    const topLevelModelName = routesConfig.model || moduleConfig.models[0].name;
-    const topLevelModel = moduleConfig.models.find(m => m.name === topLevelModelName) || moduleConfig.models[0];
-
-    const defaultEntityName = topLevelModel.name || 'Item';
-    const defaultEntityLower = defaultEntityName.toLowerCase();
-    const basePath = (routesConfig.prefix || `/${defaultEntityLower}`).replace(/\/$/, '');
-    const strategy = (routesConfig.strategy && Array.isArray(routesConfig.strategy) && routesConfig.strategy.length > 0)
-      ? routesConfig.strategy
-      : ['back', 'toast'];
-
-    for (const ep of routesConfig.endpoints || []) {
-      if (!ep.view) continue;
-      
-      // Determine which model to use for this endpoint (Option A)
-      let model: ModelConfig;
-      let entityName: string;
-      let entityLower: string;
-      let fields: FieldConfig[];
-      let apiBase: string;
-
-      if (ep.model) {
-        // 1. Use endpoint-specific model if provided
-        const endpointModel = moduleConfig.models.find(m => m.name === ep.model);
-        if (endpointModel) {
-          model = endpointModel;
-          entityName = model.name;
-          entityLower = entityName.toLowerCase();
-          fields = model.fields || [];
-          // Find actual API endpoint or use default
-          apiBase = this.findApiEndpointPath(ep.action, entityName, moduleConfig) || `/api/${entityLower}`;
-        } else {
-          // Fallback to top-level model if specified model not found
-          model = topLevelModel;
-          entityName = defaultEntityName;
-          entityLower = defaultEntityLower;
-          fields = model.fields || [];
-          apiBase = this.findApiEndpointPath(ep.action, entityName, moduleConfig) || `/api/${entityLower}`;
-        }
-      } else {
-        // 2. Try to infer model from action handler
-        const inferredModel = this.inferModelFromAction(ep.action, moduleConfig);
-        if (inferredModel) {
-          model = inferredModel;
-          entityName = model.name;
-          entityLower = entityName.toLowerCase();
-          fields = model.fields || [];
-          // Find actual API endpoint or use default
-          apiBase = this.findApiEndpointPath(ep.action, entityName, moduleConfig) || `/api/${entityLower}`;
-        } else {
-          // 3. Use top-level model as fallback
-          model = topLevelModel;
-          entityName = defaultEntityName;
-          entityLower = defaultEntityLower;
-          fields = model.fields || [];
-          apiBase = this.findApiEndpointPath(ep.action, entityName, moduleConfig) || `/api/${entityLower}`;
-        }
-      }
-
-      const tplName = ep.view;
-      let content = '';
-      
-      switch (ep.action) {
-        case 'list':
-          content = renderListTemplate(entityName, tplName, basePath, fields, apiBase);
-          break;
-        case 'get':
-          // If the path is an edit page or the template name suggests update, render the update form
-          if (/\/edit$/i.test(ep.path) || /update$/i.test(tplName)) {
-            content = renderUpdateTemplate(entityName, tplName, apiBase, fields, strategy, basePath);
-          } else {
-            content = renderDetailTemplate(entityName, tplName, fields);
-          }
-          break;
-        case 'create':
-          content = renderCreateTemplate(entityName, tplName, apiBase, fields, strategy, basePath);
-          break;
-        case 'update':
-          content = renderUpdateTemplate(entityName, tplName, apiBase, fields, strategy, basePath);
-          break;
-        case 'empty':
-          // treat as create form page without populated values
-          content = renderCreateTemplate(entityName, tplName, apiBase, fields, strategy, basePath);
-          break;
-        case 'delete':
-          content = renderDeleteTemplate(entityName, tplName, apiBase, strategy, basePath);
-          break;
-        default:
-          content = `<!-- @template name="${tplName}" -->\n<pre>{{ JSON.stringify($root, null, 2) }}</pre>\n`;
-      }
-      result[tplName] = content;
-
-      if (ep.layout && !seenLayouts.has(ep.layout)) {
-        result[`__layout__::${ep.layout}`] = renderLayoutTemplate(ep.layout);
-        seenLayouts.add(ep.layout);
-      }
-    }
-
-    return result;
-  }
-
-  /**
-   * Generate templates for a module (handles both single routes object and array)
-   */
-  private generateForModule(moduleConfig: ModuleConfig, moduleDir: string): Record<string, string> {
-    const result: Record<string, string> = {};
-    
-    if (!moduleConfig.routes || !moduleConfig.models || moduleConfig.models.length === 0) {
+    if (!config.web) {
       return result;
     }
 
-    const seenLayouts = new Set<string>();
+    Object.entries(config.web).forEach(([resourceName, resourceConfig]) => {
+      const aggregate = config.domain.aggregates[resourceName];
+      if (!aggregate) {
+        console.warn(`Warning: No aggregate found for resource ${resourceName}`);
+        return;
+      }
 
-    // Support both single routes object and array (Option D)
-    const routesArray = Array.isArray(moduleConfig.routes) 
-      ? moduleConfig.routes 
-      : [moduleConfig.routes];
+      const fields = Object.entries(aggregate.fields);
+      const enumValuesMap = this.getEnumValuesMap(config, resourceName);
+      const basePath = this.prefixToTemplatePath(resourceConfig.prefix);
 
-    for (const routesConfig of routesArray) {
-      const templates = this.generateForRoutesConfig(routesConfig, moduleConfig, seenLayouts);
-      Object.assign(result, templates);
-    }
+      const withChildChildren = getChildrenOfParent(config, resourceName);
+
+      resourceConfig.pages.forEach(page => {
+        if (!page.view) return;
+
+        // Determine template type from path and method
+        if (page.method === 'POST') {
+          // Skip POST endpoints - they don't need templates
+          return;
+        }
+
+        const useCaseWithChild = (() => {
+          if (!page.useCase) return false;
+          const [model, action] = page.useCase.split(':');
+          return (config.useCases[model] as Record<string, { withChild?: boolean }>)?.[action]?.withChild === true;
+        })();
+        const childrenForTemplate = useCaseWithChild && withChildChildren.length > 0 ? withChildChildren : undefined;
+
+        if (page.path === '/' && page.useCase?.endsWith(':list')) {
+          result[page.view] = this.renderListTemplate(resourceName, page.view, fields, basePath, childrenForTemplate);
+        } else if (page.path.includes(':id') && !page.path.includes('edit')) {
+          result[page.view] = this.renderDetailTemplate(resourceName, page.view, fields, basePath, childrenForTemplate);
+        } else if (page.path.includes('/create')) {
+          // Find corresponding POST endpoint for onSuccess/onError
+          const postEndpoint = resourceConfig.pages.find(p => 
+            p.path === page.path && p.method === 'POST'
+          );
+          result[page.view] = this.renderCreateTemplate(
+            resourceName, 
+            page.view, 
+            fields,
+            basePath,
+            postEndpoint?.onSuccess,
+            postEndpoint?.onError,
+            enumValuesMap
+          );
+        } else if (page.path.includes('edit')) {
+          // Find corresponding POST endpoint for onSuccess/onError
+          const postEndpoint = resourceConfig.pages.find(p => 
+            p.path === page.path && p.method === 'POST'
+          );
+          result[page.view] = this.renderEditTemplate(
+            resourceName, 
+            page.view, 
+            fields,
+            basePath,
+            postEndpoint?.onSuccess,
+            postEndpoint?.onError,
+            enumValuesMap
+          );
+        }
+      });
+    });
 
     return result;
   }
 
-  public generateFromYamlFile(yamlFilePath: string): Record<string, { file: string; contents: string }> {
-    const raw = fs.readFileSync(yamlFilePath, 'utf8');
-    const config = parseYaml(raw) as AppConfig;
-    const results: Record<string, { file: string; contents: string }> = {};
+  public generateFromYamlFile(yamlFilePath: string): Record<string, string> {
+    const yamlContent = fs.readFileSync(yamlFilePath, 'utf8');
+    const config = parseYaml(yamlContent);
 
-    const addModule = (mod: ModuleConfig, moduleDir: string) => {
-      const templates = this.generateForModule(mod, moduleDir);
-      const viewsDir = path.join(moduleDir, 'views');
-      for (const [name, contents] of Object.entries(templates)) {
-        if (name.startsWith('__layout__::')) {
-          const layoutName = name.substring('__layout__::'.length);
-          const file = path.join(viewsDir, toFileNameFromTemplateName(layoutName));
-          results[`layout:${layoutName}`] = { file, contents };
-        } else {
-          const file = path.join(viewsDir, toFileNameFromTemplateName(name));
-          results[name] = { file, contents };
-        }
-      }
-    };
-
-    if ((config as any).modules) {
-      const modules = (config as any).modules as Record<string, ModuleConfig>;
-      for (const [key, mod] of Object.entries(modules)) {
-        const moduleDir = path.dirname(yamlFilePath); // each entry is per-module yaml
-        addModule(mod, moduleDir);
-      }
-    } else {
-      const moduleDir = path.dirname(yamlFilePath);
-      addModule(config as ModuleConfig, moduleDir);
+    if (!isValidModuleConfig(config)) {
+      throw new Error('Configuration does not match new module format. Expected domain/useCases/web structure.');
     }
-    return results;
+
+    return this.generateFromConfig(config);
   }
 
   public async generateAndSaveFiles(
     yamlFilePath: string,
-    _outputDir: string | undefined,
+    moduleDir: string,
     opts?: { force?: boolean; skipOnConflict?: boolean }
   ): Promise<void> {
-    const toWrite = this.generateFromYamlFile(yamlFilePath);
-    for (const { file, contents } of Object.values(toWrite)) {
-      const dir = path.dirname(file);
-      fs.mkdirSync(dir, { recursive: true });
+    const templatesByName = this.generateFromYamlFile(yamlFilePath);
+    
+    const viewsDir = path.join(moduleDir, 'views');
+    fs.mkdirSync(viewsDir, { recursive: true });
+
+    for (const [name, content] of Object.entries(templatesByName)) {
+      const filePath = path.join(viewsDir, `${name}.html`);
       // eslint-disable-next-line no-await-in-loop
-      await writeGeneratedFile(file, contents, { force: !!opts?.force, skipOnConflict: !!opts?.skipOnConflict });
+      await writeGeneratedFile(filePath, content, { force: !!opts?.force, skipOnConflict: !!opts?.skipOnConflict });
     }
+
     // eslint-disable-next-line no-console
     console.log('\n' + colors.green('Template files generated successfully!') + '\n');
   }
