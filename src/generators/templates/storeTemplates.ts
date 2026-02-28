@@ -27,30 +27,7 @@ export class {{ENTITY_NAME}}Store {
     );
   }
 
-  async getAll(page: number = 1, limit: number = 20): Promise<{{ENTITY_NAME}}[]> {
-    const offset = (page - 1) * limit;
-    const result = await this.db.query(
-      \`SELECT {{FIELD_NAMES}} FROM \\\`\${this.tableName}\\\` WHERE deleted_at IS NULL LIMIT :limit OFFSET :offset\`,
-      { limit: String(limit), offset: String(offset) }
-    );
-
-    if (result.success && result.data) {
-      return result.data.map((row: {{ENTITY_NAME}}Row) => this.rowToModel(row));
-    }
-    return [];
-  }
-
-  async count(): Promise<number> {
-    const result = await this.db.query(
-      \`SELECT COUNT(*) as count FROM \\\`\${this.tableName}\\\` WHERE deleted_at IS NULL\`,
-      {}
-    );
-
-    if (result.success && result.data && result.data.length > 0) {
-      return parseInt(result.data[0].count, 10);
-    }
-    return 0;
-  }
+{{LIST_METHODS}}
 
   async getById(id: number): Promise<{{ENTITY_NAME}} | null> {
     const result = await this.db.query(

@@ -311,6 +311,60 @@ export class StoreGenerator {
     return '\n' + uniqueImports.join('\n');
   }
 
+  private generateListMethods(modelName: string, fieldNamesStr: string, childInfo?: ChildEntityInfo): string {
+    const isRoot = !childInfo;
+    const ownerParam = isRoot ? ', ownerId?: number' : '';
+    const ownerFilter = isRoot
+      ? `\n    const ownerFilter = ownerId != null ? ' AND \\\`ownerId\\\` = :ownerId' : '';`
+      : '';
+    const ownerFilterRef = isRoot ? '\${ownerFilter}' : '';
+    const ownerParamsSetup = isRoot
+      ? `\n    if (ownerId != null) params.ownerId = ownerId;`
+      : '';
+
+    const getPaginated = `  async getPaginated(page: number = 1, limit: number = 20${ownerParam}): Promise<${modelName}[]> {
+    const offset = (page - 1) * limit;${ownerFilter}
+    const params: Record<string, any> = { limit: String(limit), offset: String(offset) };${ownerParamsSetup}
+    const result = await this.db.query(
+      \`SELECT ${fieldNamesStr} FROM \\\`\${this.tableName}\\\` WHERE deleted_at IS NULL${ownerFilterRef} LIMIT :limit OFFSET :offset\`,
+      params
+    );
+
+    if (result.success && result.data) {
+      return result.data.map((row: ${modelName}Row) => this.rowToModel(row));
+    }
+    return [];
+  }`;
+
+    const getAll = `  async getAll(${isRoot ? 'ownerId?: number' : ''}): Promise<${modelName}[]> {${ownerFilter}
+    const params: Record<string, any> = {};${ownerParamsSetup}
+    const result = await this.db.query(
+      \`SELECT ${fieldNamesStr} FROM \\\`\${this.tableName}\\\` WHERE deleted_at IS NULL${ownerFilterRef}\`,
+      params
+    );
+
+    if (result.success && result.data) {
+      return result.data.map((row: ${modelName}Row) => this.rowToModel(row));
+    }
+    return [];
+  }`;
+
+    const count = `  async count(${isRoot ? 'ownerId?: number' : ''}): Promise<number> {${ownerFilter}
+    const params: Record<string, any> = {};${ownerParamsSetup}
+    const result = await this.db.query(
+      \`SELECT COUNT(*) as count FROM \\\`\${this.tableName}\\\` WHERE deleted_at IS NULL${ownerFilterRef}\`,
+      params
+    );
+
+    if (result.success && result.data && result.data.length > 0) {
+      return parseInt(result.data[0].count, 10);
+    }
+    return 0;
+  }`;
+
+    return `${getPaginated}\n\n${getAll}\n\n${count}`;
+  }
+
   private generateGetByParentIdMethod(modelName: string, fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
     if (!childInfo) return '';
     const fieldList = ['id', childInfo.parentIdField, ...fields.map(([name, config]) => this.isAggregateField(config) ? `${name}_id` : name)].map(f => '\\`' + f + '\\`').join(', ');
@@ -378,17 +432,20 @@ export class StoreGenerator {
     // Sort fields for rowToModel to match entity constructor order (required first, optional second)
     const sortedFields = this.sortFieldsForConstructor(fields);
 
+    const fieldNamesStr = this.generateFieldNamesStr(fields, childInfo);
+
     const variables: Record<string, string> = {
       ENTITY_NAME: modelName,
       TABLE_NAME: tableName,
       ROW_FIELDS: this.generateRowFields(fields, childInfo),
-      FIELD_NAMES: this.generateFieldNamesStr(fields, childInfo),
+      FIELD_NAMES: fieldNamesStr,
       ROW_TO_MODEL_MAPPING: this.generateRowToModelMapping(modelName, sortedFields, childInfo),
       INSERT_DATA_MAPPING: this.generateInsertDataMapping(fields, childInfo),
       UPDATE_DATA_MAPPING: this.generateUpdateDataMapping(fields),
       UPDATE_FIELDS_ARRAY: this.generateUpdateFieldsArray(fields),
       VALUE_OBJECT_IMPORTS: this.generateValueObjectImports(fields),
       AGGREGATE_REF_IMPORTS: this.generateAggregateRefImports(modelName, fields),
+      LIST_METHODS: this.generateListMethods(modelName, fieldNamesStr, childInfo),
       GET_BY_PARENT_ID_METHOD: this.generateGetByParentIdMethod(modelName, fields, childInfo),
       GET_RESOURCE_OWNER_METHOD: this.generateGetResourceOwnerMethod(childInfo)
     };

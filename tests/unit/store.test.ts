@@ -42,6 +42,25 @@ describe('StoreGenerator', () => {
       expect(invoiceStore).toContain('softDelete');
       expect(invoiceStore).toContain('deleted_at');
     });
+
+    it('generates getPaginated with optional ownerId for root entity', () => {
+      expect(invoiceStore).toContain('async getPaginated(page: number = 1, limit: number = 20, ownerId?: number)');
+      expect(invoiceStore).toContain('LIMIT :limit OFFSET :offset');
+    });
+
+    it('generates getAll with optional ownerId for root entity (no pagination)', () => {
+      expect(invoiceStore).toContain('async getAll(ownerId?: number): Promise<Invoice[]>');
+      expect(invoiceStore).toNotContain('getAll(page:');
+    });
+
+    it('generates count with optional ownerId for root entity', () => {
+      expect(invoiceStore).toContain('async count(ownerId?: number): Promise<number>');
+    });
+
+    it('getPaginated and getAll filter by ownerId when provided', () => {
+      expect(invoiceStore).toContain("ownerId != null ? ' AND");
+      expect(invoiceStore).toContain('params.ownerId = ownerId');
+    });
   });
 
   describe('Product store (json field tags)', () => {
@@ -57,5 +76,12 @@ describe('StoreGenerator', () => {
     it('getResourceOwner present for aggregate root', () => {
       expect(productStore).toContain('getResourceOwner');
     });
+
+    it('generates getPaginated and getAll with ownerId? for root entity', () => {
+      expect(productStore).toContain('async getPaginated(page: number = 1, limit: number = 20, ownerId?: number)');
+      expect(productStore).toContain('async getAll(ownerId?: number): Promise<Product[]>');
+      expect(productStore).toContain('async count(ownerId?: number): Promise<number>');
+    });
   });
+
 });

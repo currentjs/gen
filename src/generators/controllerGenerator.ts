@@ -271,6 +271,8 @@ export class ControllerGenerator {
     const authCheck = this.generateAuthCheck(endpoint.auth);
     const authLine = authCheck ? `\n    ${authCheck}\n` : '';
 
+    const hasOwner = this.hasOwnerAuth(endpoint.auth);
+
     // Build parsing logic
     // For create: root gets ownerId from user, child gets parentId from URL params
     let parseLogic: string;
@@ -293,7 +295,6 @@ export class ControllerGenerator {
     // Generate owner checks:
     // - For mutations (update, delete): PRE-mutation check (before operation)
     // - For reads (get): POST-fetch check (after fetching)
-    const hasOwner = this.hasOwnerAuth(endpoint.auth);
     const isMutation = action === 'update' || action === 'delete';
     const isRead = action === 'get';
     
@@ -317,10 +318,14 @@ export class ControllerGenerator {
       outputTransform = `return ${outputClass}.from(result);`;
     }
 
+    const useCaseArgs = (hasOwner && action === 'list')
+      ? 'input, context.request.user?.id as number'
+      : 'input';
+
     const method = `  @${decorator}('${endpoint.path}')
   async ${methodName}(context: IContext): Promise<any> {${authLine}
     ${parseLogic}${preMutationOwnerCheck}
-    const result = await this.${useCaseVar}.${action}(input);${postFetchOwnerCheck}
+    const result = await this.${useCaseVar}.${action}(${useCaseArgs});${postFetchOwnerCheck}
     ${outputTransform}
   }`;
 
@@ -371,6 +376,8 @@ export class ControllerGenerator {
         
         dtoImports.add(`${model}${capitalize(action)}`);
 
+        const hasOwner = this.hasOwnerAuth(page.auth);
+
         let parseLogic: string;
         if (page.path.includes(':id')) {
           parseLogic = `const input = ${inputClass}.parse({ id: context.request.parameters.id });`;
@@ -379,9 +386,6 @@ export class ControllerGenerator {
         } else {
           parseLogic = `const input = ${inputClass}.parse({});`;
         }
-
-        // Generate post-fetch owner check for GET pages (reads only)
-        const hasOwner = this.hasOwnerAuth(page.auth);
         const isReadAction = action === 'get' || action === 'list';
         const postFetchOwnerCheck = (hasOwner && isReadAction) 
           ? this.generatePostFetchOwnerCheck(page.auth, 'result', useCaseVar, childInfo) 
@@ -405,12 +409,16 @@ export class ControllerGenerator {
           returnExpr = 'result';
         }
 
+        const useCaseArgs = (hasOwner && action === 'list')
+          ? 'input, context.request.user?.id as number'
+          : 'input';
+
         const loadChildCode = loadChildBlocks.length ? '\n    ' + loadChildBlocks.join('\n    ') + '\n    ' : '';
         const methodCode = `${renderDecorator}
   @${decorator}('${page.path}')
   async ${methodName}(context: IContext): Promise<any> {${authLine}
     ${parseLogic}
-    const result = await this.${useCaseVar}.${action}(input);${postFetchOwnerCheck}${loadChildCode}
+    const result = await this.${useCaseVar}.${action}(${useCaseArgs});${postFetchOwnerCheck}${loadChildCode}
     return ${returnExpr};
   }`;
 

@@ -196,13 +196,26 @@ export class ServiceGenerator {
     return result;
   }
 
-  private generateListHandler(modelName: string, storeName: string): string {
-    return `  async list(page: number = 1, limit: number = 20): Promise<{ items: ${modelName}[]; total: number; page: number; limit: number }> {
+  private generateListHandler(
+    modelName: string,
+    storeName: string,
+    hasPagination: boolean
+  ): string {
+    const returnType = `{ items: ${modelName}[]; total: number; page: number; limit: number }`;
+
+    if (hasPagination) {
+      return `  async list(page: number = 1, limit: number = 20, ownerId?: number): Promise<${returnType}> {
     const [items, total] = await Promise.all([
-      this.${storeName}.getAll(page, limit),
-      this.${storeName}.count()
+      this.${storeName}.getPaginated(page, limit, ownerId),
+      this.${storeName}.count(ownerId)
     ]);
     return { items, total, page, limit };
+  }`;
+    }
+
+    return `  async list(ownerId?: number): Promise<${returnType}> {
+    const items = await this.${storeName}.getAll(ownerId);
+    return { items, total: items.length, page: 1, limit: items.length };
   }`;
   }
 
@@ -311,14 +324,19 @@ ${setterCalls}
     aggregateConfig: AggregateConfig,
     childInfo: ChildEntityInfo | undefined,
     inputType: string,
-    dtoFields: Set<string>
+    dtoFields: Set<string>,
+    listConfig?: { hasPagination: boolean }
   ): string {
     const entityLower = modelName.toLowerCase();
     const storeName = `${entityLower}Store`;
 
     switch (actionName) {
       case 'list':
-        return this.generateListHandler(modelName, storeName);
+        return this.generateListHandler(
+          modelName,
+          storeName,
+          listConfig?.hasPagination ?? true
+        );
       case 'get':
         return this.generateGetHandler(modelName, storeName, entityLower);
       case 'create':
@@ -427,7 +445,10 @@ ${setterCalls}
           }
         }
 
-        methods.push(this.generateDefaultHandlerMethod(modelName, actionName, aggregateConfig, childInfo, inputType, dtoFields));
+        const listConfig = actionName === 'list'
+          ? { hasPagination: !!(contexts[0]?.inputConfig?.pagination) }
+          : undefined;
+        methods.push(this.generateDefaultHandlerMethod(modelName, actionName, aggregateConfig, childInfo, inputType, dtoFields, listConfig));
       } else {
         const { inputType, resultType, returnType } = this.deriveCustomHandlerTypes(contexts, modelName);
         contexts.forEach(c => dtoTypes.add(c.inputDtoType));

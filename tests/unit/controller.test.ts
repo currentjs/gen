@@ -96,6 +96,42 @@ describe('ControllerGenerator - structure', () => {
   });
 });
 
+describe('ControllerGenerator - list with owner auth passes ownerId', () => {
+  it('API list endpoint passes user id as second arg to useCase when auth includes owner', () => {
+    const config = loadFixture('invoice.yaml');
+    config.api!.Invoice.endpoints[0].auth = 'owner';
+    const result = controllerGen.generateFromConfig(config);
+    const apiCode = getCode(result as Record<string, unknown>, 'InvoiceApi');
+    expect(apiCode).toContain('.list(input, context.request.user?.id as number)');
+    expect(apiCode).toContain('InvoiceListInput.parse(context.request.parameters)');
+  });
+
+  it('API list endpoint calls useCase.list(input) without ownerId when auth is all', () => {
+    const config = loadFixture('invoice.yaml');
+    const result = controllerGen.generateFromConfig(config);
+    const apiCode = getCode(result as Record<string, unknown>, 'InvoiceApi');
+    expect(apiCode).toContain('.list(input)');
+    expect(apiCode).toNotContain('.list(input, context.request.user');
+  });
+
+  it('Web list page passes user id as second arg to useCase when auth includes owner', () => {
+    const config = loadFixture('invoice.yaml');
+    config.web!.Invoice.pages[0].auth = 'owner';
+    const result = controllerGen.generateFromConfig(config);
+    const webCode = getCode(result as Record<string, unknown>, 'InvoiceWeb');
+    expect(webCode).toContain('.list(input, context.request.user?.id as number)');
+    expect(webCode).toContain('InvoiceListInput.parse(context.request.parameters)');
+  });
+
+  it('Web list page calls useCase.list(input) without ownerId when auth is all', () => {
+    const config = loadFixture('invoice.yaml');
+    const result = controllerGen.generateFromConfig(config);
+    const webCode = getCode(result as Record<string, unknown>, 'InvoiceWeb');
+    expect(webCode).toContain('.list(input)');
+    expect(webCode).toNotContain('.list(input, context.request.user');
+  });
+});
+
 describe('ControllerGenerator - web layout rendering', () => {
   it('supports module layout: none by generating @Render(view) without second parameter', () => {
     const config = loadFixture('web-layout-none.yaml');
