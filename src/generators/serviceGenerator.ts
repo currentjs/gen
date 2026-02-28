@@ -10,7 +10,7 @@ import {
   isValidModuleConfig 
 } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
-import { capitalize, mapType as mapTypeUtil } from '../utils/typeUtils';
+import { capitalize, mapType as mapTypeUtil, isAggregateReference } from '../utils/typeUtils';
 
 export class ServiceGenerator {
   private availableAggregates: Map<string, AggregateConfig> = new Map();
@@ -50,12 +50,19 @@ export class ServiceGenerator {
     const fields = Object.entries(aggregateConfig.fields)
       .filter(([fieldName, fieldConfig]) => !fieldConfig.auto && fieldName !== 'id')
       .sort((a, b) => {
-        const aRequired = a[1].required !== false;
-        const bRequired = b[1].required !== false;
+        const aIsAggRef = isAggregateReference(a[1].type, this.availableAggregates);
+        const bIsAggRef = isAggregateReference(b[1].type, this.availableAggregates);
+        const aRequired = a[1].required !== false && !aIsAggRef;
+        const bRequired = b[1].required !== false && !bIsAggRef;
         if (aRequired === bRequired) return 0;
         return aRequired ? -1 : 1;
       });
-    const fieldArgs = fields.map(([fieldName]) => `input.${fieldName}`).join(', ');
+    const fieldArgs = fields.map(([fieldName, fieldConfig]) => {
+      if (isAggregateReference(fieldConfig.type, this.availableAggregates)) {
+        return `input.${fieldName} != null ? ({ id: input.${fieldName} } as unknown as ${fieldConfig.type}) : undefined`;
+      }
+      return `input.${fieldName}`;
+    }).join(', ');
     const constructorArgs = `input.${firstArgField}, ${fieldArgs}`;
     return `  async create(input: any): Promise<${modelName}> {
     const ${entityLower} = new ${modelName}(0, ${constructorArgs});
@@ -70,8 +77,13 @@ export class ServiceGenerator {
   ): string {
     const setterCalls = Object.entries(aggregateConfig.fields)
       .filter(([fieldName, fieldConfig]) => !fieldConfig.auto && fieldName !== 'id')
-      .map(([fieldName]) => {
+      .map(([fieldName, fieldConfig]) => {
         const methodName = `set${capitalize(fieldName)}`;
+        if (isAggregateReference(fieldConfig.type, this.availableAggregates)) {
+          return `    if (input.${fieldName} !== undefined) {
+      existing${modelName}.${methodName}(input.${fieldName} != null ? ({ id: input.${fieldName} } as unknown as ${fieldConfig.type}) : undefined);
+    }`;
+        }
         return `    if (input.${fieldName} !== undefined) {
       existing${modelName}.${methodName}(input.${fieldName});
     }`;
@@ -208,8 +220,16 @@ ${setterCalls}
       methods.push(getResourceOwnerMethod);
     }
 
+    // Collect imports for aggregate reference types used in fields
+    const aggRefImports = Object.entries(aggregateConfig.fields)
+      .filter(([, fc]) => isAggregateReference(fc.type, this.availableAggregates) && fc.type !== modelName)
+      .map(([, fc]) => `import { ${fc.type} } from '../../domain/entities/${fc.type}';`)
+      .filter((imp, idx, arr) => arr.indexOf(imp) === idx);
+
+    const aggRefImportStr = aggRefImports.length > 0 ? '\n' + aggRefImports.join('\n') : '';
+
     return `import { Injectable } from '../../../../system';
-import { ${modelName} } from '../../domain/entities/${modelName}';
+import { ${modelName} } from '../../domain/entities/${modelName}';${aggRefImportStr}
 import { ${storeName} } from '../../infrastructure/stores/${storeName}';
 
 /**

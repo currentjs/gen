@@ -5,7 +5,7 @@ import { writeGeneratedFile } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
 import { ModuleConfig, AggregateConfig, ValueObjectConfig, isValidModuleConfig } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
-import { capitalize, mapType as mapTypeUtil } from '../utils/typeUtils';
+import { capitalize, mapType as mapTypeUtil, isAggregateReference } from '../utils/typeUtils';
 
 export class DomainLayerGenerator {
   private availableAggregates: Set<string> = new Set();
@@ -130,8 +130,18 @@ export class DomainLayerGenerator {
       })
       .filter((imp, idx, arr) => arr.indexOf(imp) === idx) // dedupe
       .join('\n');
+
+    // Generate imports for aggregate references in fields (e.g. idea: { type: Idea })
+    const aggregateRefImports = fields
+      .filter(([, fieldConfig]) =>
+        isAggregateReference(fieldConfig.type, this.availableAggregates) &&
+        fieldConfig.type !== name
+      )
+      .map(([, fieldConfig]) => `import { ${fieldConfig.type} } from './${fieldConfig.type}';`)
+      .filter((imp, idx, arr) => arr.indexOf(imp) === idx)
+      .join('\n');
     
-    const imports = [entityImports, valueObjectImports].filter(Boolean).join('\n');
+    const imports = [entityImports, valueObjectImports, aggregateRefImports].filter(Boolean).join('\n');
 
     // Generate constructor parameters: id, then ownerId (root) or parentId field (child)
     const constructorParams: string[] = ['public id: number'];
@@ -143,9 +153,12 @@ export class DomainLayerGenerator {
     
     // Sort fields: required first, then optional
     // Fields are required by default unless required: false
+    // Aggregate references are always treated as optional (store can't populate them from FK alone)
     const sortedFields = fields.sort((a, b) => {
-      const aRequired = a[1].required !== false && !a[1].auto;
-      const bRequired = b[1].required !== false && !b[1].auto;
+      const aIsAggRef = isAggregateReference(a[1].type, this.availableAggregates);
+      const bIsAggRef = isAggregateReference(b[1].type, this.availableAggregates);
+      const aRequired = a[1].required !== false && !a[1].auto && !aIsAggRef;
+      const bRequired = b[1].required !== false && !b[1].auto && !bIsAggRef;
       if (aRequired === bRequired) return 0;
       return aRequired ? -1 : 1;
     });
@@ -164,9 +177,9 @@ export class DomainLayerGenerator {
     });
 
     sortedFields.forEach(([fieldName, fieldConfig]) => {
+      const isAggRef = isAggregateReference(fieldConfig.type, this.availableAggregates);
       const tsType = enumTypeNames[fieldName] || this.mapType(fieldConfig.type);
-      // Fields are required by default, only optional if explicitly set to required: false
-      const isOptional = fieldConfig.required === false;
+      const isOptional = fieldConfig.required === false || isAggRef;
       const hasDefault = fieldConfig.auto;
       
       let param = `public ${fieldName}`;
@@ -190,10 +203,10 @@ export class DomainLayerGenerator {
     const setterMethods = sortedFields
       .filter(([fieldName, fieldConfig]) => !fieldConfig.auto && fieldName !== 'id')
       .map(([fieldName, fieldConfig]) => {
+        const isAggRef = isAggregateReference(fieldConfig.type, this.availableAggregates);
         const tsType = enumTypeNames[fieldName] || this.mapType(fieldConfig.type);
         const methodName = `set${capitalize(fieldName)}`;
-        // Fields are required by default, only optional if explicitly set to required: false
-        const isOptional = fieldConfig.required === false;
+        const isOptional = fieldConfig.required === false || isAggRef;
         
         return `
     ${methodName}(${fieldName}: ${tsType}${isOptional ? ' | undefined' : ''}): void {

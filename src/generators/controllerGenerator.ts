@@ -8,6 +8,7 @@ import {
   ApiEndpointConfig,
   WebPageConfig,
   AuthConfig,
+  UseCasesConfig,
   isValidModuleConfig 
 } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo, getChildrenOfParent, ParentChildInfo } from '../utils/childEntityUtils';
@@ -247,17 +248,24 @@ export class ControllerGenerator {
   private generateApiEndpointMethod(
     endpoint: ApiEndpointConfig,
     resourceName: string,
+    useCasesConfig: UseCasesConfig,
     childInfo?: ChildEntityInfo
-  ): { method: string; dtoImports: Set<string> } {
+  ): { method: string; dtoImports: Set<string>; voidOutputDtos: Set<string> } {
     const { model, action } = this.parseUseCase(endpoint.useCase);
     const methodName = action;
     const decorator = this.getHttpDecorator(endpoint.method);
     const useCaseVar = `${model.toLowerCase()}UseCase`;
     const inputClass = `${model}${capitalize(action)}Input`;
     const outputClass = `${model}${capitalize(action)}Output`;
+    const useCaseDef = useCasesConfig[model]?.[action];
+    const isVoidOutput = !useCaseDef?.output || useCaseDef.output === 'void';
 
     const dtoImports = new Set<string>();
+    const voidOutputDtos = new Set<string>();
     dtoImports.add(`${model}${capitalize(action)}`);
+    if (isVoidOutput) {
+      voidOutputDtos.add(`${model}${capitalize(action)}`);
+    }
 
     // Generate auth check (pre-fetch)
     const authCheck = this.generateAuthCheck(endpoint.auth);
@@ -301,10 +309,10 @@ export class ControllerGenerator {
 
     // Generate output transformation based on action
     let outputTransform: string;
-    if (action === 'list') {
-      outputTransform = `return ${outputClass}.from(result);`;
-    } else if (action === 'delete') {
+    if (isVoidOutput || action === 'delete') {
       outputTransform = `return result;`;
+    } else if (action === 'list') {
+      outputTransform = `return ${outputClass}.from(result);`;
     } else {
       outputTransform = `return ${outputClass}.from(result);`;
     }
@@ -316,7 +324,7 @@ export class ControllerGenerator {
     ${outputTransform}
   }`;
 
-    return { method, dtoImports };
+    return { method, dtoImports, voidOutputDtos };
   }
 
   private generateWebPageMethod(
@@ -531,6 +539,7 @@ export class ControllerGenerator {
     resourceName: string,
     prefix: string,
     endpoints: ApiEndpointConfig[],
+    useCasesConfig: UseCasesConfig,
     childInfo?: ChildEntityInfo
   ): string {
     const controllerName = `${resourceName}ApiController`;
@@ -538,6 +547,7 @@ export class ControllerGenerator {
     // Determine which use cases and DTOs are referenced
     const useCaseModels = new Set<string>();
     const allDtoImports = new Set<string>();
+    const allVoidOutputDtos = new Set<string>();
     const methods: string[] = [];
 
     const sortedEndpoints = this.sortRoutesBySpecificity(endpoints);
@@ -545,9 +555,10 @@ export class ControllerGenerator {
       const { model } = this.parseUseCase(endpoint.useCase);
       useCaseModels.add(model);
       
-      const { method, dtoImports } = this.generateApiEndpointMethod(endpoint, resourceName, childInfo);
+      const { method, dtoImports, voidOutputDtos } = this.generateApiEndpointMethod(endpoint, resourceName, useCasesConfig, childInfo);
       methods.push(method);
       dtoImports.forEach(d => allDtoImports.add(d));
+      voidOutputDtos.forEach(d => allVoidOutputDtos.add(d));
     });
 
     // Generate imports
@@ -556,7 +567,12 @@ export class ControllerGenerator {
       .join('\n');
 
     const dtoImportStatements = Array.from(allDtoImports)
-      .map(dto => `import { ${dto}Input, ${dto}Output } from '../../application/dto/${dto}';`)
+      .map(dto => {
+        if (allVoidOutputDtos.has(dto)) {
+          return `import { ${dto}Input } from '../../application/dto/${dto}';`;
+        }
+        return `import { ${dto}Input, ${dto}Output } from '../../application/dto/${dto}';`;
+      })
       .join('\n');
 
     // Generate constructor parameters
@@ -672,6 +688,7 @@ ${methods.join('\n\n')}
           resourceName,
           resourceConfig.prefix,
           resourceConfig.endpoints,
+          config.useCases,
           childInfo
         );
         result[`${resourceName}Api`] = code;

@@ -133,8 +133,8 @@ export class {{ENTITY_NAME}}Store {
 };
 
 export const storeFileTemplate = `import { Injectable } from '../../../../system';
-import { {{ENTITY_NAME}} } from '../../domain/entities/{{ENTITY_NAME}}';
-import type { ISqlProvider } from '@currentjs/provider-mysql';{{VALUE_OBJECT_IMPORTS}}
+import { {{ENTITY_IMPORT_ITEMS}} } from '../../domain/entities/{{ENTITY_NAME}}';
+import type { ISqlProvider } from '@currentjs/provider-mysql';{{VALUE_OBJECT_IMPORTS}}{{AGGREGATE_REF_IMPORTS}}
 
 {{ROW_INTERFACE}}
 

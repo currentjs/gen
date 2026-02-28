@@ -60,6 +60,16 @@ export function mapType(
 }
 
 /**
+ * Check if a YAML field type references another aggregate entity.
+ */
+export function isAggregateReference(
+  yamlType: string,
+  aggregates?: Set<string> | Map<string, unknown>
+): boolean {
+  return !!aggregates?.has(yamlType);
+}
+
+/**
  * Map a YAML type to the store row TypeScript type (value objects become string).
  */
 export function mapRowType(

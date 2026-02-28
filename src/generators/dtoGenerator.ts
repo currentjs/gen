@@ -12,7 +12,7 @@ import {
   isValidModuleConfig 
 } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
-import { capitalize, mapType as mapTypeUtil } from '../utils/typeUtils';
+import { capitalize, mapType as mapTypeUtil, isAggregateReference } from '../utils/typeUtils';
 
 export class DtoGenerator {
   private availableAggregates: Map<string, AggregateConfig> = new Map();
@@ -163,18 +163,20 @@ export class DtoGenerator {
       // Add fields
       fieldsToInclude.forEach(([fieldName, fieldConfig]) => {
         if (fieldName === 'id' || fieldConfig.auto) return;
-        
-        const tsType = this.mapType(fieldConfig.type);
-        // Fields are required by default unless partial or required: false
-        const isRequired = !inputConfig.partial && fieldConfig.required !== false;
+
+        const isAggRef = isAggregateReference(fieldConfig.type, this.availableAggregates);
+        const tsType = isAggRef ? 'number' : this.mapType(fieldConfig.type);
+        const effectiveFieldType = isAggRef ? 'number' : fieldConfig.type;
+        // Aggregate references are always optional in DTOs; other fields default to required
+        const isRequired = !isAggRef && !inputConfig.partial && fieldConfig.required !== false;
         const optional = isRequired ? '' : '?';
         
         fieldDeclarations.push(`  readonly ${fieldName}${optional}: ${tsType};`);
         constructorParams.push(`${fieldName}${optional}: ${tsType}`);
         constructorAssignments.push(`    this.${fieldName} = ${fieldName};`);
         
-        validationChecks.push(...this.getValidationCode(fieldName, fieldConfig.type, isRequired));
-        fieldTransforms.push(`      ${fieldName}: ${this.getTransformCode(fieldName, fieldConfig.type)}`);
+        validationChecks.push(...this.getValidationCode(fieldName, effectiveFieldType, isRequired));
+        fieldTransforms.push(`      ${fieldName}: ${this.getTransformCode(fieldName, effectiveFieldType)}`);
       });
     }
 
@@ -284,14 +286,17 @@ ${transformsStr}
       // Add fields
       fieldsToInclude.forEach(([fieldName, fieldConfig]) => {
         if (fieldName === 'id') return;
-        
-        const tsType = this.mapType(fieldConfig.type);
-        const isOptional = fieldConfig.required === false;
+
+        const isAggRef = isAggregateReference(fieldConfig.type, this.availableAggregates);
+        const tsType = isAggRef ? 'number' : this.mapType(fieldConfig.type);
+        const isOptional = fieldConfig.required === false || isAggRef;
         const optional = isOptional ? '?' : '';
         
         fieldDeclarations.push(`  readonly ${fieldName}${optional}: ${tsType};`);
         constructorParams.push(`${fieldName}${optional}: ${tsType}`);
-        fromMappings.push(`      ${fieldName}: entity.${fieldName}`);
+        fromMappings.push(isAggRef
+          ? `      ${fieldName}: entity.${fieldName}?.id`
+          : `      ${fieldName}: entity.${fieldName}`);
       });
     }
 

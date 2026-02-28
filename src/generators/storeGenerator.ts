@@ -6,10 +6,15 @@ import { colors } from '../utils/colors';
 import { ModuleConfig, AggregateConfig, AggregateFieldConfig, ValueObjectConfig, isValidModuleConfig } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
 import { storeTemplates, storeFileTemplate } from './templates/storeTemplates';
-import { capitalize, mapRowType } from '../utils/typeUtils';
+import { capitalize, mapRowType, isAggregateReference } from '../utils/typeUtils';
 
 export class StoreGenerator {
   private availableValueObjects: Map<string, ValueObjectConfig> = new Map();
+  private availableAggregates: Set<string> = new Set();
+
+  private isAggregateField(fieldConfig: AggregateFieldConfig): boolean {
+    return isAggregateReference(fieldConfig.type, this.availableAggregates);
+  }
 
   private isValueObjectType(fieldType: string): boolean {
     const capitalizedType = capitalize(fieldType);
@@ -31,8 +36,8 @@ export class StoreGenerator {
    */
   private sortFieldsForConstructor(fields: [string, AggregateFieldConfig][]): [string, AggregateFieldConfig][] {
     return [...fields].sort((a, b) => {
-      const aRequired = a[1].required !== false && !a[1].auto;
-      const bRequired = b[1].required !== false && !b[1].auto;
+      const aRequired = a[1].required !== false && !a[1].auto && !this.isAggregateField(a[1]);
+      const bRequired = b[1].required !== false && !b[1].auto && !this.isAggregateField(b[1]);
       if (aRequired === bRequired) return 0;
       return aRequired ? -1 : 1;
     });
@@ -124,6 +129,10 @@ export class StoreGenerator {
     result.push(`  ${ownerOrParentField}: number;`);
     
     fields.forEach(([fieldName, fieldConfig]) => {
+      if (this.isAggregateField(fieldConfig)) {
+        result.push(`  ${fieldName}_id?: number;`);
+        return;
+      }
       const tsType = this.mapTypeToRowType(fieldConfig.type);
       const isOptional = !fieldConfig.required;
       result.push(`  ${fieldName}${isOptional ? '?' : ''}: ${tsType};`);
@@ -135,11 +144,11 @@ export class StoreGenerator {
   private generateFieldNamesStr(fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
     const fieldNames = ['id'];
     fieldNames.push(childInfo ? childInfo.parentIdField : 'ownerId');
-    fieldNames.push(...fields.map(([name]) => name));
+    fieldNames.push(...fields.map(([name, config]) => this.isAggregateField(config) ? `${name}_id` : name));
     return fieldNames.map(f => `\\\`${f}\\\``).join(', ');
   }
 
-  private generateRowToModelMapping(fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
+  private generateRowToModelMapping(modelName: string, fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
     const result: string[] = [];
     
     const ownerOrParentField = childInfo ? childInfo.parentIdField : 'ownerId';
@@ -147,6 +156,19 @@ export class StoreGenerator {
     
     fields.forEach(([fieldName, fieldConfig]) => {
       const fieldType = fieldConfig.type;
+
+      // Handle enum type - cast string to the generated union type
+      if (fieldType === 'enum' && fieldConfig.values && fieldConfig.values.length > 0) {
+        const enumTypeName = `${modelName}${capitalize(fieldName)}`;
+        result.push(`      row.${fieldName} as ${enumTypeName}`);
+        return;
+      }
+
+      // Handle aggregate reference - create stub from FK
+      if (this.isAggregateField(fieldConfig)) {
+        result.push(`      row.${fieldName}_id != null ? ({ id: row.${fieldName}_id } as unknown as ${fieldType}) : undefined`);
+        return;
+      }
       
       // Handle datetime/date conversion
       if (fieldType === 'datetime' || fieldType === 'date') {
@@ -186,6 +208,12 @@ export class StoreGenerator {
     
     fields.forEach(([fieldName, fieldConfig]) => {
       const fieldType = fieldConfig.type;
+
+      // Handle aggregate reference - extract FK id
+      if (this.isAggregateField(fieldConfig)) {
+        result.push(`      ${fieldName}_id: entity.${fieldName}?.id`);
+        return;
+      }
       
       // Handle datetime/date - convert Date to MySQL DATETIME format
       if (fieldType === 'datetime' || fieldType === 'date') {
@@ -214,6 +242,9 @@ export class StoreGenerator {
     return fields
       .map(([fieldName, fieldConfig]) => {
         const fieldType = fieldConfig.type;
+        if (this.isAggregateField(fieldConfig)) {
+          return `      ${fieldName}_id: entity.${fieldName}?.id`;
+        }
         if (fieldType === 'datetime' || fieldType === 'date') {
           return this.generateDatetimeConversion(fieldName, 'toMySQL');
         }
@@ -230,7 +261,7 @@ export class StoreGenerator {
   }
 
   private generateUpdateFieldsArray(fields: [string, AggregateFieldConfig][]): string {
-    return JSON.stringify(fields.map(([name]) => name));
+    return JSON.stringify(fields.map(([name, config]) => this.isAggregateField(config) ? `${name}_id` : name));
   }
 
   private generateValueObjectImports(fields: [string, AggregateFieldConfig][]): string {
@@ -266,9 +297,23 @@ export class StoreGenerator {
     return '\n' + uniqueImports.join('\n');
   }
 
+  private generateAggregateRefImports(modelName: string, fields: [string, AggregateFieldConfig][]): string {
+    const imports: string[] = [];
+
+    fields.forEach(([, fieldConfig]) => {
+      if (this.isAggregateField(fieldConfig) && fieldConfig.type !== modelName) {
+        imports.push(`import { ${fieldConfig.type} } from '../../domain/entities/${fieldConfig.type}';`);
+      }
+    });
+
+    const uniqueImports = [...new Set(imports)];
+    if (uniqueImports.length === 0) return '';
+    return '\n' + uniqueImports.join('\n');
+  }
+
   private generateGetByParentIdMethod(modelName: string, fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
     if (!childInfo) return '';
-    const fieldList = ['id', childInfo.parentIdField, ...fields.map(([name]) => name)].map(f => '\\`' + f + '\\`').join(', ');
+    const fieldList = ['id', childInfo.parentIdField, ...fields.map(([name, config]) => this.isAggregateField(config) ? `${name}_id` : name)].map(f => '\\`' + f + '\\`').join(', ');
     const parentIdField = childInfo.parentIdField;
     return `
 
@@ -338,11 +383,12 @@ export class StoreGenerator {
       TABLE_NAME: tableName,
       ROW_FIELDS: this.generateRowFields(fields, childInfo),
       FIELD_NAMES: this.generateFieldNamesStr(fields, childInfo),
-      ROW_TO_MODEL_MAPPING: this.generateRowToModelMapping(sortedFields, childInfo),
+      ROW_TO_MODEL_MAPPING: this.generateRowToModelMapping(modelName, sortedFields, childInfo),
       INSERT_DATA_MAPPING: this.generateInsertDataMapping(fields, childInfo),
       UPDATE_DATA_MAPPING: this.generateUpdateDataMapping(fields),
       UPDATE_FIELDS_ARRAY: this.generateUpdateFieldsArray(fields),
       VALUE_OBJECT_IMPORTS: this.generateValueObjectImports(fields),
+      AGGREGATE_REF_IMPORTS: this.generateAggregateRefImports(modelName, fields),
       GET_BY_PARENT_ID_METHOD: this.generateGetByParentIdMethod(modelName, fields, childInfo),
       GET_RESOURCE_OWNER_METHOD: this.generateGetResourceOwnerMethod(childInfo)
     };
@@ -350,11 +396,21 @@ export class StoreGenerator {
     const rowInterface = this.replaceTemplateVars(storeTemplates.rowInterface, variables);
     const storeClass = this.replaceTemplateVars(storeTemplates.storeClass, variables);
 
+    // Build entity import items: entity name + any enum type names
+    const entityImportItems = [modelName];
+    fields.forEach(([fieldName, fieldConfig]) => {
+      if (fieldConfig.type === 'enum' && fieldConfig.values && fieldConfig.values.length > 0) {
+        entityImportItems.push(`${modelName}${capitalize(fieldName)}`);
+      }
+    });
+
     return this.replaceTemplateVars(storeFileTemplate, {
       ENTITY_NAME: modelName,
+      ENTITY_IMPORT_ITEMS: entityImportItems.join(', '),
       ROW_INTERFACE: rowInterface,
       STORE_CLASS: storeClass,
-      VALUE_OBJECT_IMPORTS: variables.VALUE_OBJECT_IMPORTS
+      VALUE_OBJECT_IMPORTS: variables.VALUE_OBJECT_IMPORTS,
+      AGGREGATE_REF_IMPORTS: variables.AGGREGATE_REF_IMPORTS
     });
   }
 
@@ -366,6 +422,14 @@ export class StoreGenerator {
     if (config.domain.valueObjects) {
       Object.entries(config.domain.valueObjects).forEach(([name, voConfig]) => {
         this.availableValueObjects.set(name, voConfig);
+      });
+    }
+
+    // Collect all aggregate names for detecting entity references
+    this.availableAggregates.clear();
+    if (config.domain.aggregates) {
+      Object.keys(config.domain.aggregates).forEach(name => {
+        this.availableAggregates.add(name);
       });
     }
 

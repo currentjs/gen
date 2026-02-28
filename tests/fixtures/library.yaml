@@ -1,0 +1,185 @@
+domain:
+  aggregates:
+    Author:
+      root: true
+      fields:
+        name:
+          type: string
+          required: true
+        bio:
+          type: string
+          required: false
+
+    Book:
+      root: true
+      fields:
+        title:
+          type: string
+          required: true
+        author:
+          type: Author
+          required: false
+        genre:
+          type: enum
+          values: ['fiction', 'non-fiction', 'science']
+          required: true
+        pageCount:
+          type: integer
+          required: false
+
+    Review:
+      root: true
+      fields:
+        book:
+          type: Book
+          required: false
+        rating:
+          type: number
+          required: true
+        comment:
+          type: string
+          required: false
+
+useCases:
+  Author:
+    list:
+      input:
+        pagination:
+          type: offset
+          defaults:
+            limit: 20
+            maxLimit: 100
+      output:
+        from: Author
+        pagination: true
+      handlers:
+        - default:list
+    get:
+      input:
+        identifier: id
+      output:
+        from: Author
+      handlers:
+        - default:get
+    create:
+      input:
+        from: Author
+      output:
+        from: Author
+      handlers:
+        - default:create
+
+  Book:
+    list:
+      input:
+        pagination:
+          type: offset
+          defaults:
+            limit: 20
+            maxLimit: 100
+      output:
+        from: Book
+        pagination: true
+      handlers:
+        - default:list
+    get:
+      input:
+        identifier: id
+      output:
+        from: Book
+      handlers:
+        - default:get
+    create:
+      input:
+        from: Book
+      output:
+        from: Book
+      handlers:
+        - default:create
+
+  Review:
+    list:
+      input:
+        pagination:
+          type: offset
+          defaults:
+            limit: 20
+            maxLimit: 100
+      output:
+        from: Review
+        pagination: true
+      handlers:
+        - default:list
+    get:
+      input:
+        identifier: id
+      output:
+        from: Review
+      handlers:
+        - default:get
+    create:
+      input:
+        from: Review
+      output:
+        from: Review
+      handlers:
+        - default:create
+    delete:
+      input:
+        identifier: id
+      output: void
+      handlers:
+        - default:delete
+
+api:
+  Author:
+    prefix: /api/author
+    endpoints:
+      - method: GET
+        path: /
+        useCase: Author:list
+        auth: all
+      - method: GET
+        path: /:id
+        useCase: Author:get
+        auth: all
+      - method: POST
+        path: /
+        useCase: Author:create
+        auth: authenticated
+
+  Book:
+    prefix: /api/book
+    endpoints:
+      - method: GET
+        path: /
+        useCase: Book:list
+        auth: all
+      - method: GET
+        path: /:id
+        useCase: Book:get
+        auth: all
+      - method: POST
+        path: /
+        useCase: Book:create
+        auth: authenticated
+
+  Review:
+    prefix: /api/review
+    endpoints:
+      - method: GET
+        path: /
+        useCase: Review:list
+        auth: all
+      - method: GET
+        path: /:id
+        useCase: Review:get
+        auth: all
+      - method: POST
+        path: /
+        useCase: Review:create
+        auth: authenticated
+      - method: DELETE
+        path: /:id
+        useCase: Review:delete
+        auth: admin
