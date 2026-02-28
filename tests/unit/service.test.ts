@@ -30,9 +30,27 @@ describe('ServiceGenerator', () => {
     expect(invoiceService).toContain('async updatePublishStatus(');
   });
 
-  it('custom handlers have (result, input) signature and return result', () => {
-    expect(invoiceService).toContain('result: any, input: any');
+  it('custom handlers have typed (result, input) signature and return result', () => {
+    expect(invoiceService).toContain('result: Invoice, input: InvoiceGetInput');
+    expect(invoiceService).toContain('result: null, input: InvoiceCreateInput');
+    expect(invoiceService).toContain('result: Invoice, input: InvoiceUpdateInput');
+    expect(invoiceService).toContain('result: null, input: InvoiceDeleteInput');
+    expect(invoiceService).toContain('result: Invoice, input: InvoicePublishInput');
+    expect(invoiceService).toNotContain('input: any');
     expect(invoiceService).toContain('return result;');
+  });
+
+  it('imports DTO types used in method signatures', () => {
+    expect(invoiceService).toContain("import { InvoiceCreateInput } from '../dto/InvoiceCreate'");
+    expect(invoiceService).toContain("import { InvoiceUpdateInput } from '../dto/InvoiceUpdate'");
+    expect(invoiceService).toContain("import { InvoiceGetInput } from '../dto/InvoiceGet'");
+    expect(invoiceService).toContain("import { InvoiceDeleteInput } from '../dto/InvoiceDelete'");
+    expect(invoiceService).toContain("import { InvoicePublishInput } from '../dto/InvoicePublish'");
+  });
+
+  it('create and update handlers use typed input', () => {
+    expect(invoiceService).toContain('create(input: InvoiceCreateInput)');
+    expect(invoiceService).toContain('update(id: number, input: InvoiceUpdateInput)');
   });
 
   it('generates getResourceOwner(id) for aggregate root', () => {
