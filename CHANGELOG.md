@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.1] - 2026-02-28
+
+- fixes pack:
+- aggregate references
+- layout setting in module config
+- SPA layout mismatch bug (if a page uses other layout, its loaded inside current one)
+- local provider imports bug
+- types in generated services (was any)
+- access control issues
+
 ## [0.5.0] – 2026-02-26
 
 So many changes were made that we skipped version 0.4:
