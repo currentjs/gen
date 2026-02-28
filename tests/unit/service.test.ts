@@ -30,14 +30,50 @@ describe('ServiceGenerator', () => {
     expect(invoiceService).toContain('async updatePublishStatus(');
   });
 
-  it('custom handlers have (result, input) signature and return result', () => {
-    expect(invoiceService).toContain('result: any, input: any');
+  it('custom handlers have typed (result, input) signature and return result', () => {
+    expect(invoiceService).toContain('result: Invoice, input: InvoiceGetInput');
+    expect(invoiceService).toContain('result: null, input: InvoiceCreateInput');
+    expect(invoiceService).toContain('result: Invoice, input: InvoiceUpdateInput');
+    expect(invoiceService).toContain('result: null, input: InvoiceDeleteInput');
+    expect(invoiceService).toContain('result: Invoice, input: InvoicePublishInput');
+    expect(invoiceService).toNotContain('input: any');
     expect(invoiceService).toContain('return result;');
+  });
+
+  it('imports DTO types used in method signatures', () => {
+    expect(invoiceService).toContain("import { InvoiceCreateInput } from '../dto/InvoiceCreate'");
+    expect(invoiceService).toContain("import { InvoiceUpdateInput } from '../dto/InvoiceUpdate'");
+    expect(invoiceService).toContain("import { InvoiceGetInput } from '../dto/InvoiceGet'");
+    expect(invoiceService).toContain("import { InvoiceDeleteInput } from '../dto/InvoiceDelete'");
+    expect(invoiceService).toContain("import { InvoicePublishInput } from '../dto/InvoicePublish'");
+  });
+
+  it('create and update handlers use typed input', () => {
+    expect(invoiceService).toContain('create(input: InvoiceCreateInput)');
+    expect(invoiceService).toContain('update(id: number, input: InvoiceUpdateInput)');
   });
 
   it('generates getResourceOwner(id) for aggregate root', () => {
     expect(invoiceService).toContain('getResourceOwner(id: number)');
     expect(invoiceService).toContain('Promise<number | null>');
+  });
+
+  it('list handler always has ownerId? and calls getPaginated/count with it', () => {
+    expect(invoiceService).toContain('async list(page: number = 1, limit: number = 20, ownerId?: number)');
+    expect(invoiceService).toContain('.getPaginated(page, limit, ownerId)');
+    expect(invoiceService).toContain('.count(ownerId)');
+  });
+});
+
+describe('ServiceGenerator - non-paginated list', () => {
+  it('non-paginated list has ownerId? and calls getAll(ownerId)', () => {
+    const config = loadFixture('invoice.yaml');
+    delete (config.useCases.Invoice.list.input as any).pagination;
+    const result = serviceGen.generateFromConfig(config);
+    const code = getCode(result as Record<string, unknown>, 'Invoice');
+    expect(code).toContain('async list(ownerId?: number)');
+    expect(code).toContain('.getAll(ownerId)');
+    expect(code).toNotContain('.getPaginated');
   });
 });
 
@@ -59,6 +95,20 @@ describe('UseCaseGenerator', () => {
     expect(invoiceUseCase).toContain('getResourceOwner(id: number)');
     expect(invoiceUseCase).toContain('invoiceService.getResourceOwner(id)');
   });
+
+  it('list always has ownerId? as second param and passes it to service', () => {
+    expect(invoiceUseCase).toContain('async list(input: InvoiceListInput, ownerId?: number)');
+    expect(invoiceUseCase).toContain('invoiceService.list(input.page || 1, input.limit || 20, ownerId)');
+  });
+
+  it('non-paginated list passes ownerId only to service', () => {
+    const config = loadFixture('invoice.yaml');
+    delete (config.useCases.Invoice.list.input as any).pagination;
+    const result = useCaseGen.generateFromConfig(config);
+    const code = getCode(result as Record<string, unknown>, 'Invoice');
+    expect(code).toContain('async list(input: InvoiceListInput, ownerId?: number)');
+    expect(code).toContain('invoiceService.list(ownerId)');
+  });
 });
 
 describe('Product service (default handlers only)', () => {
@@ -78,5 +128,10 @@ describe('Product service (default handlers only)', () => {
 
   it('has getResourceOwner for aggregate root', () => {
     expect(productService).toContain('getResourceOwner(id: number)');
+  });
+
+  it('list always has ownerId? and calls getPaginated/count with it', () => {
+    expect(productService).toContain('.getPaginated(page, limit, ownerId)');
+    expect(productService).toContain('.count(ownerId)');
   });
 });

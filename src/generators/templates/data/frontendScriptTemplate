@@ -374,7 +374,10 @@ window.AppConfig = {
    */
   function navigateToPage(url, targetElement = null) {
     const target = targetElement || document.querySelector('#main');
-    if (!target) return;
+    if (!target) {
+      window.location.href = url;
+      return;
+    }
     
     showLoading('#main');
     
@@ -388,18 +391,22 @@ window.AppConfig = {
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
+        const targetLayout = response.headers.get('X-Layout') || '';
+        const currentLayout = (document.querySelector('meta[name="app-layout"]') || {}).content || '';
+        if (targetLayout !== currentLayout) {
+          window.location.href = url;
+          return null;
+        }
         return response.text();
       })
       .then(html => {
+        if (html === null) return;
         target.innerHTML = html;
-        // Update browser history
         window.history.pushState({}, '', url);
-        // No need to re-initialize - delegation handles new content automatically
       })
       .catch(error => {
         console.error('Navigation failed:', error);
         showToast('Failed to load page', 'error');
-        // Fallback to normal navigation
         window.location.href = url;
       })
       .finally(() => {

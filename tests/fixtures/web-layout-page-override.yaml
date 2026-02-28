@@ -1,0 +1,27 @@
+domain:
+  aggregates:
+    Idea:
+      root: true
+      fields:
+        title:
+          type: string
+          required: false
+
+useCases: {}
+
+web:
+  Idea:
+    prefix: ""
+    layout: main_view
+    pages:
+      - path: /
+        view: main
+        auth: all
+      - path: /dashboard
+        view: dashboard
+        auth: all
+        layout: custom_layout
+      - path: /plain
+        view: plain
+        auth: all
+        layout: none

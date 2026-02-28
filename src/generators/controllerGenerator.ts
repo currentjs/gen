@@ -8,6 +8,7 @@ import {
   ApiEndpointConfig,
   WebPageConfig,
   AuthConfig,
+  UseCasesConfig,
   isValidModuleConfig 
 } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo, getChildrenOfParent, ParentChildInfo } from '../utils/childEntityUtils';
@@ -247,21 +248,30 @@ export class ControllerGenerator {
   private generateApiEndpointMethod(
     endpoint: ApiEndpointConfig,
     resourceName: string,
+    useCasesConfig: UseCasesConfig,
     childInfo?: ChildEntityInfo
-  ): { method: string; dtoImports: Set<string> } {
+  ): { method: string; dtoImports: Set<string>; voidOutputDtos: Set<string> } {
     const { model, action } = this.parseUseCase(endpoint.useCase);
     const methodName = action;
     const decorator = this.getHttpDecorator(endpoint.method);
     const useCaseVar = `${model.toLowerCase()}UseCase`;
     const inputClass = `${model}${capitalize(action)}Input`;
     const outputClass = `${model}${capitalize(action)}Output`;
+    const useCaseDef = useCasesConfig[model]?.[action];
+    const isVoidOutput = !useCaseDef?.output || useCaseDef.output === 'void';
 
     const dtoImports = new Set<string>();
+    const voidOutputDtos = new Set<string>();
     dtoImports.add(`${model}${capitalize(action)}`);
+    if (isVoidOutput) {
+      voidOutputDtos.add(`${model}${capitalize(action)}`);
+    }
 
     // Generate auth check (pre-fetch)
     const authCheck = this.generateAuthCheck(endpoint.auth);
     const authLine = authCheck ? `\n    ${authCheck}\n` : '';
+
+    const hasOwner = this.hasOwnerAuth(endpoint.auth);
 
     // Build parsing logic
     // For create: root gets ownerId from user, child gets parentId from URL params
@@ -285,7 +295,6 @@ export class ControllerGenerator {
     // Generate owner checks:
     // - For mutations (update, delete): PRE-mutation check (before operation)
     // - For reads (get): POST-fetch check (after fetching)
-    const hasOwner = this.hasOwnerAuth(endpoint.auth);
     const isMutation = action === 'update' || action === 'delete';
     const isRead = action === 'get';
     
@@ -301,28 +310,32 @@ export class ControllerGenerator {
 
     // Generate output transformation based on action
     let outputTransform: string;
-    if (action === 'list') {
-      outputTransform = `return ${outputClass}.from(result);`;
-    } else if (action === 'delete') {
+    if (isVoidOutput || action === 'delete') {
       outputTransform = `return result;`;
+    } else if (action === 'list') {
+      outputTransform = `return ${outputClass}.from(result);`;
     } else {
       outputTransform = `return ${outputClass}.from(result);`;
     }
 
+    const useCaseArgs = (hasOwner && action === 'list')
+      ? 'input, context.request.user?.id as number'
+      : 'input';
+
     const method = `  @${decorator}('${endpoint.path}')
   async ${methodName}(context: IContext): Promise<any> {${authLine}
     ${parseLogic}${preMutationOwnerCheck}
-    const result = await this.${useCaseVar}.${action}(input);${postFetchOwnerCheck}
+    const result = await this.${useCaseVar}.${action}(${useCaseArgs});${postFetchOwnerCheck}
     ${outputTransform}
   }`;
 
-    return { method, dtoImports };
+    return { method, dtoImports, voidOutputDtos };
   }
 
   private generateWebPageMethod(
     page: WebPageConfig,
     resourceName: string,
-    layout: string,
+    layout: string | undefined,
     methodIndex: number,
     childInfo?: ChildEntityInfo,
     withChildChildren?: ParentChildInfo[]
@@ -351,7 +364,10 @@ export class ControllerGenerator {
 
     // For GET requests with views (display pages)
     if (method === 'GET' && page.view) {
-      const renderDecorator = `\n  @Render("${page.view}", "${layout}")`;
+      const pageLayout = this.resolveLayout(page.layout, layout);
+      const renderDecorator = pageLayout
+        ? `\n  @Render("${page.view}", "${pageLayout}")`
+        : `\n  @Render("${page.view}")`;
       
       if (page.useCase) {
         const { model, action } = this.parseUseCase(page.useCase);
@@ -359,6 +375,8 @@ export class ControllerGenerator {
         const inputClass = `${model}${capitalize(action)}Input`;
         
         dtoImports.add(`${model}${capitalize(action)}`);
+
+        const hasOwner = this.hasOwnerAuth(page.auth);
 
         let parseLogic: string;
         if (page.path.includes(':id')) {
@@ -368,9 +386,6 @@ export class ControllerGenerator {
         } else {
           parseLogic = `const input = ${inputClass}.parse({});`;
         }
-
-        // Generate post-fetch owner check for GET pages (reads only)
-        const hasOwner = this.hasOwnerAuth(page.auth);
         const isReadAction = action === 'get' || action === 'list';
         const postFetchOwnerCheck = (hasOwner && isReadAction) 
           ? this.generatePostFetchOwnerCheck(page.auth, 'result', useCaseVar, childInfo) 
@@ -394,12 +409,16 @@ export class ControllerGenerator {
           returnExpr = 'result';
         }
 
+        const useCaseArgs = (hasOwner && action === 'list')
+          ? 'input, context.request.user?.id as number'
+          : 'input';
+
         const loadChildCode = loadChildBlocks.length ? '\n    ' + loadChildBlocks.join('\n    ') + '\n    ' : '';
         const methodCode = `${renderDecorator}
   @${decorator}('${page.path}')
   async ${methodName}(context: IContext): Promise<any> {${authLine}
     ${parseLogic}
-    const result = await this.${useCaseVar}.${action}(input);${postFetchOwnerCheck}${loadChildCode}
+    const result = await this.${useCaseVar}.${action}(${useCaseArgs});${postFetchOwnerCheck}${loadChildCode}
     return ${returnExpr};
   }`;
 
@@ -527,10 +546,30 @@ export class ControllerGenerator {
     });
   }
 
+  /**
+   * Resolve layout from YAML value.
+   * - undefined => use fallback (if provided)
+   * - "none" or "" => no layout
+   * - other values => use explicit layout name
+   */
+  private resolveLayout(layout: string | undefined, fallback?: string): string | undefined {
+    if (layout === undefined) {
+      return fallback;
+    }
+
+    const normalized = layout.trim();
+    if (!normalized || normalized.toLowerCase() === 'none') {
+      return undefined;
+    }
+
+    return normalized;
+  }
+
   private generateApiController(
     resourceName: string,
     prefix: string,
     endpoints: ApiEndpointConfig[],
+    useCasesConfig: UseCasesConfig,
     childInfo?: ChildEntityInfo
   ): string {
     const controllerName = `${resourceName}ApiController`;
@@ -538,6 +577,7 @@ export class ControllerGenerator {
     // Determine which use cases and DTOs are referenced
     const useCaseModels = new Set<string>();
     const allDtoImports = new Set<string>();
+    const allVoidOutputDtos = new Set<string>();
     const methods: string[] = [];
 
     const sortedEndpoints = this.sortRoutesBySpecificity(endpoints);
@@ -545,9 +585,10 @@ export class ControllerGenerator {
       const { model } = this.parseUseCase(endpoint.useCase);
       useCaseModels.add(model);
       
-      const { method, dtoImports } = this.generateApiEndpointMethod(endpoint, resourceName, childInfo);
+      const { method, dtoImports, voidOutputDtos } = this.generateApiEndpointMethod(endpoint, resourceName, useCasesConfig, childInfo);
       methods.push(method);
       dtoImports.forEach(d => allDtoImports.add(d));
+      voidOutputDtos.forEach(d => allVoidOutputDtos.add(d));
     });
 
     // Generate imports
@@ -556,7 +597,12 @@ export class ControllerGenerator {
       .join('\n');
 
     const dtoImportStatements = Array.from(allDtoImports)
-      .map(dto => `import { ${dto}Input, ${dto}Output } from '../../application/dto/${dto}';`)
+      .map(dto => {
+        if (allVoidOutputDtos.has(dto)) {
+          return `import { ${dto}Input } from '../../application/dto/${dto}';`;
+        }
+        return `import { ${dto}Input, ${dto}Output } from '../../application/dto/${dto}';`;
+      })
       .join('\n');
 
     // Generate constructor parameters
@@ -581,7 +627,7 @@ ${methods.join('\n\n')}
   private generateWebController(
     resourceName: string,
     prefix: string,
-    layout: string,
+    layout: string | undefined,
     pages: WebPageConfig[],
     config: ModuleConfig,
     childInfo?: ChildEntityInfo
@@ -672,6 +718,7 @@ ${methods.join('\n\n')}
           resourceName,
           resourceConfig.prefix,
           resourceConfig.endpoints,
+          config.useCases,
           childInfo
         );
         result[`${resourceName}Api`] = code;
@@ -682,10 +729,11 @@ ${methods.join('\n\n')}
     if (config.web) {
       Object.entries(config.web).forEach(([resourceName, resourceConfig]) => {
         const childInfo = childEntityMap.get(resourceName);
+        const moduleLayout = this.resolveLayout(resourceConfig.layout, 'main_view');
         const code = this.generateWebController(
           resourceName,
           resourceConfig.prefix,
-          resourceConfig.layout || 'main_view',
+          moduleLayout,
           resourceConfig.pages,
           config,
           childInfo

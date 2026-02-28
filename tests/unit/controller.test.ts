@@ -95,3 +95,78 @@ describe('ControllerGenerator - structure', () => {
     expect(invoiceWeb).toContain('Render');
   });
 });
+
+describe('ControllerGenerator - list with owner auth passes ownerId', () => {
+  it('API list endpoint passes user id as second arg to useCase when auth includes owner', () => {
+    const config = loadFixture('invoice.yaml');
+    config.api!.Invoice.endpoints[0].auth = 'owner';
+    const result = controllerGen.generateFromConfig(config);
+    const apiCode = getCode(result as Record<string, unknown>, 'InvoiceApi');
+    expect(apiCode).toContain('.list(input, context.request.user?.id as number)');
+    expect(apiCode).toContain('InvoiceListInput.parse(context.request.parameters)');
+  });
+
+  it('API list endpoint calls useCase.list(input) without ownerId when auth is all', () => {
+    const config = loadFixture('invoice.yaml');
+    const result = controllerGen.generateFromConfig(config);
+    const apiCode = getCode(result as Record<string, unknown>, 'InvoiceApi');
+    expect(apiCode).toContain('.list(input)');
+    expect(apiCode).toNotContain('.list(input, context.request.user');
+  });
+
+  it('Web list page passes user id as second arg to useCase when auth includes owner', () => {
+    const config = loadFixture('invoice.yaml');
+    config.web!.Invoice.pages[0].auth = 'owner';
+    const result = controllerGen.generateFromConfig(config);
+    const webCode = getCode(result as Record<string, unknown>, 'InvoiceWeb');
+    expect(webCode).toContain('.list(input, context.request.user?.id as number)');
+    expect(webCode).toContain('InvoiceListInput.parse(context.request.parameters)');
+  });
+
+  it('Web list page calls useCase.list(input) without ownerId when auth is all', () => {
+    const config = loadFixture('invoice.yaml');
+    const result = controllerGen.generateFromConfig(config);
+    const webCode = getCode(result as Record<string, unknown>, 'InvoiceWeb');
+    expect(webCode).toContain('.list(input)');
+    expect(webCode).toNotContain('.list(input, context.request.user');
+  });
+});
+
+describe('ControllerGenerator - web layout rendering', () => {
+  it('supports module layout: none by generating @Render(view) without second parameter', () => {
+    const config = loadFixture('web-layout-none.yaml');
+    const result = controllerGen.generateFromConfig(config);
+    const webCode = getCode(result as Record<string, unknown>, 'IdeaWeb');
+
+    expect(webCode).toContain('@Render("main")');
+    expect(webCode).toNotContain('@Render("main",');
+  });
+
+  it('supports module layout: empty string by generating @Render(view) without second parameter', () => {
+    const config = loadFixture('web-layout-none.yaml');
+    config.web!.Idea.layout = '';
+    const result = controllerGen.generateFromConfig(config);
+    const webCode = getCode(result as Record<string, unknown>, 'IdeaWeb');
+
+    expect(webCode).toContain('@Render("main")');
+    expect(webCode).toNotContain('@Render("main",');
+  });
+
+  it('supports per-page layout override while preserving module layout fallback', () => {
+    const config = loadFixture('web-layout-page-override.yaml');
+    const result = controllerGen.generateFromConfig(config);
+    const webCode = getCode(result as Record<string, unknown>, 'IdeaWeb');
+
+    expect(webCode).toContain('@Render("main", "main_view")');
+    expect(webCode).toContain('@Render("dashboard", "custom_layout")');
+  });
+
+  it('supports per-page layout: none and omits layout only for that page', () => {
+    const config = loadFixture('web-layout-page-override.yaml');
+    const result = controllerGen.generateFromConfig(config);
+    const webCode = getCode(result as Record<string, unknown>, 'IdeaWeb');
+
+    expect(webCode).toContain('@Render("plain")');
+    expect(webCode).toNotContain('@Render("plain",');
+  });
+});

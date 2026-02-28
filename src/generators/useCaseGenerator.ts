@@ -45,8 +45,8 @@ export class UseCaseGenerator {
         let params = '';
         if (defaultAction === 'list') {
           params = useCaseConfig.input?.pagination
-            ? 'input.page || 1, input.limit || 20'
-            : '';
+            ? 'input.page || 1, input.limit || 20, ownerId'
+            : 'ownerId';
         } else if (defaultAction === 'get') {
           params = 'input.id';
         } else if (defaultAction === 'create') {
@@ -70,7 +70,11 @@ export class UseCaseGenerator {
 
     const returnStatement = '\n    return result;';
 
-    return `  async ${methodName}(input: ${inputType}): Promise<${returnType}> {
+    const methodParams = actionName === 'list'
+      ? `input: ${inputType}, ownerId?: number`
+      : `input: ${inputType}`;
+
+    return `  async ${methodName}(${methodParams}): Promise<${returnType}> {
 ${handlerCalls}${returnStatement}
   }`;
   }
