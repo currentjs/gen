@@ -95,3 +95,42 @@ describe('ControllerGenerator - structure', () => {
     expect(invoiceWeb).toContain('Render');
   });
 });
+
+describe('ControllerGenerator - web layout rendering', () => {
+  it('supports module layout: none by generating @Render(view) without second parameter', () => {
+    const config = loadFixture('web-layout-none.yaml');
+    const result = controllerGen.generateFromConfig(config);
+    const webCode = getCode(result as Record<string, unknown>, 'IdeaWeb');
+
+    expect(webCode).toContain('@Render("main")');
+    expect(webCode).toNotContain('@Render("main",');
+  });
+
+  it('supports module layout: empty string by generating @Render(view) without second parameter', () => {
+    const config = loadFixture('web-layout-none.yaml');
+    config.web!.Idea.layout = '';
+    const result = controllerGen.generateFromConfig(config);
+    const webCode = getCode(result as Record<string, unknown>, 'IdeaWeb');
+
+    expect(webCode).toContain('@Render("main")');
+    expect(webCode).toNotContain('@Render("main",');
+  });
+
+  it('supports per-page layout override while preserving module layout fallback', () => {
+    const config = loadFixture('web-layout-page-override.yaml');
+    const result = controllerGen.generateFromConfig(config);
+    const webCode = getCode(result as Record<string, unknown>, 'IdeaWeb');
+
+    expect(webCode).toContain('@Render("main", "main_view")');
+    expect(webCode).toContain('@Render("dashboard", "custom_layout")');
+  });
+
+  it('supports per-page layout: none and omits layout only for that page', () => {
+    const config = loadFixture('web-layout-page-override.yaml');
+    const result = controllerGen.generateFromConfig(config);
+    const webCode = getCode(result as Record<string, unknown>, 'IdeaWeb');
+
+    expect(webCode).toContain('@Render("plain")');
+    expect(webCode).toNotContain('@Render("plain",');
+  });
+});

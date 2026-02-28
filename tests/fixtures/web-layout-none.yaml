@@ -1,0 +1,19 @@
+domain:
+  aggregates:
+    Idea:
+      root: true
+      fields:
+        title:
+          type: string
+          required: false
+
+useCases: {}
+
+web:
+  Idea:
+    prefix: ""
+    layout: none
+    pages:
+      - path: /
+        view: main
+        auth: all

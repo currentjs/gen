@@ -144,6 +144,7 @@ export interface WebPageConfig {
   method?: 'GET' | 'POST';
   useCase?: string;
   view?: string;
+  layout?: string;
   auth?: AuthConfig;
   onSuccess?: {
     redirect?: string;

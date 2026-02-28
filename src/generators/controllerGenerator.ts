@@ -330,7 +330,7 @@ export class ControllerGenerator {
   private generateWebPageMethod(
     page: WebPageConfig,
     resourceName: string,
-    layout: string,
+    layout: string | undefined,
     methodIndex: number,
     childInfo?: ChildEntityInfo,
     withChildChildren?: ParentChildInfo[]
@@ -359,7 +359,10 @@ export class ControllerGenerator {
 
     // For GET requests with views (display pages)
     if (method === 'GET' && page.view) {
-      const renderDecorator = `\n  @Render("${page.view}", "${layout}")`;
+      const pageLayout = this.resolveLayout(page.layout, layout);
+      const renderDecorator = pageLayout
+        ? `\n  @Render("${page.view}", "${pageLayout}")`
+        : `\n  @Render("${page.view}")`;
       
       if (page.useCase) {
         const { model, action } = this.parseUseCase(page.useCase);
@@ -535,6 +538,25 @@ export class ControllerGenerator {
     });
   }
 
+  /**
+   * Resolve layout from YAML value.
+   * - undefined => use fallback (if provided)
+   * - "none" or "" => no layout
+   * - other values => use explicit layout name
+   */
+  private resolveLayout(layout: string | undefined, fallback?: string): string | undefined {
+    if (layout === undefined) {
+      return fallback;
+    }
+
+    const normalized = layout.trim();
+    if (!normalized || normalized.toLowerCase() === 'none') {
+      return undefined;
+    }
+
+    return normalized;
+  }
+
   private generateApiController(
     resourceName: string,
     prefix: string,
@@ -597,7 +619,7 @@ ${methods.join('\n\n')}
   private generateWebController(
     resourceName: string,
     prefix: string,
-    layout: string,
+    layout: string | undefined,
     pages: WebPageConfig[],
     config: ModuleConfig,
     childInfo?: ChildEntityInfo
@@ -699,10 +721,11 @@ ${methods.join('\n\n')}
     if (config.web) {
       Object.entries(config.web).forEach(([resourceName, resourceConfig]) => {
         const childInfo = childEntityMap.get(resourceName);
+        const moduleLayout = this.resolveLayout(resourceConfig.layout, 'main_view');
         const code = this.generateWebController(
           resourceName,
           resourceConfig.prefix,
-          resourceConfig.layout || 'main_view',
+          moduleLayout,
           resourceConfig.pages,
           config,
           childInfo
