@@ -27,7 +27,7 @@ export const packageJsonTemplate = (appName: string) => JSON.stringify(
     devDependencies: {
       typescript: '^5.6.3',
       '@types/node': '^22.7.4',
-      '@koz1024/path-fixer': '^0.2.1',
+      '@koz1024/path-fixer': '^0.2.2',
     },
     type: 'module'
   },
