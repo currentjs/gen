@@ -19,7 +19,7 @@ export async function handleGenerateAll(
   yamlPathArg?: string,
   _outArg?: string,
   moduleName?: string,
-  opts?: { force?: boolean; skip?: boolean }
+  opts?: { force?: boolean; skip?: boolean; withTemplates?: boolean }
 ): Promise<void> {
   const appYamlPath = resolveYamlPath(yamlPathArg);
   initGenerationRegistry(process.cwd());
@@ -81,7 +81,7 @@ export async function handleGenerateAll(
     // eslint-disable-next-line no-await-in-loop
     await controllerGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
     // eslint-disable-next-line no-await-in-loop
-    await templateGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
+    await templateGen.generateAndSaveFiles(moduleYamlPath, moduleDir, { force: opts?.force, skipOnConflict: opts?.skip, onlyIfMissing: !opts?.withTemplates });
 
     // Find srcDir by probing upward for app.ts
     let probeDir = moduleDir;

@@ -12,7 +12,7 @@ import { handleMigrateCommit } from './commands/migrateCommit';
 
 function printHelp() {
   const title = colors.bold(colors.brightCyan('currentjs - Clean architecture CLI'));
-  const version = colors.bold(colors.brightCyan('v0.5.0'));
+  const version = colors.bold(colors.brightCyan('v0.5.1-dev'));
   const usage = colors.bold('Usage:');
   const options = colors.bold('Options:');
   const cmd = (s: string) => colors.green(s);
@@ -23,7 +23,7 @@ ${version}
 ${usage}
   ${cmd('currentjs create app')} ${colors.gray('[name]')}
   ${cmd('currentjs create module')} ${colors.gray('<name>')}
-  ${cmd('currentjs generate')} ${colors.gray('<module|*>')} ${flag('--yaml')} ${colors.gray('app.yaml')} ${colors.gray('[')}${flag('--force')}${colors.gray(']')} ${colors.gray('[')}${flag('--skip')}${colors.gray(']')}
+  ${cmd('currentjs generate')} ${colors.gray('<module|*>')} ${flag('--yaml')} ${colors.gray('app.yaml')} ${colors.gray('[')}${flag('--force')}${colors.gray(']')} ${colors.gray('[')}${flag('--skip')}${colors.gray(']')} ${colors.gray('[')}${flag('--with-templates')}${colors.gray(']')}
   ${cmd('currentjs commit')} ${colors.gray('[<file> ...]')} ${flag('--yaml')} ${colors.gray('app.yaml')}
   ${cmd('currentjs diff')} ${colors.gray('<module|*>')} ${flag('--yaml')} ${colors.gray('app.yaml')}
   ${cmd('currentjs infer')} ${flag('--file')} ${colors.gray('src/modules/<Module>/domain/entities/<Entity>.ts')} ${colors.gray('[')}${flag('--write')}${colors.gray(']')}
@@ -33,6 +33,7 @@ ${options}
   ${flag('--yaml')} <path>   ${colors.gray('Path to app.yaml (default: ./app.yaml)')}
   ${flag('--force')}         ${colors.gray('Overwrite modified files without prompting')}
   ${flag('--skip')}          ${colors.gray('Always skip overwriting modified files (no prompts)')}
+  ${flag('--with-templates')} ${colors.gray('Regenerate existing HTML templates (new templates are always created)')}
   ${flag('--out')} <dir>     ${colors.gray('[deprecated] Generators now write into each module\'s structure')}
   ${flag('-h, --help')}      ${colors.gray('Show help')}
 `;
@@ -40,7 +41,7 @@ ${options}
   console.log(help);
 }
 
-type Args = { command?: string; sub?: string; name?: string; files?: string[]; yaml?: string; out?: string; force?: boolean; skip?: boolean; help?: boolean };
+type Args = { command?: string; sub?: string; name?: string; files?: string[]; yaml?: string; out?: string; force?: boolean; skip?: boolean; withTemplates?: boolean; help?: boolean };
 
 function parseArgs(argv: string[]): Args {
   const [, , ...rest] = argv;
@@ -83,6 +84,8 @@ function parseArgs(argv: string[]): Args {
       result.force = true;
     } else if (token === '--skip') {
       result.skip = true;
+    } else if (token === '--with-templates') {
+      result.withTemplates = true;
     } else if (token === '--out') {
       result.out = rest[i + 1];
       i += 1;
@@ -116,7 +119,7 @@ async function run() {
         return;
       }
       case 'generate': {
-        await handleGenerateAll(args.yaml, args.out, args.name, { force: !!args.force, skip: !!args.skip });
+        await handleGenerateAll(args.yaml, args.out, args.name, { force: !!args.force, skip: !!args.skip, withTemplates: !!args.withTemplates });
         return;
       }
       case 'commit': {
