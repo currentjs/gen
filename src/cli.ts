@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { handleCreateApp } from './commands/createApp';
+import { handleInit } from './commands/init';
 import { handleCreateModule } from './commands/createModule';
 import { handleGenerateAll } from './commands/generateAll';
 import { handleCommit } from './commands/commit';
@@ -21,7 +21,7 @@ function printHelp() {
 ${title}
 ${version}
 ${usage}
-  ${cmd('currentjs create app')} ${colors.gray('[name]')}
+  ${cmd('currentjs init')} ${colors.gray('[name]')}
   ${cmd('currentjs create module')} ${colors.gray('<name>')}
   ${cmd('currentjs generate')} ${colors.gray('<module|*>')} ${flag('--yaml')} ${colors.gray('app.yaml')} ${colors.gray('[')}${flag('--force')}${colors.gray(']')} ${colors.gray('[')}${flag('--skip')}${colors.gray(']')} ${colors.gray('[')}${flag('--with-templates')}${colors.gray(']')}
   ${cmd('currentjs commit')} ${colors.gray('[<file> ...]')} ${flag('--yaml')} ${colors.gray('app.yaml')}
@@ -49,7 +49,9 @@ function parseArgs(argv: string[]): Args {
   if (rest.length === 0) return { help: true } as Args;
 
   result.command = rest.shift();
-  if (result.command === 'create') {
+  if (result.command === 'init') {
+    result.name = rest[0] && !rest[0].startsWith('-') ? rest.shift() : undefined;
+  } else if (result.command === 'create') {
     result.sub = rest.shift();
     result.name = rest[0] && !rest[0].startsWith('-') ? rest.shift() : undefined;
   } else if (result.command === 'generate') {
@@ -105,11 +107,11 @@ async function run() {
     }
 
     switch (args.command) {
+      case 'init': {
+        handleInit(args.name);
+        return;
+      }
       case 'create': {
-        if (args.sub === 'app') {
-          handleCreateApp(args.name);
-          return;
-        }
         if (args.sub === 'module') {
           handleCreateModule(args.name);
           return;

@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { execSync } from 'node:child_process';
-import { handleCreateApp } from '../../src/commands/createApp.js';
+import { handleInit } from '../../src/commands/init.js';
 import { handleGenerateAll } from '../../src/commands/generateAll.js';
 
 const GEN_ROOT = path.join(process.cwd(), 'tests', 'fixtures');
@@ -27,8 +27,8 @@ describe('Integration: full app generation and compilation', () => {
   });
 
   it('scaffolds app, generates modules, and compiles successfully', async () => {
-    // 1. Create app (runs npm install in tempDir)
-    handleCreateApp(tempDir);
+    // 1. Init app (runs npm install in tempDir)
+    handleInit(tempDir);
 
     // 2. Create module directories and copy fixtures
     const invoiceModuleDir = path.join(tempDir, 'src', 'modules', 'Invoice');

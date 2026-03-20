@@ -41,7 +41,7 @@ npm run build              # Compile TypeScript
 npm link @currentjs/gen    # Link local version
 
 # Test commands:
-currentjs create app my-test
+currentjs init my-test
 currentjs create module Blog
 currentjs generate Blog
 currentjs diff Blog
@@ -55,7 +55,7 @@ packages/gen/
 ├── src/
 │   ├── cli.ts                    # Entry point, argument parsing
 │   ├── commands/                 # CLI command handlers
-│   │   ├── createApp.ts          # `currentjs create app`
+│   │   ├── init.ts               # `currentjs init`
 │   │   ├── createModule.ts       # `currentjs create module`
 │   │   ├── generateAll.ts        # Generate from YAML (domain/useCases/api/web)
 │   │   ├── commit.ts             # `currentjs commit`
@@ -366,8 +366,8 @@ For each model defined in `useCases`:
 
 ## 5. Command Reference
 
-### `currentjs create app [name]`
-**File**: `src/commands/createApp.ts`
+### `currentjs init [name]`
+**File**: `src/commands/init.ts`
 
 Creates a new application with:
 - `package.json` with dependencies
@@ -815,7 +815,7 @@ src/
 
 ```bash
 # Development
-currentjs create app                  # New application
+currentjs init                        # New application
 currentjs create module Name          # New module
 currentjs generate                    # Generate all
 currentjs generate Name               # Generate specific module

@@ -23,7 +23,7 @@ current diff [module] # Show differences between generated and current code
 ```
 
 ## The flow
-1. Create an empty app (`current create app`)
+1. Create an empty app (`current init`)
 2. Create a new module: `current create module Name`
 3. In the module's yaml file, define module's:
  - model(s)

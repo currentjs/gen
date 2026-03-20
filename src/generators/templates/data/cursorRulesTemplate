@@ -26,7 +26,7 @@ current diff [module] # Show differences between generated and current code
 ```
 
 ## The flow
-1. Create an empty app (`current create app`) – this step is already done.
+1. Create an empty app (`current init`) – this step is already done.
 2. Create a new module: `current create module Name`
 3. In the module's yaml file, define module's:
  - domain (aggregates and value objects)

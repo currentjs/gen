@@ -19,10 +19,10 @@ npx @currentjs/gen
 currentjs --help
 
 # Create a new app in the current directory
-currentjs create app
+currentjs init
 
 # Create a new app inside a folder
-currentjs create app my-app
+currentjs init my-app
 
 # Create a module folder under src/modules
 currentjs create module Blog
@@ -40,9 +40,9 @@ currentjs generate Blog --yaml app.yaml
 
 1. **Create an empty app**
    ```bash
-   currentjs create app # will create an app inside the current directory
+   currentjs init # will create an app inside the current directory
    # or:
-   currentjs create app my-project # will create a directory "my-project" and create an app there
+   currentjs init my-project # will create a directory "my-project" and create an app there
    ```
 
 2. **Create a new module**
@@ -88,7 +88,7 @@ This generator takes your YAML specifications and creates:
 
 ### App & Module Creation
 ```bash
-currentjs create app [name]           # Create new application
+currentjs init [name]                 # Create new application
 currentjs create module <name>        # Create new module in existing app
 ```
 
@@ -342,7 +342,7 @@ Here's how you'd create a complete very simple blog system:
 
 ### 1. Create the app and module
 ```bash
-currentjs create app my-blog
+currentjs init my-blog
 cd my-blog
 currentjs create module Blog
 ```
@@ -1184,7 +1184,7 @@ This generator is the foundation of the `currentjs` framework:
 
 ## Notes
 
-- `currentjs create app` scaffolds complete app structure with TypeScript configs and dependencies
+- `currentjs init` scaffolds complete app structure with TypeScript configs and dependencies
 - `currentjs generate` creates domain entities, value objects, use cases, services, DTOs, controllers, stores, and templates
 - Generated code follows clean architecture: domain/application/infrastructure layers
 - Supports both API endpoints and web page routes in the same module

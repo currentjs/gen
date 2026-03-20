@@ -28,7 +28,7 @@
 ---
 
 ### some ideas to consider (19/03/26):
-- `current create app` => `current init` [planned]
+- `current create app` => `current init` [done]
 - `current create module <Name>` – consider ask questions and be more verbose (tell the User what to do next) [planned] 
 - `current create model [module:modelName]` – ask: field > type > constraints > dtos > etc > "generate CRUD?" [planned]
 - `current install module` / `current install provider` [planned]
