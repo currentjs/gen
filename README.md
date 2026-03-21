@@ -1,10 +1,27 @@
-# @currentjs/gen 🚀
+# @currentjs/gen
 
-> *"Because writing boilerplate code is like doing laundry - necessary, tedious, and something a machine should definitely handle for you."*
+A CLI code generator that transforms YAML specifications into fully functional TypeScript applications following clean architecture principles.
 
-A CLI code generator that transforms YAML specifications into fully functional TypeScript applications following clean architecture principles. Think of it as the overly enthusiastic intern who actually enjoys writing controllers, services, and domain models all day long.
+## Table of Contents
 
-## Installation 📦
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Development Flow](#development-flow)
+  - [TL;DR](#tldr)
+- [Reference](#reference)
+- [Module Configuration Overview](#module-configuration-overview)
+  - [Domain Layer](#domain-layer-domain)
+  - [Use Cases Layer](#use-cases-layer-usecases)
+  - [API Layer](#api-layer-api)
+  - [Web Layer](#web-layer-web)
+- [Generated Source Code](#generated-source-code)
+- [Change Tracking: diff and commit](#change-tracking-diff-and-commit)
+- [Database Migrations](#database-migrations)
+- [Template System](#template-system)
+- [Authorship & Contribution](#authorship--contribution)
+- [License](#license)
+
+## Installation
 
 ```bash
 npm install -g @currentjs/gen
@@ -12,1183 +29,545 @@ npm install -g @currentjs/gen
 npx @currentjs/gen
 ```
 
-## Quick Start 🏃‍♂️
+## Quick Start
 
-```bash
-# Show help
-currentjs --help
+Building an application from scratch:
 
-# Create a new app in the current directory
-currentjs create app
+1. Initialize a new project:
 
-# Create a new app inside a folder
-currentjs create app my-app
+```
+currentjs init myapp
+cd myapp
+```
 
-# Create a module folder under src/modules
+2. Create a module:
+
+```
 currentjs create module Blog
+```
 
-# Generate everything from app.yaml
+3. Run an interactive command:
+
+```
+currentjs create model Blog:Post
+```
+
+It will:
+- ask everything it needs,
+- generate yaml config,
+- generate a TypeScript source code,
+- and build it.
+
+Alternatively, you can:
+ - edit the generated module YAML at `src/modules/Blog/blog.yaml`. Define the domain model fields, use cases, API endpoints, and web routes.
+ - Generate TypeScript files from the YAML configuration: `currentjs generate Blog`
+ - If needed, make manual changes to generated files (domain entities, views, services).
+ - Commit those manual changes so they survive regeneration: `currentjs commit`
+
+To add custom (non-CRUD) behavior: define a method in the service, reference it in the module YAML as a handler, regenerate, and commit.
+
+```
+currentjs generate Blog
+currentjs commit
+```
+
+## Development Flow
+
+```
+                    ┌──────────────────┐
+                    │   currentjs init │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                ┌────────────────────────┐
+                │ currentjs create module│
+                └────────────┬───────────┘
+                             │
+                ┌────────────┴────────────┐
+                │                         │
+                ▼                         ▼
+   ┌────────────────────┐   ┌────────────────────────┐
+   │ Edit module YAML   │   │ currentjs create model │
+   │ (define structure) │   │ (interactive wizard)   │
+   └─────────┬──────────┘   └────────────┬───────────┘
+             │                           │
+             ▼                           │
+   ┌───────────────────┐                 │
+   │ currentjs generate│                 │
+   └─────────┬─────────┘                 │
+             │                           │
+             └────────────┬──────────────┘
+                          │
+                          ▼
+              ┌───────────────────────┐
+              │ Modify generated files│
+              │ (entities, views, etc)│
+              │ (optional step)       │
+              └───────────┬───────────┘
+                          │
+                          ▼
+                ┌───────────────────┐
+                │ currentjs commit  │
+                └───────────────────┘
+```
+
+There are two paths after creating a module:
+
+- **Interactive wizard** (`currentjs create model Blog:Post`) — prompts for fields, use cases, routes, and permissions, then generates everything automatically.
+- **Manual editing** — edit the module YAML by hand, then run `currentjs generate`. This gives full control over every configuration option.
+
+Both paths converge at the same point: once files are generated, you can optionally customize the generated code (business logic, templates, etc.) and run `currentjs commit` to preserve those changes across future regenerations.
+
+When you need behavior beyond standard CRUD:
+
+1. Implement the custom method in the generated service class.
+2. Reference it in the module YAML as a handler (e.g., `service:myMethod`).
+3. Optionally add API/web endpoints for the new action.
+4. Regenerate and commit.
+
+#### TLDR
+
+- module's YAML configurations (plus "commits") are the source of truth.
+- `currentjs create module` creates module's structure (empty folders, YAML configuration with one model without any fields)
+- `currentjs create model`: You > YAML > `generate`
+- `currentjs generate`: YAML + commits > TypeScript > JS
+- since YAML is the main source of truth, it's also the best place to make changes
+- if changes are beyond configuration (require some coding), the best place is (in descending order): model, service
+- in order to preserve changes in TypeScript files, use `currentjs commit`
+- templates can be changed freely, they are not regenerated by default.
+
+
+## Reference
+
+For detailed documentation of all CLI commands, YAML configuration options, and field types, see the [Reference](REFERENCE.md).
+
+## Module Configuration Overview
+
+Each module is configured through a single YAML file located at `src/modules/<Name>/<name>.yaml`. The configuration follows a layered structure inspired by Clean Architecture. Each layer in the YAML maps to a set of generated TypeScript files.
+
+### Layers at a Glance
+
+| YAML Section | Purpose | Generated Files |
+|---|---|---|
+| `domain` | Define your data models (aggregates, value objects) | Entity classes, value object classes |
+| `useCases` | Define business operations, input/output shapes, handler chains | Use case orchestrators, services, DTOs |
+| `api` | Define REST API endpoints | API controller |
+| `web` | Define server-rendered pages and forms | Web controller, HTML templates |
+
+A minimal module YAML needs at least `domain` and `useCases`. The `api` and `web` sections are optional.
+
+→ Reference: [Module Configuration](REFERENCE.md#module-configuration-module-yaml)
+
+---
+
+### Domain Layer (`domain`)
+
+The domain layer defines your data models. There are two kinds: **aggregates** (entities) and **value objects**.
+
+#### Aggregates
+
+Aggregates are the main entities. One aggregate should be marked as the root (`root: true`), which enables ownership tracking (auto-generated `ownerId` field).
+
+```yaml
+domain:
+  aggregates:
+    Post:
+      root: true
+      fields:
+        title: { type: string, required: true }
+        content: { type: string, required: true }
+        status: { type: enum, values: [draft, published, archived] }
+        publishedAt: { type: datetime }
+```
+
+Fields like `id`, `ownerId`, `created_at`, `updated_at`, and `deleted_at` are added automatically — do not include them.
+
+**Available field types:** `string`, `number`, `integer`, `decimal`, `boolean`, `datetime`, `date`, `id`, `json`, `array`, `object`, `enum`.
+
+For `enum` fields, provide the allowed values with `values: [...]`.
+
+#### Model Relationships
+
+Set the `type` to another aggregate's name to create a foreign key relationship:
+
+```yaml
+domain:
+  aggregates:
+    Author:
+      root: true
+      fields:
+        name: { type: string, required: true }
+    Post:
+      root: true
+      fields:
+        title: { type: string, required: true }
+        author: { type: Author, required: true }
+```
+
+The generator automatically:
+- Creates a foreign key column `authorId` in the database.
+- Uses the full `Author` object in the domain model (not just the ID).
+- Uses `authorId: number` in DTOs for API transmission.
+- Generates a `<select>` dropdown with a "Create New" button in HTML forms.
+- Wires the related store as a dependency for loading relationships.
+
+Foreign key naming follows the pattern `fieldName + 'Id'` (e.g., `author` → `authorId`).
+
+#### Child Entities
+
+An aggregate can have child entities listed in the `entities` field:
+
+```yaml
+domain:
+  aggregates:
+    Invoice:
+      root: true
+      fields:
+        number: { type: string, required: true }
+      entities: [InvoiceItem]
+
+    InvoiceItem:
+      fields:
+        productName: { type: string, required: true }
+        quantity: { type: integer, required: true }
+```
+
+Child entities get a `getByParentId()` method in their store and `listByParent()` in their service. Use `input.parentId` in child use cases to link them to the parent.
+
+#### Value Objects
+
+Value objects are reusable types embedded in aggregates, stored as JSON in the database:
+
+```yaml
+domain:
+  valueObjects:
+    Money:
+      fields:
+        amount: { type: decimal, constraints: { min: 0 } }
+        currency: { type: enum, values: [USD, EUR, PLN] }
+```
+
+→ Reference: [aggregates](REFERENCE.md#aggregates) · [valueObjects](REFERENCE.md#valueobjects) · [Field Types](REFERENCE.md#field-types) · [Child Entities](REFERENCE.md#child-entities)
+
+---
+
+### Use Cases Layer (`useCases`)
+
+Use cases define the operations available for each model. Each use case specifies its input shape, output shape, and a chain of handlers to execute.
+
+```yaml
+useCases:
+  Post:
+    list:
+      input:
+        pagination: { type: offset, defaults: { limit: 20, maxLimit: 100 } }
+      output: { from: Post, pagination: true }
+      handlers: [default:list]
+    get:
+      input: { identifier: id }
+      output: { from: Post }
+      handlers: [default:get]
+    create:
+      input: { from: Post }
+      output: { from: Post }
+      handlers: [default:create]
+```
+
+#### Handlers
+
+Handlers are listed in execution order. Each handler becomes a method on the service class.
+
+**Built-in handlers:**
+
+| Handler | Description |
+|---|---|
+| `default:list` | Paginated list of entities |
+| `default:get` | Fetch by ID |
+| `default:create` | Create with validation |
+| `default:update` | Update by ID |
+| `default:delete` | Soft-delete by ID |
+
+**Custom handlers** — use `methodName` (or `service:methodName`). The generator creates a stub method that receives `(result, input)`:
+
+```yaml
+useCases:
+  Post:
+    publish:
+      input: { identifier: id }
+      output: { from: Post }
+      handlers:
+        - default:get
+        - validateForPublish
+        - updatePublishStatus
+```
+
+This generates three service methods called in sequence. Custom methods get a TODO comment for you to fill in.
+
+#### Input Configuration
+
+Inputs can derive fields from a model (`from`), pick/omit specific fields, add extra fields, define validation rules, enable pagination, filtering, and sorting. See the [Reference](REFERENCE.md) for the full input specification.
+
+#### Displaying Child Entities (`withChild`)
+
+When an aggregate root has child entities, you can show them on the root's pages:
+
+```yaml
+useCases:
+  Invoice:
+    list:
+      withChild: true   # Adds a link column to child entities on the list page
+      # ...
+    get:
+      withChild: true   # Shows a child entities table on the detail page
+      # ...
+```
+
+→ Reference: [useCases](REFERENCE.md#usecases) · [handlers](REFERENCE.md#handlers) · [input](REFERENCE.md#input) · [output](REFERENCE.md#output)
+
+---
+
+### API Layer (`api`)
+
+Defines REST API endpoints. Each model gets its own section keyed by name:
+
+```yaml
+api:
+  Post:
+    prefix: /api/posts
+    endpoints:
+      - method: GET
+        path: /
+        useCase: Post:list
+        auth: all
+      - method: POST
+        path: /
+        useCase: Post:create
+        auth: authenticated
+      - method: PUT
+        path: /:id
+        useCase: Post:update
+        auth: [owner, admin]
+```
+
+Each endpoint references a use case with the format `ModelName:actionName`.
+
+#### Auth / Roles
+
+The `auth` field controls access:
+
+| Value | Meaning |
+|---|---|
+| `all` | Public, no authentication required |
+| `authenticated` | Any logged-in user (valid JWT) |
+| `owner` | User must own the resource (matched via `ownerId`) |
+| `admin`, `editor`, etc. | User must have this role (from JWT) |
+| `[owner, admin]` | OR logic — user matches any of the listed roles |
+
+When `owner` is combined with privileged roles (e.g., `[owner, admin]`), privileged roles bypass the ownership check.
+
+→ Reference: [api](REFERENCE.md#api) · [auth](REFERENCE.md#auth)
+
+---
+
+### Web Layer (`web`)
+
+Defines server-rendered pages and forms:
+
+```yaml
+web:
+  Post:
+    prefix: /posts
+    layout: main_view
+    pages:
+      - path: /
+        useCase: Post:list
+        view: postList
+        auth: all
+      - path: /create
+        method: GET
+        view: postCreate
+        auth: authenticated
+      - path: /create
+        method: POST
+        useCase: Post:create
+        auth: authenticated
+        onSuccess:
+          redirect: /posts/:id
+          toast: "Post created"
+        onError:
+          stay: true
+          toast: error
+```
+
+Form submission results are handled with `onSuccess` / `onError`:
+
+- `toast: "message"` — show a toast notification
+- `back: true` — navigate back in browser history
+- `redirect: /path` — redirect to a URL (supports `:id` placeholder)
+- `stay: true` — stay on the current page
+
+→ Reference: [web](REFERENCE.md#web) · [auth](REFERENCE.md#auth)
+
+---
+
+## Generated Source Code
+
+When you run `currentjs generate`, the following files are produced for each model defined in a module:
+
+```
+src/modules/<ModuleName>/
+  domain/
+    entities/<EntityName>.ts           — Domain entity class with typed constructor and setters
+    valueObjects/<ValueObject>.ts      — Value object class (if defined)
+  application/
+    dto/<Action>InputDto.ts            — Input DTO with parse() and validation
+    dto/<Action>OutputDto.ts           — Output DTO with from() mapper
+    useCases/<EntityName>UseCase.ts    — Use case orchestrator (calls service methods in sequence)
+    services/<EntityName>Service.ts    — Service with handler implementations (CRUD + custom stubs)
+  infrastructure/
+    controllers/<EntityName>ApiController.ts  — REST endpoints with auth checks
+    controllers/<EntityName>WebController.ts  — Page rendering with form handling
+    stores/<EntityName>Store.ts        — Database access (CRUD, row-to-model conversion, relationships)
+  views/
+    <viewName>.html                    — HTML templates (list, detail, create, edit forms)
+```
+
+The generator also updates `src/app.ts` with dependency injection wiring between marker comments (`// currentjs:controllers:start` ... `// currentjs:controllers:end`). This section is fully regenerated each time — imports, instantiation order (topologically sorted), and the controllers array.
+
+Each generated class is decorated with `@Injectable()` or `@Controller()`, so the DI system discovers and wires them automatically.
+
+→ Reference: [Generated File Structure](REFERENCE.md#generated-file-structure) · [generate](REFERENCE.md#generate)
+
+## Change Tracking: `diff` and `commit`
+
+Generated code often needs small adjustments — custom business logic, template tweaks, validation rules. The generator includes a change tracking system so these adjustments survive regeneration.
+
+### How it works
+
+1. **Registry** — when files are generated, their content hashes are stored in `registry.json`.
+
+2. **`currentjs diff [module]`** — compares each generated file's current content against what the generator would produce. Reports files as `[clean]`, `[modified]`, or `[missing]`.
+
+3. **`currentjs commit [files...]`** — records the differences between your current files and the generated baseline. Diffs are saved as JSON files in the `commits/` directory.
+
+4. **Regeneration** — on the next `currentjs generate`, committed changes are reapplied to the freshly generated code. If a change cannot be applied cleanly (e.g., the generated code changed in the same area), you are prompted to resolve it (unless `--force` or `--skip` is set).
+
+### Practical workflow
+
+```bash
+# Generate code
 currentjs generate
 
-# Generate specific module
-currentjs generate Blog --yaml app.yaml
-```
+# Make your changes (service logic, templates, etc.)
+# ...
 
-## Step-by-Step Development Workflow 🔄
-
-### Basic Development Flow
-
-1. **Create an empty app**
-   ```bash
-   currentjs create app # will create an app inside the current directory
-   # or:
-   currentjs create app my-project # will create a directory "my-project" and create an app there
-   ```
-
-2. **Create a new module**
-   ```bash
-   currentjs create module Blog
-   ```
-
-3. **Define your module's configuration** in `src/modules/Blog/blog.yaml`:
-   - Define your domain (aggregates and value objects)
-   - Configure use cases (CRUD is already configured)
-   - Set up API and web endpoints with auth
-
-4. **Generate TypeScript files**
-   ```bash
-   currentjs generate Blog
-   ```
-
-5. **Make custom changes** (if needed) to:
-   - Business logic in models
-   - Custom actions in services
-   - HTML templates
-
-6. **Commit your changes** to preserve them
-   ```bash
-   currentjs commit
-   ```
-
-## What Does This Actually Do? 🤔
-
-This generator takes your YAML specifications and creates:
-
-- **🏗️ Complete app structure** with TypeScript, configs, and dependencies
-- **📋 Domain entities** from your model definitions
-- **🔄 Service layer** with business logic and validation
-- **🎭 Controllers** for both API endpoints and web pages
-- **💾 Data stores** with database provider integration
-- **🎨 HTML templates** using @currentjs/templating
-- **📊 Change tracking** so you can modify generated code safely
-
-## Commands Reference 🛠️
-
-> See the [HOW TO](howto.md) reference
-
-### App & Module Creation
-```bash
-currentjs create app [name]           # Create new application
-currentjs create module <name>        # Create new module in existing app
-```
-
-### Code Generation
-```bash
-currentjs generate [module]           # Generate code from YAML specs
-  --yaml app.yaml                     # Specify config file (default: ./app.yaml)
-  --force                            # Overwrite files without prompting
-  --skip                             # Skip conflicts, never overwrite
-```
-
-### Advanced Change Management 🔄
-
-The generator includes a sophisticated change tracking system that **revolutionizes how you work with generated code**:
-
-```bash
-currentjs diff [module]               # Show differences between generated and current code
-currentjs commit [files...]           # Commit your changes to version tracking
-currentjs infer --file Entity.ts      # Generate YAML model from existing TypeScript
-  --write                            # Write back to module YAML file
-```
-
-#### 🚀 **The Revolutionary Approach: Version Control Without Generated Code**
-
-Here's the game-changer: **You don't need to commit generated source code to your repository at all!** 
-
-Instead, you only need to track:
-- **Your YAML files** (the source of truth)
-- **`registry.json`** (change tracking metadata)
-- **Your custom modifications** (stored as reusable "patches")
-
-**Traditional Approach** ❌
-```
-git/
-├── src/modules/Blog/Blog.yaml        # Source specification  
-├── src/modules/Blog/domain/entities/Post.ts    # Generated + modified
-├── src/modules/Blog/services/PostService.ts    # Generated + modified
-└── ... (hundreds of generated files with custom changes)
-```
-
-**CurrentJS Approach** ✅
-```
-git/
-├── src/modules/Blog/Blog.yaml        # Source specification
-├── registry.json                     # Change tracking metadata
-└── .currentjs/commits/               # Your custom modifications as patches
-    ├── commit-2024-01-15.json
-    └── commit-2024-01-20.json
-```
-
-#### 🔧 **How It Works (Like Git for Generated Code)**
-
-**1. Initial Generation**
-```bash
-currentjs generate
-# Creates all files and tracks their hashes in registry.json
-```
-
-**2. Make Your Custom Changes**
-```typescript
-// Edit generated service to add custom logic
-export class PostService extends GeneratedPostService {
-  async publishPost(id: number): Promise<void> {
-    // Your custom business logic here
-    const post = await this.getById(id);
-    post.publishedAt = new Date();
-    await this.update(id, post);
-    await this.sendNotificationEmail(post);
-  }
-}
-```
-
-**3. Commit Your Changes**
-```bash
-currentjs commit src/modules/Blog/services/PostService.ts
-# Saves your modifications as reusable "hunks" (like git patches)
-```
-
-**4. Regenerate Safely**
-```bash
-# Change your YAML specification
-currentjs generate --force
-# Your custom changes are automatically reapplied to the new generated code!
-```
-
-#### 📊 **Change Tracking in Action**
-
-```bash
-# See what's different from generated baseline
+# See what you changed
 currentjs diff Blog
-```
 
-**Sample Output:**
-```diff
-[modified] src/modules/Blog/services/PostService.ts
+# Save your changes
+currentjs commit
 
-@@ -15,0 +16,8 @@
-+ 
-+   async publishPost(id: number): Promise<void> {
-+     const post = await this.getById(id);
-+     post.publishedAt = new Date();
-+     await this.update(id, post);
-+     await this.sendNotificationEmail(post);
-+   }
-```
-
-#### 🌟 **Workflow Benefits**
-
-**For Solo Development:**
-- Cleaner repositories (no generated code noise)
-- Fearless regeneration (your changes are always preserved)
-- Clear separation between specifications and implementations
-
-**For Team Development:**
-- Merge conflicts only happen in YAML files (much simpler)
-- Team members can have different generated code locally
-- Changes to business logic are tracked separately from schema changes
-- New team members just run `currentjs generate` to get up and running
-
-**For CI/CD:**
-```bash
-# In your deployment pipeline
-git clone your-repo
-currentjs generate  # Recreates all source code from YAML + patches
-npm run deploy
-```
-
-**Sharing Customizations:**
-```bash
-# Export your modifications
-git add registry.json .currentjs/
-git commit -m "Add custom publish functionality"
-git push
-
-# Teammates get your changes
-git pull
-currentjs generate  # Their code automatically includes your customizations
-```
-
-This change management system solves the age-old problem of "generated code vs. version control" by treating your customizations as first-class citizens while keeping your repository clean and merge-friendly!
-
-#### 📝 **Recommended .gitignore Setup**
-
-For the cleanest repository experience, add this to your `.gitignore`:
-
-```gitignore
-# Generated source code (will be recreated from YAML + registry)
-src/modules/*/domain/entities/*.ts
-src/modules/*/domain/valueObjects/*.ts
-src/modules/*/application/useCases/*.ts
-src/modules/*/application/services/*.ts
-src/modules/*/application/dto/*.ts
-src/modules/*/infrastructure/controllers/*.ts
-src/modules/*/infrastructure/stores/*.ts
-
-# Keep these in version control
-!*.yaml
-!registry.json
-!.currentjs/
-
-# Standard Node.js ignores
-node_modules/
-build/
-dist/
-*.log
-```
-
-With this setup, your repository stays focused on what matters: your specifications and customizations, not generated boilerplate!
-
-## Multi-Model Endpoint Support 🔀
-
-Working with multiple related models in a single module? In the current YAML format, each model gets its own section in `api` and `web`, keyed by model name:
-
-```yaml
-domain:
-  aggregates:
-    Cat:
-      root: true
-      fields:
-        name: { type: string, required: true }
-    Person:
-      root: true
-      fields:
-        name: { type: string, required: true }
-        email: { type: string, required: true }
-
-useCases:
-  Cat:
-    list:
-      handlers: [default:list]
-    create:
-      input: { from: Cat }
-      output: { from: Cat }
-      handlers: [default:create]
-  Person:
-    list:
-      handlers: [default:list]
-    create:
-      input: { from: Person }
-      output: { from: Person }
-      handlers: [default:create]
-
-api:
-  Cat:
-    prefix: /api/cat
-    endpoints:
-      - method: GET
-        path: /
-        useCase: Cat:list
-        auth: all
-  Person:
-    prefix: /api/person
-    endpoints:
-      - method: GET
-        path: /
-        useCase: Person:list
-        auth: all
-
-web:
-  Cat:
-    prefix: /cat
-    layout: main_view
-    pages:
-      - path: /
-        useCase: Cat:list
-        view: catList
-        auth: all
-      - path: /create
-        method: GET
-        view: catCreate
-        auth: authenticated
-  Person:
-    prefix: /person
-    layout: main_view
-    pages:
-      - path: /
-        useCase: Person:list
-        view: personList
-        auth: all
-      - path: /create
-        method: GET
-        view: personCreate
-        auth: authenticated
-```
-
-**Result**: Generates separate controllers, services, use cases, and stores for each model, each with their own base paths and endpoints.
-
-## Example: Building a Blog System 📝
-
-Here's how you'd create a complete very simple blog system:
-
-### 1. Create the app and module
-```bash
-currentjs create app my-blog
-cd my-blog
-currentjs create module Blog
-```
-
-### 2. Define your data model
-```yaml
-# src/modules/Blog/blog.yaml
-# Only the domain fields need to be customized - the rest is auto-generated!
-domain:
-  aggregates:
-    Post:
-      root: true
-      fields:
-        title: { type: string, required: true }
-        content: { type: string, required: true }
-        authorEmail: { type: string, required: true }
-        publishedAt: { type: datetime }
-
-# Everything below is already generated for you by `currentjs create module`!
-useCases:
-  Post:
-    list:
-      input:
-        pagination: { type: offset, defaults: { limit: 20, maxLimit: 100 } }
-      output: { from: Post, pagination: true }
-      handlers: [default:list]
-    get:
-      input: { identifier: id }
-      output: { from: Post }
-      handlers: [default:get]
-    create:
-      input: { from: Post }
-      output: { from: Post }
-      handlers: [default:create]
-    update:
-      input: { identifier: id, from: Post, partial: true }
-      output: { from: Post }
-      handlers: [default:update]
-    delete:
-      input: { identifier: id }
-      output: void
-      handlers: [default:delete]
-
-api:
-  Post:
-    prefix: /api/posts
-    endpoints:
-      - method: GET
-        path: /
-        useCase: Post:list
-        auth: all
-      - method: GET
-        path: /:id
-        useCase: Post:get
-        auth: all
-      - method: POST
-        path: /
-        useCase: Post:create
-        auth: authenticated
-      - method: PUT
-        path: /:id
-        useCase: Post:update
-        auth: [owner, admin]
-      - method: DELETE
-        path: /:id
-        useCase: Post:delete
-        auth: [owner, admin]
-
-web:
-  Post:
-    prefix: /posts
-    layout: main_view
-    pages:
-      - path: /
-        useCase: Post:list
-        view: postList
-        auth: all
-      - path: /:id
-        useCase: Post:get
-        view: postDetail
-        auth: all
-      - path: /create
-        method: GET
-        view: postCreate
-        auth: authenticated
-      - path: /create
-        method: POST
-        useCase: Post:create
-        auth: authenticated
-        onSuccess:
-          redirect: /posts/:id
-          toast: "Post created successfully"
-        onError:
-          stay: true
-          toast: error
-      - path: /:id/edit
-        method: GET
-        useCase: Post:get
-        view: postEdit
-        auth: [owner, admin]
-      - path: /:id/edit
-        method: POST
-        useCase: Post:update
-        auth: [owner, admin]
-        onSuccess:
-          back: true
-          toast: "Post updated successfully"
-```
-> **Note**: All CRUD use cases, API endpoints, and web pages are automatically generated when you run `currentjs create module Blog`. The only thing left for you is your domain fields.
-
-### 3. Generate everything
-```bash
+# Later, after modifying the YAML and regenerating:
 currentjs generate
-npm start
+# Your committed changes are reapplied automatically
 ```
 
-**Boom!** 💥 You now have a complete blog system with:
-- REST API endpoints at `/api/posts/*`
-- Web interface at `/posts/*`
-- Full CRUD operations
-- HTML templates for all views
-- Database integration ready to go
+### Repository strategy
 
-## Generated Project Structure 🏗️
+You can choose to either commit generated source code to git normally, or keep your repository lean by only tracking YAML files, `registry.json`, and the `commits/` directory. In the latter case, anyone can recreate the full source by running `currentjs generate`.
 
-```
-my-app/
-├── package.json                 # Dependencies (router, templating, providers)
-├── tsconfig.json               # TypeScript configuration
-├── app.yaml                    # Main application config
-├── src/
-│   ├── app.ts                  # Main application entry point (with DI wiring)
-│   ├── system.ts               # @Injectable decorator for DI
-│   ├── common/                 # Shared utilities and templates
-│   │   ├── services/           # Common services
-│   │   └── ui/
-│   │       └── templates/
-│   │           ├── main_view.html    # Main layout template
-│   │           └── error.html        # Error page template
-│   └── modules/                # Your business modules
-│       └── YourModule/
-│           ├── yourmodule.yaml           # Module specification
-│           ├── domain/
-│           │   ├── entities/             # Domain models (aggregates)
-│           │   └── valueObjects/         # Value objects
-│           ├── application/
-│           │   ├── useCases/             # Use case orchestrators
-│           │   ├── services/             # Business logic handlers
-│           │   └── dto/                  # Input/Output DTOs
-│           ├── infrastructure/
-│           │   ├── controllers/          # HTTP endpoints (API + Web)
-│           │   └── stores/               # Data access
-│           └── views/                    # HTML templates
-├── build/                      # Compiled JavaScript
-└── web/                        # Static assets, served as is
-    ├── app.js                  # Frontend JavaScript
-    └── translations.json       # i18n support
+→ Reference: [diff](REFERENCE.md#diff) · [commit](REFERENCE.md#commit) · [Notes — File Change Tracking](REFERENCE.md#file-change-tracking) · [Notes — Commit Mechanism](REFERENCE.md#commit-mechanism)
+
+## Database Migrations
+
+The generator can produce SQL migration files based on changes to your domain models.
+
+### `migrate commit`
+
+```bash
+currentjs migrate commit
 ```
 
+Collects all aggregate definitions from module YAMLs, compares them against the stored schema state (`migrations/schema_state.yaml`), and generates a `.sql` migration file in the `migrations/` directory.
 
-## Automatic Dependency Injection 🔌
+The migration file contains `CREATE TABLE`, `ALTER TABLE ADD/MODIFY/DROP COLUMN`, and `DROP TABLE` statements as needed. Foreign keys, indexes, and standard timestamp columns (`created_at`, `updated_at`, `deleted_at`) are handled automatically.
 
-The generator includes a **decorator-driven DI system** that automatically wires all your module classes together in `src/app.ts`. No manual instantiation or import management required.
+After generating the file, the schema state is updated so the next `migrate commit` only produces a diff of subsequent changes.
 
-### How It Works
+### `migrate push` *(not yet implemented)*
 
-1. **Generated classes are decorated**: Stores, Services, and UseCases get the `@Injectable()` decorator. Controllers use the existing `@Controller()` decorator.
-2. **Constructor-based discovery**: The generator scans constructors to determine what each class needs (e.g., `InvoiceService` needs `InvoiceStore`).
-3. **Automatic ordering**: Dependencies are topologically sorted — stores first, then services, then use cases, then controllers.
-4. **Wiring in `app.ts`**: All imports, instantiations, and the `controllers` array are auto-generated between marker comments.
+Will apply pending migration files to the database.
 
-### The `@Injectable` Decorator
+### `migrate update` *(not yet implemented)*
 
-Lives in `src/system.ts` (generated with your app, no external dependencies):
+Will compare the live database schema against the current model definitions and generate a migration to bring them in sync.
 
-```typescript
-export function Injectable() {
-  return function (target: any) {
-    target.__injectable = true;
-  };
-}
+→ Reference: [migrate commit](REFERENCE.md#migrate-commit)
+
+## Template System
+
+Generated HTML templates use the `@currentjs/templating` engine. Templates are placed in the module's `views/` directory and referenced by name in the `web` section of the YAML.
+
+### Template header
+
+Each template starts with a comment that declares its name:
+
+```html
+<!-- @template name="postList" -->
 ```
 
-Any class decorated with `@Injectable()` will be automatically discovered, instantiated, and injected where needed.
+### Variables
 
-### Adding Custom Injectable Classes
-
-If you create a custom class that should participate in DI wiring, just add the `@Injectable()` decorator:
-
-```typescript
-import { Injectable } from '../../../../system';
-
-@Injectable()
-export class EmailNotificationService {
-  constructor(private invoiceService: InvoiceService) {}
-  
-  async sendInvoiceEmail(invoiceId: number): Promise<void> {
-    // ...
-  }
-}
+```html
+{{ title }}
+{{ post.authorName }}
+{{ formData.email || '' }}
 ```
 
-On the next `currentjs generate`, this class will be automatically imported and instantiated in `app.ts` with its dependencies resolved.
+### Loops
 
-### Database Providers
-
-Database providers are configured in `app.yaml`:
-
-```yaml
-database:
-  provider: "@currentjs/provider-mysql"  # npm package
-  # or:
-  provider: "./src/common/SomeProvider"  # local file path
+```html
+<tbody x-for="items" x-row="item">
+  <tr>
+    <td>{{ item.name }}</td>
+    <td>{{ $index }}</td>
+  </tr>
+</tbody>
 ```
 
-Modules can override the global provider with their own:
+`x-for` specifies the data key to iterate over, `x-row` names the loop variable. `$index` gives the current iteration index.
 
-```yaml
-# In module's yaml section of app.yaml
-modules:
-  - name: Analytics
-    database:
-      provider: "@currentjs/provider-postgres"
+### Conditionals
+
+```html
+<div x-if="user.isAdmin">Admin-only content</div>
+<span x-if="errors.name">{{ errors.name }}</span>
 ```
 
-Both npm packages and local paths are supported. Stores automatically receive the correct provider instance based on their module's configuration.
+### Layouts
 
-### Generated Wiring Example
+Templates are rendered inside a layout (specified per resource or per page in the `web` config). The layout receives the rendered template content as `{{ content }}`.
 
-After generation, `src/app.ts` contains auto-generated wiring between markers:
+### Forms
 
-```typescript
-// currentjs:controllers:start
-import { InvoiceStore } from './modules/Invoice/infrastructure/stores/InvoiceStore';
-import { InvoiceService } from './modules/Invoice/application/services/InvoiceService';
-import { InvoiceUseCase } from './modules/Invoice/application/useCases/InvoiceUseCase';
-import { InvoiceApiController } from './modules/Invoice/infrastructure/controllers/InvoiceApiController';
-import { InvoiceWebController } from './modules/Invoice/infrastructure/controllers/InvoiceWebController';
+Generated forms include `data-strategy` attributes for the frontend JavaScript to handle submission via AJAX:
 
-const db = new MySQLProvider(config.database);
-const invoiceStore = new InvoiceStore(db);
-const invoiceService = new InvoiceService(invoiceStore);
-const invoiceUseCase = new InvoiceUseCase(invoiceService);
-
-const controllers = [
-  new InvoiceApiController(invoiceUseCase),
-  new InvoiceWebController(invoiceUseCase),
-];
-// currentjs:controllers:end
+```html
+<form data-strategy='["toast", "back"]'
+      data-entity-name="Post"
+      data-field-types='{"age": "number", "active": "boolean"}'>
+  <input name="title" type="text" required>
+  <button type="submit">Save</button>
+</form>
 ```
 
-This block is fully regenerated on each `currentjs generate` run. You never need to edit it manually.
+The `data-field-types` attribute tells the frontend how to convert form values before sending (e.g., string to number, checkbox to boolean).
 
-## Complete YAML Configuration Guide 📋
+### Template regeneration behavior
 
-### Module Structure Overview
+By default, `currentjs generate` does not overwrite existing HTML templates. Only missing templates are created. Use `--with-templates` to force regeneration of all templates.
 
-When you create a module, you'll work primarily with the `modulename.yaml` file. This file defines everything about your module:
-
-```
-src/modules/YourModule/
-├── yourmodule.yaml           # ← This is where you define everything
-├── domain/
-│   ├── entities/             # Generated domain models (aggregates)
-│   └── valueObjects/         # Generated value objects
-├── application/
-│   ├── useCases/             # Generated use case orchestrators
-│   ├── services/             # Generated business logic handlers
-│   └── dto/                  # Generated Input/Output DTOs
-├── infrastructure/
-│   ├── controllers/          # Generated HTTP endpoints (API + Web)
-│   └── stores/               # Generated data access
-└── views/                    # Generated HTML templates
-```
-
-### Complete Module Configuration Example
-
-Here's a comprehensive example showing all available configuration options:
-
-```yaml
-domain:
-  aggregates:
-    Post:
-      root: true                          # Marks as aggregate root
-      fields:
-        title: { type: string, required: true }
-        content: { type: string, required: true }
-        authorId: { type: id, required: true }
-        publishedAt: { type: datetime }
-        status: { type: string, required: true }
-
-useCases:
-  Post:
-    list:
-      input:
-        pagination: { type: offset, defaults: { limit: 20, maxLimit: 100 } }
-      output: { from: Post, pagination: true }
-      handlers: [default:list]            # Built-in list handler
-    get:
-      input: { identifier: id }
-      output: { from: Post }
-      handlers: [default:get]             # Built-in get handler
-    create:
-      input: { from: Post }
-      output: { from: Post }
-      handlers: [default:create]
-    update:
-      input: { identifier: id, from: Post, partial: true }
-      output: { from: Post }
-      handlers: [default:update]
-    delete:
-      input: { identifier: id }
-      output: void
-      handlers: [                         # Chain multiple handlers
-        checkCanDelete,                   # Custom → PostService.checkCanDelete(result, input)
-        default:delete                    # Built-in delete
-      ]
-    publish:                              # Custom action
-      input: { identifier: id }
-      output: { from: Post }
-      handlers: [
-        default:get,                      # Fetch entity
-        validateForPublish,               # Custom → PostService.validateForPublish(result, input)
-        updatePublishStatus               # Custom → PostService.updatePublishStatus(result, input)
-      ]
-
-api:                                      # REST API configuration
-  Post:                                   # Keyed by model name
-    prefix: /api/posts
-    endpoints:
-      - method: GET
-        path: /
-        useCase: Post:list                # References useCases.Post.list
-        auth: all                         # Public access
-      - method: GET
-        path: /:id
-        useCase: Post:get
-        auth: all
-      - method: POST
-        path: /
-        useCase: Post:create
-        auth: authenticated               # Must be logged in
-      - method: PUT
-        path: /:id
-        useCase: Post:update
-        auth: [owner, admin]              # Owner OR admin (OR logic)
-      - method: DELETE
-        path: /:id
-        useCase: Post:delete
-        auth: [owner, admin]
-      - method: POST                      # Custom endpoint
-        path: /:id/publish
-        useCase: Post:publish
-        auth: [owner, editor, admin]
-
-web:                                      # Web interface configuration
-  Post:                                   # Keyed by model name
-    prefix: /posts
-    layout: main_view
-    pages:
-      - path: /                           # List page
-        useCase: Post:list
-        view: postList
-        auth: all
-      - path: /:id                        # Detail page
-        useCase: Post:get
-        view: postDetail
-        auth: all
-      - path: /create                     # Create form (GET = show form)
-        method: GET
-        view: postCreate
-        auth: authenticated
-      - path: /create                     # Create form (POST = submit)
-        method: POST
-        useCase: Post:create
-        auth: authenticated
-        onSuccess:
-          redirect: /posts/:id
-          toast: "Post created successfully"
-        onError:
-          stay: true
-          toast: error
-      - path: /:id/edit                   # Edit form (GET = show form)
-        method: GET
-        useCase: Post:get
-        view: postUpdate
-        auth: [owner, admin]
-      - path: /:id/edit                   # Edit form (POST = submit)
-        method: POST
-        useCase: Post:update
-        auth: [owner, admin]
-        onSuccess:
-          back: true
-          toast: "Post updated successfully"
-```
-
-### Displaying child entities on root pages (withChild)
-
-When you have an aggregate root with child entities (e.g. `Invoice` with `InvoiceItem`), you can show child data on the root’s list or detail page by setting `withChild: true` on the corresponding use case.
-
-- **`list` + `withChild: true`**: Adds a link column (e.g. “Items”) on the list page; each row links to that root’s child entity list. No extra data is loaded (good for performance).
-- **`get` + `withChild: true`**: On the root’s detail page, shows a table of child entities below the main card, with links to view/edit each child and to add new ones.
-
-If the entity has no child entities, `withChild` is ignored. The parameter defaults to `false` when you run `currentjs create module`.
-
-**Example:**
-
-```yaml
-useCases:
-  Invoice:
-    list:
-      withChild: true    # Adds link column to child entities on list page
-      input:
-        pagination: { type: offset, defaults: { limit: 20, maxLimit: 100 } }
-      output: { from: Invoice, pagination: true }
-      handlers: [default:list]
-    get:
-      withChild: true    # Shows child entities table on detail page
-      input: { identifier: id }
-      output: { from: Invoice }
-      handlers: [default:get]
-```
-
-### Field Types and Validation
-
-**Available Field Types:**
-- `string` - Text data (VARCHAR in database)
-- `number` - Numeric data (INT/DECIMAL in database)
-- `integer` - Integer data (INT in database)
-- `decimal` - Decimal data (DECIMAL in database)
-- `boolean` - True/false values (BOOLEAN in database)
-- `datetime` - Date and time values (DATETIME in database)
-- `date` - Date values (DATE in database)
-- `id` - Foreign key reference (INT in database)
-- `json` - JSON data
-- `enum` - Enumerated values (use with `values: [...]`)
-
-**Important Field Rules:**
-- **Never include `id`/`owner_id`/`created_at`/`updated_at`/`deleted_at` fields** - these are added automatically
-- Use `required: true` for mandatory fields
-- Fields without `required` are optional
-
-```yaml
-domain:
-  aggregates:
-    User:
-      root: true
-      fields:
-        email: { type: string, required: true }
-        age: { type: number }
-        isActive: { type: boolean, required: true }
-        lastLoginAt: { type: datetime }
-```
-
-### 🔗 Model Relationships
-
-You can define relationships between models by specifying another model name as the field type. The generator will automatically handle foreign keys, type checking, and UI components.
-
-**Basic Relationship Example:**
-```yaml
-domain:
-  aggregates:
-    Owner:
-      root: true
-      fields:
-        name: { type: string, required: true }
-        email: { type: string, required: true }
-
-    Cat:
-      root: true
-      fields:
-        name: { type: string, required: true }
-        breed: { type: string }
-        owner: { type: Owner, required: true }  # Relationship to Owner model
-```
-
-**Architecture: Rich Domain Models**
-
-The generator uses **Infrastructure-Level Relationship Assembly**:
-
-- **Domain Layer**: Works with full objects (no FKs)
-- **Infrastructure (Store)**: Handles FK ↔ Object conversion
-- **DTOs**: Use FKs for API transmission
-
-**What Gets Generated:**
-
-1. **Domain Model**: Pure business objects
-   ```typescript
-   import { Owner } from './Owner';
-   
-   export class Cat {
-     constructor(
-       public id: number,
-       public name: string,
-       public breed?: string,
-       public owner: Owner  // ✨ Full object, no FK!
-     ) {}
-   }
-   ```
-
-2. **DTOs**: Use foreign keys for API
-   ```typescript
-   export interface CatDTO {
-     name: string;
-     breed?: string;
-     ownerId: number;  // ✨ FK for over-the-wire
-   }
-   ```
-
-3. **Store**: Converts FK ↔ Object
-   ```typescript
-   export class CatStore {
-     constructor(
-       private db: ISqlProvider,
-       private ownerStore: OwnerStore  // ✨ Foreign store dependency
-     ) {}
-     
-     async loadRelationships(entity: Cat, row: CatRow): Promise<Cat> {
-       const owner = await this.ownerStore.getById(row.ownerId);
-       if (owner) entity.setOwner(owner);
-       return entity;
-     }
-     
-     async insert(cat: Cat): Promise<Cat> {
-       const row = {
-         name: cat.name,
-         ownerId: cat.owner?.id  // ✨ Extract FK to save
-       };
-       // ...
-     }
-   }
-   ```
-
-4. **Service**: Loads objects from FKs
-   ```typescript
-   export class CatService {
-     constructor(
-       private catStore: CatStore,
-       private ownerStore: OwnerStore  // ✨ To load relationships
-     ) {}
-     
-     async create(catData: CatDTO): Promise<Cat> {
-       // ✨ Load full owner object from FK
-       const owner = await this.ownerStore.getById(catData.ownerId);
-       const cat = new Cat(0, catData.name, catData.breed, owner);
-       return await this.catStore.insert(cat);
-     }
-   }
-   ```
-
-5. **HTML Forms**: Select dropdown with "Create New" button
-   ```html
-   <select id="ownerId" name="ownerId" required>
-     <option value="">-- Select Owner --</option>
-     <!-- Options loaded from /api/owner -->
-   </select>
-   <button onclick="window.open('/owner/create')">+ New</button>
-   ```
-
-**Relationship Naming Convention:**
-
-The generator automatically creates foreign key fields following this convention:
-- **Field name**: `owner` → **Foreign key**: `ownerId`
-- **Field name**: `author` → **Foreign key**: `authorId`
-- **Field name**: `parentComment` → **Foreign key**: `parentCommentId`
-
-The foreign key always references the `id` field of the related model.
-
-**Multiple Relationships:**
-```yaml
-domain:
-  aggregates:
-    Comment:
-      root: true
-      fields:
-        content: { type: string, required: true }
-        post: { type: Post, required: true }         # Creates foreign key: postId
-        author: { type: User, required: true }        # Creates foreign key: authorId
-        parentComment: { type: Comment }               # Self-referential, optional
-```
-
-**Relationship Best Practices:**
-- ✅ Always define the foreign model first in the same module
-- ✅ Use descriptive field names for relationships (e.g., `author` instead of `user`)
-- ✅ Set appropriate `displayFields` to show meaningful data in dropdowns
-- ✅ Use `required: false` for optional relationships
-- ✅ Foreign keys are auto-generated following the pattern `fieldName + 'Id'`
-- ❌ Don't manually add foreign key fields (they're auto-generated)
-- ❌ Don't create circular dependencies between modules
-
-### Use Case Handlers Explained
-
-**🔄 Handler vs Use Case Distinction:**
-- **Handler**: Creates a separate service method (one handler = one method)
-- **Use Case**: Defined under `useCases.ModelName.actionName`, orchestrates handler calls step-by-step
-- **UseCase reference**: Used in `api`/`web` endpoints as `ModelName:actionName` (e.g., `Post:list`)
-
-**Built-in Handlers (inside `useCases.*.*.handlers`):**
-- `default:list` - Creates service method with pagination parameters
-- `default:get` - Creates service method named `get` with ID parameter
-- `default:create` - Creates service method with DTO parameter
-- `default:update` - Creates service method with ID and DTO parameters
-- `default:delete` - Creates service method with ID parameter
-
-Note: Handlers within `useCases` do NOT need a model prefix because the model is already the key.
-
-**Custom Handlers:**
-- `customMethodName` - Creates service method that accepts `(result, input)` parameters
-- `result`: Result from previous handler (or `null` if it's the first handler)
-- `input`: The parsed input DTO
-- User can customize the implementation after generation
-- Each handler generates a separate method in the service
-
-**🔗 Multiple Handlers per Use Case:**
-When a use case has multiple handlers, each handler generates a separate service method, and the use case orchestrator calls them sequentially:
-
-```yaml
-useCases:
-  Invoice:
-    get:
-      input: { identifier: id }
-      output: { from: Invoice }
-      handlers: 
-        - default:get          # Creates InvoiceService.get() method
-        - enrichData           # Creates InvoiceService.enrichData() method
-```
-
-**Generated Code Example:**
-```typescript
-// InvoiceService.ts
-async get(id: number): Promise<Invoice> { 
-  // Standard get implementation
-}
-async enrichData(result: any, input: any): Promise<any> { 
-  // TODO: Implement custom enrichData method
-  // result = result from previous handler (Invoice object in this case)
-  // input = parsed input DTO
-}
-
-// InvoiceUseCase.ts  
-async get(input: InvoiceGetInput): Promise<Invoice> {
-  const result0 = await this.invoiceService.get(input.id);
-  const result = await this.invoiceService.enrichData(result0, input);
-  return result; // Returns result from last handler
-}
-```
-
-**Parameter Passing Rules:**
-- **Default handlers** (`default:*`): Receive standard parameters (id, pagination, DTO, etc.)
-- **Custom handlers**: Receive `(result, input)` where:
-  - `result`: Result from previous handler, or `null` if it's the first handler
-  - `input`: Parsed input DTO
-
-**Handler Format Examples:**
-```yaml
-useCases:
-  Post:
-    list:
-      handlers: [default:list]           # Single handler: list(page, limit)
-    get:
-      handlers: [default:get]            # Single handler: get(id)
-    complexFlow:
-      handlers: [
-        default:create,                  # create(input) - standard parameters
-        sendNotification                 # sendNotification(result, input) - result from create
-      ]
-    customFirst:
-      handlers: [
-        validateInput,                   # validateInput(null, input) - first handler
-        default:create                   # create(input) - standard parameters
-      ]
-```
-
-### Multi-Model Support 🔄
-
-When you have multiple models in a single module, the system generates individual services, use cases, controllers, and stores for each model:
-
-```yaml
-domain:
-  aggregates:
-    Post:
-      root: true
-      fields:
-        title: { type: string, required: true }
-    Comment:
-      root: true
-      fields:
-        content: { type: string, required: true }
-        post: { type: Post, required: true }
-
-useCases:
-  Post:
-    list:
-      handlers: [default:list]
-    create:
-      input: { from: Post }
-      output: { from: Post }
-      handlers: [default:create]
-  Comment:
-    create:
-      input: { from: Comment }
-      output: { from: Comment }
-      handlers: [default:create]
-
-api:
-  Post:
-    prefix: /api/posts
-    endpoints:
-      - method: GET
-        path: /
-        useCase: Post:list
-        auth: all
-      - method: POST
-        path: /
-        useCase: Post:create
-        auth: authenticated
-  Comment:
-    prefix: /api/comments
-    endpoints:
-      - method: POST
-        path: /
-        useCase: Comment:create
-        auth: authenticated
-```
-
-**Key Points:**
-- Each model gets its own Service, UseCase, Controller, and Store classes
-- In `api`/`web`, each model is a separate key (e.g., `api.Post`, `api.Comment`)
-- UseCase references use `ModelName:actionName` format (e.g., `Post:list`, `Comment:create`)
-- Handlers within `useCases` do not need a model prefix (model is already the key)
-
-### Form Success/Error Handling
-
-Configure what happens after successful form submissions using `onSuccess` and `onError` on web page endpoints:
-
-```yaml
-web:
-  Post:
-    prefix: /posts
-    pages:
-      - path: /create
-        method: POST
-        useCase: Post:create
-        auth: authenticated
-        onSuccess:
-          redirect: /posts/:id
-          toast: "Post created successfully"
-        onError:
-          stay: true
-          toast: error
-```
-
-**Available `onSuccess` Options:**
-- `toast: "message"` - Show toast notification with custom message
-- `back: true` - Navigate back in browser history
-- `redirect: /path` - Redirect to specific URL
-- `stay: true` - Stay on current page
-
-**Available `onError` Options:**
-- `stay: true` - Stay on current page (re-render form with errors)
-- `toast: error` - Show error toast notification
-
-**Common Combinations:**
-```yaml
-# Show message and go back
-onSuccess: { toast: "Saved!", back: true }
-
-# Redirect after creation
-onSuccess: { redirect: /posts/:id, toast: "Created!" }
-
-# Stay on page with toast
-onSuccess: { stay: true, toast: "Updated!" }
-```
-
-The template generator converts `onSuccess` options into `data-strategy` attributes on HTML forms for the frontend JavaScript to handle.
-
-### Auth System
-
-Control who can access what using the `auth` property on each endpoint in `api` and `web`:
-
-```yaml
-api:
-  Post:
-    prefix: /api/posts
-    endpoints:
-      - method: GET
-        path: /
-        useCase: Post:list
-        auth: all                    # Anyone (including anonymous)
-      - method: POST
-        path: /
-        useCase: Post:create
-        auth: authenticated          # Any logged-in user
-      - method: PUT
-        path: /:id
-        useCase: Post:update
-        auth: [owner, admin]         # Owner OR admin (OR logic)
-      - method: DELETE
-        path: /:id
-        useCase: Post:delete
-        auth: admin                  # Only admin role
-```
-
-**Auth Options:**
-- `all` - Everyone (including anonymous users)
-- `authenticated` - Any logged-in user
-- `owner` - User who created the entity
-- `admin`, `editor`, `user` - Custom roles from JWT token
-- `[owner, admin]` - Array syntax: user must match ANY (OR logic). Privileged roles bypass ownership check.
-
-**How Ownership Works:**
-The system automatically adds an `owner_id` field to aggregate roots to track who created each entity. When `owner` auth is specified:
-- **For reads (get)**: Post-fetch check compares `result.ownerId` with `context.request.user.id`
-- **For mutations (update/delete)**: Pre-mutation check calls `getResourceOwner(id)` before the operation to prevent unauthorized changes
-
-### Code vs Configuration Guidelines
-
-**✅ Use YAML Configuration For:**
-- Basic CRUD operations
-- Standard REST endpoints
-- Simple permission rules
-- Form success strategies
-- Standard data field types
-
-**✅ Write Custom Code For:**
-- Complex business logic
-- Custom validation rules
-- Data transformations
-- Integration with external services
-- Complex database queries
-
-## Part of the Framework Ecosystem 🌍
-
-This generator is the foundation of the `currentjs` framework:
-- Works seamlessly with `@currentjs/router` for HTTP handling
-- Integrates with `@currentjs/templating` for server-side rendering
-- Uses `@currentjs/provider-*` packages for database access
-- Follows clean architecture principles for maintainable code
-
-## Notes
-
-- `currentjs create app` scaffolds complete app structure with TypeScript configs and dependencies
-- `currentjs generate` creates domain entities, value objects, use cases, services, DTOs, controllers, stores, and templates
-- Generated code follows clean architecture: domain/application/infrastructure layers
-- Supports both API endpoints and web page routes in the same module
-- Includes change tracking system for safely modifying generated code
+→ Reference: [Notes — Template Regeneration](REFERENCE.md#template-regeneration) · [web](REFERENCE.md#web)
 
 ## Authorship & Contribution
 
@@ -1203,4 +582,3 @@ GNU Lesser General Public License (LGPL)
 It simply means, that you:
 - can create a proprietary application that uses this library without having to open source their entire application code (this is the "lesser" aspect of LGPL compared to GPL).
 - can make any modifications, but must distribute those modifications under the LGPL (or a compatible license) and include the original copyright and license notice.
-

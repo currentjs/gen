@@ -215,13 +215,46 @@ export class DomainLayerGenerator {
       })
       .join('\n');
 
+    // Generate validation logic from field constraints
+    // we don't use constraints at models, since we use DTOs (use cases) for validation
+    // Model – is a place not for validation, but for business logic!
+    // kept this code for reference
+    /*
+    const validations: string[] = [];
+    sortedFields.forEach(([fieldName, fieldConfig]) => {
+      const { constraints } = fieldConfig;
+      if (!constraints) return;
+
+      if (constraints.min !== undefined) {
+        validations.push(`        if (this.${fieldName} < ${constraints.min}) {
+            throw new Error('${name}.${fieldName} must be at least ${constraints.min}');
+        }`);
+      }
+      if (constraints.max !== undefined) {
+        validations.push(`        if (this.${fieldName} > ${constraints.max}) {
+            throw new Error('${name}.${fieldName} must be at most ${constraints.max}');
+        }`);
+      }
+      if (constraints.pattern) {
+        validations.push(`        if (!/${constraints.pattern}/.test(String(this.${fieldName}))) {
+            throw new Error('${name}.${fieldName} does not match required pattern');
+        }`);
+      }
+    });
+
+    const constructorBody = validations.length > 0
+      ? `\n        this.validate();\n    }\n\n    private validate(): void {\n${validations.join('\n')}\n    }`
+      : ' }';
+    */
+   const constructorBody = '';
     const rootComment = config.root ? '// Aggregate Root\n' : '';
     const enumTypeDefsCode = enumTypeDefinitions.length > 0 ? enumTypeDefinitions.join('\n') + '\n\n' : '';
 
     return `${imports ? imports + '\n\n' : ''}${enumTypeDefsCode}${rootComment}export class ${name} {
     public constructor(
         ${constructorParamsStr}
-    ) { }
+    ) {${constructorBody}
+    }
 ${setterMethods}
 }`;
   }

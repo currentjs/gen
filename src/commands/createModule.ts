@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ensureDir, toAbsolute } from '../utils/cliUtils';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { colors } from "../utils/colors";
 
 function moduleYamlTemplate(moduleName: string): string {
   const entityName = moduleName.charAt(0).toUpperCase() + moduleName.slice(1);
@@ -197,5 +198,18 @@ export function handleCreateModule(name?: string): void {
   }
 
   fs.writeFileSync(appYamlPath, stringifyYaml(appConfig), 'utf8');
+  const output = `
+${colors.green(`Module ${colors.bold(name)} has been created`)}
+
+Run command ${colors.green(colors.bold(`current create model ${name}:modelname`))}
+  where ${colors.italic(colors.yellow('modelname'))} is name of the model in your module.
+At the end, that command will suggest you to create CRUD actions for the model and further steps.
+You can run this command as many times as needed.
+
+Alternatively, you may consider modifying module's config manually, and then run ${colors.bold(colors.green('current generate'))}
+  ${colors.gray('config:')} ${colors.cyan(colors.italic(moduleYamlFile))}
+`
+  console.log(output);
+
 }
 

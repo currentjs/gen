@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-import { handleCreateApp } from './commands/createApp';
+import { handleInit } from './commands/init';
 import { handleCreateModule } from './commands/createModule';
+import { handleCreateModel } from './commands/createModel';
 import { handleGenerateAll } from './commands/generateAll';
 import { handleCommit } from './commands/commit';
 import { handleDiff } from './commands/diff';
@@ -10,9 +11,12 @@ import { handleMigrateCommit } from './commands/migrateCommit';
 // import { handleMigratePush } from './commands/migratePush';
 // import { handleMigrateUpdate } from './commands/migrateUpdate';
 
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { version: pkgVersion } = require('../package.json') as { version: string };
+
 function printHelp() {
   const title = colors.bold(colors.brightCyan('currentjs - Clean architecture CLI'));
-  const version = colors.bold(colors.brightCyan('v0.5.0'));
+  const version = colors.bold(colors.brightCyan(`v${pkgVersion}`));
   const usage = colors.bold('Usage:');
   const options = colors.bold('Options:');
   const cmd = (s: string) => colors.green(s);
@@ -21,9 +25,10 @@ function printHelp() {
 ${title}
 ${version}
 ${usage}
-  ${cmd('currentjs create app')} ${colors.gray('[name]')}
+  ${cmd('currentjs init')} ${colors.gray('[name]')}
   ${cmd('currentjs create module')} ${colors.gray('<name>')}
-  ${cmd('currentjs generate')} ${colors.gray('<module|*>')} ${flag('--yaml')} ${colors.gray('app.yaml')} ${colors.gray('[')}${flag('--force')}${colors.gray(']')} ${colors.gray('[')}${flag('--skip')}${colors.gray(']')}
+  ${cmd('currentjs create model')} ${colors.gray('<ModuleName:ModelName>')}
+  ${cmd('currentjs generate')} ${colors.gray('<module|*>')} ${flag('--yaml')} ${colors.gray('app.yaml')} ${colors.gray('[')}${flag('--force')}${colors.gray(']')} ${colors.gray('[')}${flag('--skip')}${colors.gray(']')} ${colors.gray('[')}${flag('--with-templates')}${colors.gray(']')}
   ${cmd('currentjs commit')} ${colors.gray('[<file> ...]')} ${flag('--yaml')} ${colors.gray('app.yaml')}
   ${cmd('currentjs diff')} ${colors.gray('<module|*>')} ${flag('--yaml')} ${colors.gray('app.yaml')}
   ${cmd('currentjs infer')} ${flag('--file')} ${colors.gray('src/modules/<Module>/domain/entities/<Entity>.ts')} ${colors.gray('[')}${flag('--write')}${colors.gray(']')}
@@ -33,14 +38,18 @@ ${options}
   ${flag('--yaml')} <path>   ${colors.gray('Path to app.yaml (default: ./app.yaml)')}
   ${flag('--force')}         ${colors.gray('Overwrite modified files without prompting')}
   ${flag('--skip')}          ${colors.gray('Always skip overwriting modified files (no prompts)')}
+  ${flag('--with-templates')} ${colors.gray('Regenerate existing HTML templates (new templates are always created)')}
   ${flag('--out')} <dir>     ${colors.gray('[deprecated] Generators now write into each module\'s structure')}
   ${flag('-h, --help')}      ${colors.gray('Show help')}
+  
+${colors.gray('For detailed command reference, development flow and much more, please get familiar with REFERENCE.md')}
+https://github.com/currentjs/gen/blob/master/REFERENCE.md
 `;
   // eslint-disable-next-line no-console
   console.log(help);
 }
 
-type Args = { command?: string; sub?: string; name?: string; files?: string[]; yaml?: string; out?: string; force?: boolean; skip?: boolean; help?: boolean };
+type Args = { command?: string; sub?: string; name?: string; files?: string[]; yaml?: string; out?: string; force?: boolean; skip?: boolean; withTemplates?: boolean; help?: boolean };
 
 function parseArgs(argv: string[]): Args {
   const [, , ...rest] = argv;
@@ -48,7 +57,9 @@ function parseArgs(argv: string[]): Args {
   if (rest.length === 0) return { help: true } as Args;
 
   result.command = rest.shift();
-  if (result.command === 'create') {
+  if (result.command === 'init') {
+    result.name = rest[0] && !rest[0].startsWith('-') ? rest.shift() : undefined;
+  } else if (result.command === 'create') {
     result.sub = rest.shift();
     result.name = rest[0] && !rest[0].startsWith('-') ? rest.shift() : undefined;
   } else if (result.command === 'generate') {
@@ -83,6 +94,8 @@ function parseArgs(argv: string[]): Args {
       result.force = true;
     } else if (token === '--skip') {
       result.skip = true;
+    } else if (token === '--with-templates') {
+      result.withTemplates = true;
     } else if (token === '--out') {
       result.out = rest[i + 1];
       i += 1;
@@ -102,13 +115,17 @@ async function run() {
     }
 
     switch (args.command) {
+      case 'init': {
+        handleInit(args.name);
+        return;
+      }
       case 'create': {
-        if (args.sub === 'app') {
-          handleCreateApp(args.name);
-          return;
-        }
         if (args.sub === 'module') {
           handleCreateModule(args.name);
+          return;
+        }
+        if (args.sub === 'model') {
+          await handleCreateModel(args.name);
           return;
         }
         printHelp();
@@ -116,7 +133,7 @@ async function run() {
         return;
       }
       case 'generate': {
-        await handleGenerateAll(args.yaml, args.out, args.name, { force: !!args.force, skip: !!args.skip });
+        await handleGenerateAll(args.yaml, args.out, args.name, { force: !!args.force, skip: !!args.skip, withTemplates: !!args.withTemplates });
         return;
       }
       case 'commit': {

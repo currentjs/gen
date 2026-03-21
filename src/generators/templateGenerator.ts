@@ -516,8 +516,9 @@ ${options}
   public async generateAndSaveFiles(
     yamlFilePath: string,
     moduleDir: string,
-    opts?: { force?: boolean; skipOnConflict?: boolean }
+    opts?: { force?: boolean; skipOnConflict?: boolean; onlyIfMissing?: boolean }
   ): Promise<void> {
+    let isGenerated = false;
     const templatesByName = this.generateFromYamlFile(yamlFilePath);
     
     const viewsDir = path.join(moduleDir, 'views');
@@ -525,12 +526,16 @@ ${options}
 
     for (const [name, content] of Object.entries(templatesByName)) {
       const filePath = path.join(viewsDir, `${name}.html`);
+      if (opts?.onlyIfMissing && fs.existsSync(filePath)) continue;
       // eslint-disable-next-line no-await-in-loop
       await writeGeneratedFile(filePath, content, { force: !!opts?.force, skipOnConflict: !!opts?.skipOnConflict });
+      isGenerated = true;
     }
 
-    // eslint-disable-next-line no-console
-    console.log('\n' + colors.green('Template files generated successfully!') + '\n');
+    if (isGenerated) {
+      // eslint-disable-next-line no-console
+      console.log('\n' + colors.green('Template files generated successfully!') + '\n');
+    }
   }
 }
 

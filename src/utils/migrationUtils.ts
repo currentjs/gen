@@ -1,23 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-// import mysql from 'mysql2/promise';
-
-export interface FieldConfig {
-  name: string;
-  type: string;
-  required?: boolean;
-  unique?: boolean;
-  auto?: boolean;
-}
-
-export interface ModelConfig {
-  name: string;
-  fields: FieldConfig[];
-}
+import { AggregateConfig, AggregateFieldConfig } from '../types/configTypes';
 
 export interface SchemaState {
-  models: ModelConfig[];
+  aggregates: Record<string, AggregateConfig>;
   version: string;
   timestamp: string;
 }
@@ -52,47 +39,39 @@ const TYPE_MAPPING: Record<string, string> = {
   object: 'JSON'
 };
 
-export function mapYamlTypeToSql(yamlType: string, availableModels: Set<string>): string {
-  // Check if this is a relationship (foreign key)
-  if (availableModels.has(yamlType)) {
-    return 'INT'; // Foreign keys are INT
+export function mapYamlTypeToSql(yamlType: string, availableAggregates: Set<string>): string {
+  if (availableAggregates.has(yamlType)) {
+    return 'INT';
   }
   return TYPE_MAPPING[yamlType] || 'VARCHAR(255)';
 }
 
-export function getTableName(modelName: string): string {
-  return modelName.toLowerCase() + 's';
+export function getTableName(aggregateName: string): string {
+  return aggregateName.toLowerCase() + 's';
 }
 
 export function getForeignKeyFieldName(fieldName: string): string {
   return fieldName + 'Id';
 }
 
-export function isRelationshipField(fieldType: string, availableModels: Set<string>): boolean {
-  return availableModels.has(fieldType);
+export function isRelationshipField(fieldType: string, availableAggregates: Set<string>): boolean {
+  return availableAggregates.has(fieldType);
 }
 
-export function generateCreateTableSQL(model: ModelConfig, availableModels: Set<string>): string {
-  const tableName = getTableName(model.name);
+export function generateCreateTableSQL(name: string, aggregate: AggregateConfig, availableAggregates: Set<string>): string {
+  const tableName = getTableName(name);
   const columns: string[] = [];
   const indexes: string[] = [];
   const foreignKeys: string[] = [];
 
-  // Add id column
   columns.push('  id INT AUTO_INCREMENT PRIMARY KEY');
 
-  // Add model fields
-  model.fields.forEach(field => {
-    if (isRelationshipField(field.type, availableModels)) {
-      // Foreign key field
-      const foreignKeyName = getForeignKeyFieldName(field.name);
+  for (const [fieldName, field] of Object.entries(aggregate.fields)) {
+    if (isRelationshipField(field.type, availableAggregates)) {
+      const foreignKeyName = getForeignKeyFieldName(fieldName);
       const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
       columns.push(`  ${foreignKeyName} INT ${nullable}`);
-      
-      // Add index for foreign key
       indexes.push(`  INDEX idx_${tableName}_${foreignKeyName} (${foreignKeyName})`);
-      
-      // Add foreign key constraint
       const refTableName = getTableName(field.type);
       foreignKeys.push(
         `  CONSTRAINT fk_${tableName}_${foreignKeyName} \n` +
@@ -102,49 +81,39 @@ export function generateCreateTableSQL(model: ModelConfig, availableModels: Set<
         `    ON UPDATE CASCADE`
       );
     } else {
-      // Regular field
-      const sqlType = mapYamlTypeToSql(field.type, availableModels);
+      const sqlType = mapYamlTypeToSql(field.type, availableAggregates);
       const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
-      columns.push(`  ${field.name} ${sqlType} ${nullable}`);
-      
-      // Add index for filterable fields
+      columns.push(`  ${fieldName} ${sqlType} ${nullable}`);
       if (['string', 'number'].includes(field.type)) {
-        indexes.push(`  INDEX idx_${tableName}_${field.name} (${field.name})`);
+        indexes.push(`  INDEX idx_${tableName}_${fieldName} (${fieldName})`);
       }
     }
-  });
+  }
 
-  // Add standard timestamp columns
   columns.push('  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP');
   columns.push('  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP');
   columns.push('  deleted_at DATETIME NULL DEFAULT NULL');
 
-  // Add standard indexes
   indexes.push(`  INDEX idx_${tableName}_deleted_at (deleted_at)`);
   indexes.push(`  INDEX idx_${tableName}_created_at (created_at)`);
 
-  // Combine all parts
   const allParts = [...columns, ...indexes, ...foreignKeys];
-
-  const sql = `CREATE TABLE IF NOT EXISTS ${tableName} (\n${allParts.join(',\n')}\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`;
-  
-  return sql;
+  return `CREATE TABLE IF NOT EXISTS ${tableName} (\n${allParts.join(',\n')}\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`;
 }
 
 export function generateDropTableSQL(tableName: string): string {
   return `DROP TABLE IF EXISTS ${tableName};`;
 }
 
-export function generateAddColumnSQL(tableName: string, field: FieldConfig, availableModels: Set<string>): string {
-  if (isRelationshipField(field.type, availableModels)) {
-    const foreignKeyName = getForeignKeyFieldName(field.name);
+export function generateAddColumnSQL(tableName: string, fieldName: string, field: AggregateFieldConfig, availableAggregates: Set<string>): string {
+  if (isRelationshipField(field.type, availableAggregates)) {
+    const foreignKeyName = getForeignKeyFieldName(fieldName);
     const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
-    const sqlType = 'INT';
-    return `ALTER TABLE ${tableName} ADD COLUMN ${foreignKeyName} ${sqlType} ${nullable};`;
+    return `ALTER TABLE ${tableName} ADD COLUMN ${foreignKeyName} INT ${nullable};`;
   } else {
-    const sqlType = mapYamlTypeToSql(field.type, availableModels);
+    const sqlType = mapYamlTypeToSql(field.type, availableAggregates);
     const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
-    return `ALTER TABLE ${tableName} ADD COLUMN ${field.name} ${sqlType} ${nullable};`;
+    return `ALTER TABLE ${tableName} ADD COLUMN ${fieldName} ${sqlType} ${nullable};`;
   }
 }
 
@@ -152,16 +121,15 @@ export function generateDropColumnSQL(tableName: string, columnName: string): st
   return `ALTER TABLE ${tableName} DROP COLUMN ${columnName};`;
 }
 
-export function generateModifyColumnSQL(tableName: string, field: FieldConfig, availableModels: Set<string>): string {
-  if (isRelationshipField(field.type, availableModels)) {
-    const foreignKeyName = getForeignKeyFieldName(field.name);
+export function generateModifyColumnSQL(tableName: string, fieldName: string, field: AggregateFieldConfig, availableAggregates: Set<string>): string {
+  if (isRelationshipField(field.type, availableAggregates)) {
+    const foreignKeyName = getForeignKeyFieldName(fieldName);
     const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
-    const sqlType = 'INT';
-    return `ALTER TABLE ${tableName} MODIFY COLUMN ${foreignKeyName} ${sqlType} ${nullable};`;
+    return `ALTER TABLE ${tableName} MODIFY COLUMN ${foreignKeyName} INT ${nullable};`;
   } else {
-    const sqlType = mapYamlTypeToSql(field.type, availableModels);
+    const sqlType = mapYamlTypeToSql(field.type, availableAggregates);
     const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
-    return `ALTER TABLE ${tableName} MODIFY COLUMN ${field.name} ${sqlType} ${nullable};`;
+    return `ALTER TABLE ${tableName} MODIFY COLUMN ${fieldName} ${sqlType} ${nullable};`;
   }
 }
 
@@ -191,121 +159,105 @@ export function saveMigrationLog(logFilePath: string, log: MigrationLog): void {
   fs.writeFileSync(logFilePath, JSON.stringify(log, null, 2));
 }
 
-/**
- * Sort models by dependencies so tables are created in the right order
- * (tables with no foreign keys first, then tables that depend on them)
- */
-function sortModelsByDependencies(models: ModelConfig[], availableModels: Set<string>): ModelConfig[] {
-  const sorted: ModelConfig[] = [];
+function sortAggregatesByDependencies(aggregates: Record<string, AggregateConfig>, availableAggregates: Set<string>): [string, AggregateConfig][] {
+  const sorted: [string, AggregateConfig][] = [];
   const processed = new Set<string>();
-  
-  const addModel = (model: ModelConfig) => {
-    if (processed.has(model.name)) return;
-    
-    // Find foreign key dependencies
-    const dependencies: string[] = [];
-    model.fields.forEach(field => {
-      if (isRelationshipField(field.type, availableModels)) {
-        dependencies.push(field.type);
+
+  const addAggregate = (name: string, aggregate: AggregateConfig) => {
+    if (processed.has(name)) return;
+
+    for (const [, field] of Object.entries(aggregate.fields)) {
+      if (isRelationshipField(field.type, availableAggregates)) {
+        const dep = aggregates[field.type];
+        if (dep && !processed.has(field.type)) {
+          addAggregate(field.type, dep);
+        }
       }
-    });
-    
-    // Add dependencies first
-    dependencies.forEach(depName => {
-      const depModel = models.find(m => m.name === depName);
-      if (depModel && !processed.has(depName)) {
-        addModel(depModel);
-      }
-    });
-    
-    // Then add this model
-    sorted.push(model);
-    processed.add(model.name);
+    }
+
+    sorted.push([name, aggregate]);
+    processed.add(name);
   };
-  
-  models.forEach(model => addModel(model));
+
+  for (const [name, aggregate] of Object.entries(aggregates)) {
+    addAggregate(name, aggregate);
+  }
+
   return sorted;
 }
 
-export function compareSchemas(oldState: SchemaState | null, newModels: ModelConfig[]): string[] {
+export function compareSchemas(oldState: SchemaState | null, newAggregates: Record<string, AggregateConfig>): string[] {
   const sqlStatements: string[] = [];
-  const availableModels = new Set(newModels.map(m => m.name));
+  const availableAggregates = new Set(Object.keys(newAggregates));
 
-  if (!oldState || oldState.models.length === 0) {
-    // No previous state - generate all CREATE TABLE statements in dependency order
-    const sortedModels = sortModelsByDependencies(newModels, availableModels);
-    sortedModels.forEach(model => {
-      sqlStatements.push(`-- Create ${model.name.toLowerCase()}s table`);
-      sqlStatements.push(generateCreateTableSQL(model, availableModels));
+  if (!oldState || !oldState.aggregates || Object.keys(oldState.aggregates).length === 0) {
+    const sorted = sortAggregatesByDependencies(newAggregates, availableAggregates);
+    for (const [name, aggregate] of sorted) {
+      sqlStatements.push(`-- Create ${name.toLowerCase()}s table`);
+      sqlStatements.push(generateCreateTableSQL(name, aggregate, availableAggregates));
       sqlStatements.push('');
-    });
+    }
     return sqlStatements;
   }
 
-  // Create maps for easy lookup
-  const oldModelsMap = new Map(oldState.models.map(m => [m.name, m]));
-  const newModelsMap = new Map(newModels.map(m => [m.name, m]));
+  const oldAggregates = oldState.aggregates;
 
   // Find dropped tables
-  oldState.models.forEach(oldModel => {
-    if (!newModelsMap.has(oldModel.name)) {
-      const tableName = getTableName(oldModel.name);
+  for (const oldName of Object.keys(oldAggregates)) {
+    if (!newAggregates[oldName]) {
+      const tableName = getTableName(oldName);
       sqlStatements.push(`-- Drop ${tableName} table`);
       sqlStatements.push(generateDropTableSQL(tableName));
       sqlStatements.push('');
     }
-  });
+  }
 
-  // Find new tables and modified tables
-  newModels.forEach(newModel => {
-    const oldModel = oldModelsMap.get(newModel.name);
-    const tableName = getTableName(newModel.name);
+  // Find new and modified tables
+  for (const [name, newAggregate] of Object.entries(newAggregates)) {
+    const oldAggregate = oldAggregates[name];
+    const tableName = getTableName(name);
 
-    if (!oldModel) {
-      // New table
+    if (!oldAggregate) {
       sqlStatements.push(`-- Create ${tableName} table`);
-      sqlStatements.push(generateCreateTableSQL(newModel, availableModels));
+      sqlStatements.push(generateCreateTableSQL(name, newAggregate, availableAggregates));
       sqlStatements.push('');
     } else {
-      // Table exists - check for column changes
-      const oldFieldsMap = new Map(oldModel.fields.map(f => [f.name, f]));
-      const newFieldsMap = new Map(newModel.fields.map(f => [f.name, f]));
+      const oldFields = oldAggregate.fields;
+      const newFields = newAggregate.fields;
 
       // Find dropped columns
-      oldModel.fields.forEach(oldField => {
-        if (!newFieldsMap.has(oldField.name)) {
-          const columnName = isRelationshipField(oldField.type, availableModels) 
-            ? getForeignKeyFieldName(oldField.name) 
-            : oldField.name;
+      for (const oldFieldName of Object.keys(oldFields)) {
+        if (!newFields[oldFieldName]) {
+          const columnName = isRelationshipField(oldFields[oldFieldName].type, availableAggregates)
+            ? getForeignKeyFieldName(oldFieldName)
+            : oldFieldName;
           sqlStatements.push(`-- Drop column ${columnName} from ${tableName}`);
           sqlStatements.push(generateDropColumnSQL(tableName, columnName));
           sqlStatements.push('');
         }
-      });
+      }
 
-      // Find new columns and modified columns
-      newModel.fields.forEach(newField => {
-        const oldField = oldFieldsMap.get(newField.name);
-        
+      // Find new and modified columns
+      for (const [fieldName, newField] of Object.entries(newFields)) {
+        const oldField = oldFields[fieldName];
+
         if (!oldField) {
-          // New column
-          sqlStatements.push(`-- Add column ${newField.name} to ${tableName}`);
-          sqlStatements.push(generateAddColumnSQL(tableName, newField, availableModels));
+          sqlStatements.push(`-- Add column ${fieldName} to ${tableName}`);
+          sqlStatements.push(generateAddColumnSQL(tableName, fieldName, newField, availableAggregates));
           sqlStatements.push('');
         } else {
-          // Check if column definition changed
           const typeChanged = oldField.type !== newField.type;
           const requiredChanged = oldField.required !== newField.required;
-          
+
           if (typeChanged || requiredChanged) {
-            sqlStatements.push(`-- Modify column ${newField.name} in ${tableName}`);
-            sqlStatements.push(generateModifyColumnSQL(tableName, newField, availableModels));
+            sqlStatements.push(`-- Modify column ${fieldName} in ${tableName}`);
+            sqlStatements.push(generateModifyColumnSQL(tableName, fieldName, newField, availableAggregates));
             sqlStatements.push('');
           }
         }
-      });
+      }
     }
-  });
+  }
 
   return sqlStatements;
 }

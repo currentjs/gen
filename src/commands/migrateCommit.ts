@@ -3,8 +3,9 @@ import * as path from 'path';
 import { parse as parseYaml } from 'yaml';
 import { colors } from '../utils/colors';
 import { resolveYamlPath } from '../utils/cliUtils';
+import { loadAppConfig, getModuleEntries } from '../utils/commandUtils';
+import { isValidModuleConfig, AggregateConfig } from '../types/configTypes';
 import {
-  ModelConfig,
   SchemaState,
   loadSchemaState,
   saveSchemaState,
@@ -13,93 +14,47 @@ import {
   getMigrationFileName
 } from '../utils/migrationUtils';
 
-interface ModuleConfig {
-  models?: ModelConfig[];
-}
+function collectAggregatesFromModules(appYamlPath: string): Record<string, AggregateConfig> {
+  const appConfig = loadAppConfig(appYamlPath);
+  const moduleEntries = getModuleEntries(appConfig);
+  const projectRoot = path.dirname(appYamlPath);
 
-interface ModuleEntryWithPath {
-  path: string;
-  models?: ModelConfig[];
-}
-
-interface AppConfig {
-  modules?: Record<string, ModuleEntryWithPath>;
-  models?: ModelConfig[];
-}
-
-function collectModelsFromYaml(yamlPath: string): ModelConfig[] {
-  const yamlContent = fs.readFileSync(yamlPath, 'utf8');
-  const config = parseYaml(yamlContent) as AppConfig;
-  const projectRoot = path.dirname(yamlPath);
-
-  const allModels: ModelConfig[] = [];
+  const allAggregates: Record<string, AggregateConfig> = {};
   const sources: string[] = [];
 
-  // Check if it's a module YAML (has models directly)
-  if (config.models) {
-    allModels.push(...config.models);
-    sources.push(`app.yaml (${config.models.length} model(s))`);
+  for (const entry of moduleEntries) {
+    const moduleYamlPath = path.isAbsolute(entry.path)
+      ? entry.path
+      : path.resolve(projectRoot, entry.path);
+
+    if (!fs.existsSync(moduleYamlPath)) {
+      // eslint-disable-next-line no-console
+      console.warn(colors.yellow(`   Module YAML not found: ${moduleYamlPath}`));
+      continue;
+    }
+
+    const moduleYamlContent = fs.readFileSync(moduleYamlPath, 'utf8');
+    const moduleConfig = parseYaml(moduleYamlContent);
+
+    if (!isValidModuleConfig(moduleConfig)) {
+      // eslint-disable-next-line no-console
+      console.warn(colors.yellow(`   Skipping ${moduleYamlPath}: not a valid module config (missing domain/useCases)`));
+      continue;
+    }
+
+    const aggregates = moduleConfig.domain.aggregates;
+    const count = Object.keys(aggregates).length;
+
+    Object.assign(allAggregates, aggregates);
+    sources.push(`${entry.name} (${count} aggregate(s))`);
   }
 
-  // App YAML: modules as Record<string, { path }> — resolve path and read module YAML for .models
-  if (config.modules && typeof config.modules === 'object' && !Array.isArray(config.modules)) {
-    let moduleCount = 0;
-    for (const entry of Object.values(config.modules)) {
-      const modulePath = entry.path;
-      if (!modulePath) continue;
-      const moduleYamlPath = path.isAbsolute(modulePath)
-        ? modulePath
-        : path.resolve(projectRoot, modulePath);
-      if (fs.existsSync(moduleYamlPath)) {
-        const moduleYamlContent = fs.readFileSync(moduleYamlPath, 'utf8');
-        const moduleConfig = parseYaml(moduleYamlContent) as ModuleConfig;
-        if (moduleConfig.models) {
-          allModels.push(...moduleConfig.models);
-          moduleCount++;
-        }
-      }
-    }
-    if (moduleCount > 0) {
-      sources.push(`app.yaml modules section (${moduleCount} module(s))`);
-    }
-  }
-
-  // Also check for module YAMLs in src/modules/*/module.yaml (as fallback)
-  const modulesDir = path.join(projectRoot, 'src', 'modules');
-  
-  if (fs.existsSync(modulesDir)) {
-    const moduleFolders = fs.readdirSync(modulesDir).filter(f => {
-      const stat = fs.statSync(path.join(modulesDir, f));
-      return stat.isDirectory();
-    });
-    
-    let moduleYamlCount = 0;
-    for (const moduleFolder of moduleFolders) {
-      const moduleYamlPath = path.join(modulesDir, moduleFolder, 'module.yaml');
-      
-      if (fs.existsSync(moduleYamlPath)) {
-        const moduleYamlContent = fs.readFileSync(moduleYamlPath, 'utf8');
-        const moduleConfig = parseYaml(moduleYamlContent) as ModuleConfig;
-        
-        if (moduleConfig.models) {
-          allModels.push(...moduleConfig.models);
-          moduleYamlCount++;
-        }
-      }
-    }
-    
-    if (moduleYamlCount > 0) {
-      sources.push(`src/modules/*/module.yaml (${moduleYamlCount} module(s))`);
-    }
-  }
-
-  // Log sources
   if (sources.length > 0) {
     // eslint-disable-next-line no-console
     console.log(colors.gray(`   Sources: ${sources.join(', ')}`));
   }
 
-  return allModels;
+  return allAggregates;
 }
 
 export function handleMigrateCommit(yamlPath?: string): void {
@@ -116,28 +71,25 @@ export function handleMigrateCommit(yamlPath?: string): void {
     // eslint-disable-next-line no-console
     console.log(colors.gray(`   Migrations dir: ${migrationsDir}`));
 
-    // Ensure migrations directory exists
     if (!fs.existsSync(migrationsDir)) {
       fs.mkdirSync(migrationsDir, { recursive: true });
       // eslint-disable-next-line no-console
       console.log(colors.green(`   ✓ Created migrations directory`));
     }
 
-    // Collect all models from YAML files
     // eslint-disable-next-line no-console
-    console.log(colors.cyan('\n📋 Collecting models from all modules...'));
-    const currentModels = collectModelsFromYaml(resolvedYamlPath);
+    console.log(colors.cyan('\n📋 Collecting aggregates from all modules...'));
+    const currentAggregates = collectAggregatesFromModules(resolvedYamlPath);
 
-    if (currentModels.length === 0) {
+    if (Object.keys(currentAggregates).length === 0) {
       // eslint-disable-next-line no-console
-      console.log(colors.yellow('⚠️  No models found in YAML configuration.'));
+      console.log(colors.yellow('⚠️  No aggregates found in module configuration.'));
       return;
     }
 
     // eslint-disable-next-line no-console
-    console.log(colors.green(`✓ Found ${currentModels.length} model(s): ${currentModels.map(m => m.name).join(', ')}`));
+    console.log(colors.green(`✓ Found ${Object.keys(currentAggregates).length} aggregate(s): ${Object.keys(currentAggregates).join(', ')}`));
 
-    // Load previous state
     const oldState = loadSchemaState(stateFilePath);
 
     if (oldState) {
@@ -148,10 +100,9 @@ export function handleMigrateCommit(yamlPath?: string): void {
       console.log(colors.cyan('📖 No previous schema state found - will generate initial migration'));
     }
 
-    // Compare schemas and generate SQL
     // eslint-disable-next-line no-console
     console.log(colors.cyan('\n🔍 Comparing schemas...'));
-    const sqlStatements = compareSchemas(oldState, currentModels);
+    const sqlStatements = compareSchemas(oldState, currentAggregates);
 
     if (sqlStatements.length === 0 || sqlStatements.every(s => s.trim() === '' || s.startsWith('--'))) {
       // eslint-disable-next-line no-console
@@ -159,7 +110,6 @@ export function handleMigrateCommit(yamlPath?: string): void {
       return;
     }
 
-    // Generate migration file
     const timestamp = generateTimestamp();
     const migrationFileName = getMigrationFileName(timestamp);
     const migrationFilePath = path.join(migrationsDir, migrationFileName);
@@ -174,9 +124,8 @@ export function handleMigrateCommit(yamlPath?: string): void {
 
     fs.writeFileSync(migrationFilePath, migrationContent);
 
-    // Update state file
     const newState: SchemaState = {
-      models: currentModels,
+      aggregates: currentAggregates,
       version: timestamp,
       timestamp: new Date().toISOString()
     };
@@ -200,5 +149,3 @@ export function handleMigrateCommit(yamlPath?: string): void {
     process.exitCode = 1;
   }
 }
-
-

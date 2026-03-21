@@ -24,6 +24,11 @@ export interface AggregateFieldConfig {
   unique?: boolean;
   auto?: boolean;
   values?: string[];
+  constraints?: {
+    min?: number;
+    max?: number;
+    pattern?: string;
+  };
 }
 
 export interface AggregateConfig {

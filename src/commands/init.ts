@@ -15,7 +15,7 @@ import {
   DEFAULT_FILES
 } from '../generators/templates/appTemplates';
 
-export function handleCreateApp(rawName?: string): void {
+export function handleInit(rawName?: string): void {
   const targetRoot = rawName ? toAbsolute(rawName) : process.cwd();
   ensureDir(targetRoot);
 
