@@ -14,11 +14,11 @@ interface CollectedField {
   unique: boolean;
   enumValues?: string[];
   valueObjectName?: string; // set when type is a value object
-  constraints?: {
-    min?: number;
-    max?: number;
-    pattern?: string;
-  };
+}
+
+interface CollectedChild {
+  name: string;
+  fields: CollectedField[];
 }
 
 interface CollectedValueObjectField {
@@ -174,7 +174,6 @@ async function promptFields(rl: any, existingValueObjects: Map<string, Collected
     let enumValues: string[] | undefined;
     let valueObjectName: string | undefined;
     let resolvedType = typeChoice.value;
-    let constraints: CollectedField['constraints'] = {};
 
     if (typeChoice.value === 'enum') {
       const raw = await promptText(rl, `Enum values (comma-separated):`);
@@ -201,18 +200,6 @@ async function promptFields(rl: any, existingValueObjects: Map<string, Collected
     const required = await promptYesNo(rl, `Required?`, true);
     const unique = await promptYesNo(rl, `Unique?`, false);
 
-    if (resolvedType !== '__valueObject__' && !valueObjectName) {
-      if (NUMERIC_TYPES.has(resolvedType)) {
-        const min = await promptNumber(rl, `Min value:`);
-        const max = await promptNumber(rl, `Max value:`);
-        if (min !== undefined) constraints.min = min;
-        if (max !== undefined) constraints.max = max;
-      } else if (resolvedType === 'string') {
-        const pat = await promptText(rl, `Pattern (regex, leave blank to skip):`, { allowEmpty: true });
-        if (pat) constraints.pattern = pat;
-      }
-    }
-
     fields.push({
       name,
       type: resolvedType,
@@ -220,11 +207,40 @@ async function promptFields(rl: any, existingValueObjects: Map<string, Collected
       unique,
       ...(enumValues ? { enumValues } : {}),
       ...(valueObjectName ? { valueObjectName } : {}),
-      ...(Object.keys(constraints).length > 0 ? { constraints } : {}),
     });
   }
 
   return { fields, valueObjects };
+}
+
+// ─── Phase 1b: Child entities ────────────────────────────────────────────────
+
+async function promptChildEntities(
+  rl: any,
+  parentName: string,
+  existingValueObjects: Map<string, CollectedValueObject>,
+): Promise<{ children: CollectedChild[]; valueObjects: Map<string, CollectedValueObject> }> {
+  const children: CollectedChild[] = [];
+  let currentValueObjects = new Map(existingValueObjects);
+
+  const wantChildren = await promptYesNo(rl, `Add child entities to ${colors.bold(parentName)}?`, false);
+  if (!wantChildren) return { children, valueObjects: currentValueObjects };
+
+  while (true) {
+    const rawName = await promptText(rl, `Child entity name:`);
+    const childName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
+
+    console.log(colors.gray(`\n  Defining fields for ${colors.bold(childName)}:`));
+    const { fields, valueObjects: updatedVOs } = await promptFields(rl, currentValueObjects);
+    currentValueObjects = updatedVOs;
+
+    children.push({ name: childName, fields });
+
+    const another = await promptYesNo(rl, `Add another child entity?`, false);
+    if (!another) break;
+  }
+
+  return { children, valueObjects: currentValueObjects };
 }
 
 // ─── Phase 2: Use cases ───────────────────────────────────────────────────────
@@ -368,6 +384,7 @@ function buildAggregateConfig(
   modelName: string,
   fields: CollectedField[],
   isRoot: boolean,
+  entityNames?: string[],
 ): any {
   const aggregateFields: Record<string, any> = {};
 
@@ -380,6 +397,7 @@ function buildAggregateConfig(
 
   const config: any = { fields: aggregateFields };
   if (isRoot) config.root = true;
+  if (entityNames && entityNames.length > 0) config.entities = entityNames;
 
   return config;
 }
@@ -532,6 +550,79 @@ function buildApiConfig(modelName: string, lower: string, useCases: string[], au
   return { prefix: `/api/${lower}`, endpoints };
 }
 
+function buildChildWebConfig(
+  childName: string,
+  childLower: string,
+  parentLower: string,
+  parentIdField: string,
+  useCases: string[],
+  authMap: Record<string, string | string[]>,
+): any {
+  const pages: any[] = [];
+
+  if (useCases.includes('list')) {
+    pages.push({ path: '/', useCase: `${childName}:list`, view: `${childLower}List`, auth: authMap['list'] ?? 'all' });
+  }
+  if (useCases.includes('get')) {
+    pages.push({ path: '/:id', useCase: `${childName}:get`, view: `${childLower}Detail`, auth: authMap['get'] ?? 'all' });
+  }
+  if (useCases.includes('create')) {
+    pages.push({ path: '/create', method: 'GET', view: `${childLower}Create`, auth: authMap['create'] ?? 'authenticated' });
+    pages.push({
+      path: '/create',
+      method: 'POST',
+      useCase: `${childName}:create`,
+      auth: authMap['create'] ?? 'authenticated',
+      onSuccess: { back: true, toast: `${childName} created successfully` },
+      onError: { stay: true, toast: 'error' },
+    });
+  }
+  if (useCases.includes('update')) {
+    pages.push({
+      path: '/:id/edit',
+      method: 'GET',
+      useCase: `${childName}:get`,
+      view: `${childLower}Edit`,
+      auth: authMap['update'] ?? ['owner', 'admin'],
+    });
+    pages.push({
+      path: '/:id/edit',
+      method: 'POST',
+      useCase: `${childName}:update`,
+      auth: authMap['update'] ?? ['owner', 'admin'],
+      onSuccess: { back: true, toast: `${childName} updated successfully` },
+      onError: { stay: true, toast: 'error' },
+    });
+  }
+
+  return { prefix: `/${parentLower}/:${parentIdField}/${childLower}`, layout: 'main_view', pages };
+}
+
+function buildChildApiConfig(
+  childName: string,
+  childLower: string,
+  parentLower: string,
+  parentIdField: string,
+  useCases: string[],
+  authMap: Record<string, string | string[]>,
+): any {
+  const endpoints: any[] = [];
+
+  const METHOD_MAP: Record<string, string> = { list: 'GET', get: 'GET', create: 'POST', update: 'PUT', delete: 'DELETE' };
+  const PATH_MAP: Record<string, string> = { list: '/', get: '/:id', create: '/', update: '/:id', delete: '/:id' };
+
+  for (const uc of useCases) {
+    endpoints.push({
+      method: METHOD_MAP[uc],
+      path: PATH_MAP[uc],
+      useCase: `${childName}:${uc}`,
+      auth: authMap[uc] ?? 'all',
+    });
+  }
+
+  return { prefix: `/api/${parentLower}/:${parentIdField}/${childLower}`, endpoints };
+}
+
 // ─── Merge into existing YAML config ─────────────────────────────────────────
 
 function deepMerge(target: any, source: any): any {
@@ -580,7 +671,7 @@ async function runModelWizard(
   // Phase 1: Fields
   console.log(colors.bold('\nStep 1: Define fields'));
   const existingValueObjects: Map<string, CollectedValueObject> = new Map();
-  const { fields, valueObjects } = await promptFields(rl, existingValueObjects);
+  const { fields, valueObjects: parentValueObjects } = await promptFields(rl, existingValueObjects);
 
   if (fields.length === 0) {
     console.log(colors.yellow('No fields defined. Model will be created with no fields.'));
@@ -588,8 +679,12 @@ async function runModelWizard(
 
   const fieldNames = fields.map(f => f.name);
 
-  // Phase 2: Use cases
-  console.log(colors.bold('\nStep 2: Use cases'));
+  // Phase 2: Child entities
+  console.log(colors.bold('\nStep 2: Child entities'));
+  const { children, valueObjects } = await promptChildEntities(rl, modelName, parentValueObjects);
+
+  // Phase 3: Use cases
+  console.log(colors.bold('\nStep 3: Use cases'));
   const createUseCases = await promptYesNo(rl, `Create default use cases (list, get, create, update, delete)?`, true);
 
   const collectedUseCases: Record<string, any> = {};
@@ -620,12 +715,90 @@ async function runModelWizard(
     };
   }
 
-  // Phase 3: Web routes (only when use cases were created)
+  // Phase 3b: Child entity use cases / routes
+  interface ChildConfig {
+    useCases: Record<string, any>;
+    web?: any;
+    api?: any;
+  }
+  const childConfigs = new Map<string, ChildConfig>();
+  const lower = modelName.charAt(0).toLowerCase() + modelName.slice(1);
+
+  if (createUseCases && children.length > 0) {
+    for (const child of children) {
+      const childLower = child.name.charAt(0).toLowerCase() + child.name.slice(1);
+      const parentIdField = `${lower}Id`;
+      const childFieldNames = child.fields.map(f => f.name);
+
+      console.log(colors.bold(colors.brightCyan(`\n  ── Child: ${child.name} ──────────────────────────────────────────`)));
+      const createChildUCs = await promptYesNo(rl, `  Create CRUD use cases for ${colors.bold(child.name)}?`, true);
+
+      if (!createChildUCs) continue;
+
+      const childUCNames = ['list', 'get', 'create', 'update', 'delete'];
+      const childUseCases: Record<string, any> = {};
+
+      const childListOpts = await promptListUseCase(rl, childFieldNames);
+      const childListConfig = buildListUseCaseConfig(child.name, childListOpts);
+      childListConfig.input = { parentId: parentIdField, ...childListConfig.input };
+      childUseCases['list'] = childListConfig;
+
+      childUseCases['get'] = {
+        input: { identifier: 'id', parentId: parentIdField },
+        output: { from: child.name },
+        handlers: ['default:get'],
+      };
+
+      const childCreateOpts = await promptCreateUseCase(rl, childFieldNames, 'create');
+      const childCreateConfig = buildCreateUseCaseConfig(child.name, childCreateOpts);
+      childCreateConfig.input = { parentId: parentIdField, ...childCreateConfig.input };
+      childUseCases['create'] = childCreateConfig;
+
+      const childUpdateOpts = await promptUpdateUseCase(rl, childFieldNames);
+      const childUpdateConfig = buildUpdateUseCaseConfig(child.name, childUpdateOpts);
+      childUpdateConfig.input = { parentId: parentIdField, ...childUpdateConfig.input };
+      childUseCases['update'] = childUpdateConfig;
+
+      childUseCases['delete'] = {
+        input: { identifier: 'id', parentId: parentIdField },
+        output: 'void',
+        handlers: ['default:delete'],
+      };
+
+      const childConfig: ChildConfig = { useCases: childUseCases };
+
+      // Web routes for child
+      const childWebAuthMap: Record<string, string | string[]> = {};
+      const createChildWeb = await promptYesNo(rl, `  Create web routes for ${colors.bold(child.name)}?`, true);
+      if (createChildWeb) {
+        console.log(colors.gray('    Configure auth for each web route:'));
+        for (const uc of childUCNames) {
+          childWebAuthMap[uc] = await promptAuth(rl, `${child.name}:${uc} (web)`);
+        }
+        childConfig.web = buildChildWebConfig(child.name, childLower, lower, parentIdField, childUCNames, childWebAuthMap);
+      }
+
+      // API routes for child
+      const childApiAuthMap: Record<string, string | string[]> = {};
+      const createChildApi = await promptYesNo(rl, `  Create API routes for ${colors.bold(child.name)}?`, true);
+      if (createChildApi) {
+        console.log(colors.gray('    Configure auth for each API endpoint:'));
+        for (const uc of childUCNames) {
+          childApiAuthMap[uc] = await promptAuth(rl, `${child.name}:${uc} (api)`);
+        }
+        childConfig.api = buildChildApiConfig(child.name, childLower, lower, parentIdField, childUCNames, childApiAuthMap);
+      }
+
+      childConfigs.set(child.name, childConfig);
+    }
+  }
+
+  // Phase 4: Web routes (only when use cases were created)
   let createWeb = false;
   const webAuthMap: Record<string, string | string[]> = {};
 
   if (createUseCases) {
-    console.log(colors.bold('\nStep 3: Web routes'));
+    console.log(colors.bold('\nStep 4: Web routes'));
     createWeb = await promptYesNo(rl, `Create web routes?`, true);
     if (createWeb) {
       console.log(colors.gray('  Configure auth for each web route:'));
@@ -635,12 +808,12 @@ async function runModelWizard(
     }
   }
 
-  // Phase 4: API routes (only when use cases were created)
+  // Phase 5: API routes (only when use cases were created)
   let createApi = false;
   const apiAuthMap: Record<string, string | string[]> = {};
 
   if (createUseCases) {
-    console.log(colors.bold('\nStep 4: API routes'));
+    console.log(colors.bold('\nStep 5: API routes'));
     createApi = await promptYesNo(rl, `Create API routes?`, true);
     if (createApi) {
       console.log(colors.gray('  Configure auth for each API endpoint:'));
@@ -650,10 +823,9 @@ async function runModelWizard(
     }
   }
 
-  // Phase 5: Build and merge YAML
-  const lower = modelName.charAt(0).toLowerCase() + modelName.slice(1);
-
-  const newAggregateConfig = buildAggregateConfig(modelName, fields, isRoot);
+  // Phase 6: Build and merge YAML
+  const childNames = children.map(c => c.name);
+  const newAggregateConfig = buildAggregateConfig(modelName, fields, isRoot, childNames.length > 0 ? childNames : undefined);
   const newValueObjectsConfig = buildValueObjectsConfig(valueObjects);
 
   const patch: any = {
@@ -662,20 +834,43 @@ async function runModelWizard(
     },
   };
 
+  // Add child aggregates to domain
+  for (const child of children) {
+    patch.domain.aggregates[child.name] = buildAggregateConfig(child.name, child.fields, false);
+  }
+
   if (Object.keys(newValueObjectsConfig).length > 0) {
     patch.domain.valueObjects = newValueObjectsConfig;
   }
 
   if (createUseCases && Object.keys(collectedUseCases).length > 0) {
     patch.useCases = { [modelName]: collectedUseCases };
+    // Add child use cases
+    for (const [childName, childCfg] of childConfigs) {
+      patch.useCases[childName] = childCfg.useCases;
+    }
   }
 
   if (createWeb && useCaseNames.length > 0) {
     patch.web = { [modelName]: buildWebConfig(modelName, lower, useCaseNames, webAuthMap) };
   }
+  // Add child web configs (regardless of whether parent has web routes)
+  for (const [childName, childCfg] of childConfigs) {
+    if (childCfg.web) {
+      patch.web = patch.web ?? {};
+      patch.web[childName] = childCfg.web;
+    }
+  }
 
   if (createApi && useCaseNames.length > 0) {
     patch.api = { [modelName]: buildApiConfig(modelName, lower, useCaseNames, apiAuthMap) };
+  }
+  // Add child api configs (regardless of whether parent has api routes)
+  for (const [childName, childCfg] of childConfigs) {
+    if (childCfg.api) {
+      patch.api = patch.api ?? {};
+      patch.api[childName] = childCfg.api;
+    }
   }
 
   const merged = deepMerge(moduleConfig, patch);
