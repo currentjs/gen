@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { handleInit } from './commands/init';
 import { handleCreateModule } from './commands/createModule';
+import { handleCreateModel } from './commands/createModel';
 import { handleGenerateAll } from './commands/generateAll';
 import { handleCommit } from './commands/commit';
 import { handleDiff } from './commands/diff';
@@ -23,6 +24,7 @@ ${version}
 ${usage}
   ${cmd('currentjs init')} ${colors.gray('[name]')}
   ${cmd('currentjs create module')} ${colors.gray('<name>')}
+  ${cmd('currentjs create model')} ${colors.gray('<ModuleName:ModelName>')}
   ${cmd('currentjs generate')} ${colors.gray('<module|*>')} ${flag('--yaml')} ${colors.gray('app.yaml')} ${colors.gray('[')}${flag('--force')}${colors.gray(']')} ${colors.gray('[')}${flag('--skip')}${colors.gray(']')} ${colors.gray('[')}${flag('--with-templates')}${colors.gray(']')}
   ${cmd('currentjs commit')} ${colors.gray('[<file> ...]')} ${flag('--yaml')} ${colors.gray('app.yaml')}
   ${cmd('currentjs diff')} ${colors.gray('<module|*>')} ${flag('--yaml')} ${colors.gray('app.yaml')}
@@ -114,6 +116,10 @@ async function run() {
       case 'create': {
         if (args.sub === 'module') {
           handleCreateModule(args.name);
+          return;
+        }
+        if (args.sub === 'model') {
+          await handleCreateModel(args.name);
           return;
         }
         printHelp();

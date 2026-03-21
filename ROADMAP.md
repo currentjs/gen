@@ -7,7 +7,7 @@
 | ✅ Stabilization                   | gen         | 0.5.1               | -    | Fix bugs                                                                        |
 | ✅ Conditional template generation | gen         | 0.5.2               | S    | Skip existing templates; add separate command/flag                              |
 | ✅ Console input/output adjust     | gen         | 0.5.2               | S    | `init`, `create module`                                                         |
-| `current create model`            | gen         | 0.5.2               | M    | see below                                                                       |
+| ✅ `current create model`          | gen         | 0.5.2               | M    | see below                                                                       |
 | Configurable identifier types     | gen         | 0.5.2               | M    | Support int/uuid/string in app config                                           |
 | HTTP error handling               | router, gen | gen: 0.5.3 router: 0.2 | M    | Add errors to router, use in generator                                          |
 | Support of tailwind in tpls       | gen         | 0.5.4               | M    | setting in app.yaml                                                             |

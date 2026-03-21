@@ -198,13 +198,7 @@ export function handleCreateModule(name?: string): void {
   }
 
   fs.writeFileSync(appYamlPath, stringifyYaml(appConfig), 'utf8');
-  const outputV1 = `
-${colors.green(`Module ${colors.bold(name)} has been created`)}
-  
-${colors.gray(`Consider modifying module's config and then run ${colors.bold(colors.green('current generate'))}`)}
-  ${colors.gray('config:')} ${colors.cyan(colors.italic(moduleYamlFile))} 
-`
-  const outputV2 = `
+  const output = `
 ${colors.green(`Module ${colors.bold(name)} has been created`)}
 
 Run command ${colors.green(colors.bold(`current create model ${name}:modelname`))}
@@ -215,8 +209,7 @@ You can run this command as many times as needed.
 Alternatively, you may consider modifying module's config manually, and then run ${colors.bold(colors.green('current generate'))}
   ${colors.gray('config:')} ${colors.cyan(colors.italic(moduleYamlFile))}
 `
-  // to change to V2 with release of `current create model` command (presumably v0.5.6)
-  console.log(outputV1);
+  console.log(output);
 
 }
 
