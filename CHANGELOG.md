@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.2] - 2026-03-21
+
+- skip templates on generation; introduced a flag to regenerate templates
+- rename command create app to init
+- adjusted output for create module command
+- create model command
+- migrate commit fix
+- rework documentation
+
 ## [0.5.1] - 2026-02-28
 
 - fixes pack:
