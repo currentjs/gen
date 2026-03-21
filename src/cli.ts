@@ -11,9 +11,12 @@ import { handleMigrateCommit } from './commands/migrateCommit';
 // import { handleMigratePush } from './commands/migratePush';
 // import { handleMigrateUpdate } from './commands/migrateUpdate';
 
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { version: pkgVersion } = require('../package.json') as { version: string };
+
 function printHelp() {
   const title = colors.bold(colors.brightCyan('currentjs - Clean architecture CLI'));
-  const version = colors.bold(colors.brightCyan('v0.5.1-dev'));
+  const version = colors.bold(colors.brightCyan(`v${pkgVersion}`));
   const usage = colors.bold('Usage:');
   const options = colors.bold('Options:');
   const cmd = (s: string) => colors.green(s);
@@ -38,6 +41,9 @@ ${options}
   ${flag('--with-templates')} ${colors.gray('Regenerate existing HTML templates (new templates are always created)')}
   ${flag('--out')} <dir>     ${colors.gray('[deprecated] Generators now write into each module\'s structure')}
   ${flag('-h, --help')}      ${colors.gray('Show help')}
+  
+${colors.gray('For detailed command reference, development flow and much more, please get familiar with REFERENCE.md')}
+https://github.com/currentjs/gen/blob/master/REFERENCE.md
 `;
   // eslint-disable-next-line no-console
   console.log(help);
