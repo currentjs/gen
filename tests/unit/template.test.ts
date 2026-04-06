@@ -75,4 +75,83 @@ describe('TemplateGenerator', () => {
       expect(listCode).toContain('invoiceList');
     });
   });
+
+  describe('AI module templates (array and union value objects)', () => {
+    const aiTemplateGen = new TemplateGenerator();
+    const config = loadFixture('ai-module.yaml');
+    const result = aiTemplateGen.generateFromConfig(config);
+
+    it('create form renders multi-field array VO (LlmAction[]) as a group with sub-inputs', () => {
+      const code = getCode(result as Record<string, unknown>, 'promptCreate');
+      expect(code).toContain('actions');
+      // Multi-field VO array uses a bordered group
+      expect(code).toContain('border rounded p-2');
+      expect(code).toContain('actions[0].model');
+    });
+
+    it('create form renders single-enum array VO (Tag[]) as checkboxes', () => {
+      const code = getCode(result as Record<string, unknown>, 'promptCreate');
+      expect(code).toContain('type="checkbox"');
+      expect(code).toContain('tags[]');
+    });
+
+    it('create form renders union VO field with type selector', () => {
+      const code = getCode(result as Record<string, unknown>, 'promptCreate');
+      expect(code).toContain('primaryAction');
+      expect(code).toContain('LlmAction');
+      expect(code).toContain('ApiAction');
+    });
+
+    it('create form has data-field-types with json for array VO fields', () => {
+      const code = getCode(result as Record<string, unknown>, 'promptCreate');
+      expect(code).toContain('"actions":"json"');
+      expect(code).toContain('"tags":"json"');
+    });
+
+    it('create form has data-field-types with json for union VO field', () => {
+      const code = getCode(result as Record<string, unknown>, 'promptCreate');
+      expect(code).toContain('"primaryAction":"json"');
+    });
+
+    it('edit form renders single-enum array VO (Tag[]) as checkboxes', () => {
+      const code = getCode(result as Record<string, unknown>, 'promptEdit');
+      expect(code).toContain('type="checkbox"');
+      expect(code).toContain('tags[]');
+    });
+
+    it('edit form renders multi-field array VO (LlmAction[]) as a group', () => {
+      const code = getCode(result as Record<string, unknown>, 'promptEdit');
+      expect(code).toContain('border rounded p-2');
+      expect(code).toContain('actions[0].model');
+    });
+
+    it('list template has x-for and renders prompt items', () => {
+      const code = getCode(result as Record<string, unknown>, 'promptList');
+      expect(code).toContain('x-for');
+      expect(code).toContain('title');
+    });
+
+    it('create form renders array-of-union VO field as a repeatable group with type selector', () => {
+      const code = getCode(result as Record<string, unknown>, 'promptCreate');
+      expect(code).toContain('steps');
+      expect(code).toContain('steps[0]._type');
+      expect(code).toContain('LlmAction');
+      expect(code).toContain('ApiAction');
+    });
+
+    it('create form array-of-union field uses bordered group container', () => {
+      const code = getCode(result as Record<string, unknown>, 'promptCreate');
+      expect(code).toContain('steps-container');
+    });
+
+    it('create form has data-field-types with json for array-of-union VO field', () => {
+      const code = getCode(result as Record<string, unknown>, 'promptCreate');
+      expect(code).toContain('"steps":"json"');
+    });
+
+    it('edit form renders array-of-union VO field with type selector', () => {
+      const code = getCode(result as Record<string, unknown>, 'promptEdit');
+      expect(code).toContain('steps[0]._type');
+    });
+  });
 });

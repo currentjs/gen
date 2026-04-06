@@ -71,4 +71,32 @@ describe('DtoGenerator', () => {
       expect(code).toContain('ProductUpdateInput');
     });
   });
+
+  describe('AI module fixture (array and union value objects)', () => {
+    const aiDtoGen = new DtoGenerator();
+    const config = loadFixture('ai-module.yaml');
+    const result = aiDtoGen.generateFromConfig(config);
+
+    it('Prompt create input has array VO field typed as LlmAction[]', () => {
+      const code = getCode(result as Record<string, unknown>, 'PromptCreate');
+      expect(code).toContain('LlmAction[]');
+    });
+
+    it('Prompt create input has union VO field typed as LlmAction | ApiAction', () => {
+      const code = getCode(result as Record<string, unknown>, 'PromptCreate');
+      expect(code).toContain('LlmAction | ApiAction');
+    });
+
+    it('Prompt create input has no "any" type for VO fields', () => {
+      const code = getCode(result as Record<string, unknown>, 'PromptCreate');
+      expect(code).toNotContain('actions: any');
+      expect(code).toNotContain('primaryAction: any');
+    });
+
+    it('Prompt get output has typed fields (LlmAction[], LlmAction | ApiAction)', () => {
+      const code = getCode(result as Record<string, unknown>, 'PromptGet');
+      expect(code).toContain('LlmAction[]');
+      expect(code).toContain('LlmAction | ApiAction');
+    });
+  });
 });

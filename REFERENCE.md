@@ -461,6 +461,58 @@ Value object fields are stored as JSON strings in the database.
 
 ---
 
+#### Value Object Field Type Syntax
+
+When referencing a value object as an aggregate field type, three syntaxes are supported:
+
+**Single value object** (existing behavior):
+
+```yaml
+fields:
+  price:
+    type: Money        # single Money instance
+```
+
+**Array of value objects** (append `[]`):
+
+```yaml
+fields:
+  actions:
+    type: "LlmAction[]"   # array of LlmAction instances
+```
+
+- TypeScript type: `LlmAction[]`
+- Database column: `JSON` (serialized as a JSON array)
+- Form rendering: checkboxes for single-enum VOs; grouped sub-field inputs for multi-field VOs
+
+**Union of value objects** (separate with ` | `):
+
+```yaml
+fields:
+  handler:
+    type: "LlmAction | ApiAction"   # one of the listed VO types
+```
+
+- TypeScript type: `LlmAction | ApiAction`
+- Database column: `JSON` (serialized with a `_type` discriminator field for deserialization)
+- Form rendering: a type `<select>` followed by sub-field inputs for each VO type
+
+**Array of union value objects** (wrap union in parentheses, append `[]`):
+
+```yaml
+fields:
+  steps:
+    type: "(LlmAction | ApiAction)[]"   # array where each item is one of the listed VO types
+```
+
+- TypeScript type: `(LlmAction | ApiAction)[]`
+- Database column: `JSON` (serialized as a JSON array; each element includes a `_type` discriminator for deserialization)
+- Form rendering: a repeatable group where each item has a type selector (`<select>`) and conditionally-shown sub-fields per VO type
+
+Both compound syntaxes require that all named types are defined in the module's `valueObjects` section. The `type` value must be quoted in YAML when it contains `[]`, `|`, or `()` to avoid parsing ambiguity.
+
+---
+
 ### useCases
 
 Defines the business operations available for each model.
@@ -724,6 +776,8 @@ Additionally, the `type` field can reference:
 
 - Another **aggregate name** -- treated as a foreign key. The domain type becomes the referenced entity class; the store column becomes `<fieldName>Id` of type `number`.
 - A **value object name** -- the domain type becomes the value object class; stored as a JSON string in the database.
+- A **value object name with `[]` suffix** (e.g., `"Money[]"`) -- array of that value object class; stored as a JSON array in the database. TypeScript type: `Money[]`.
+- A **pipe-separated list of value object names** (e.g., `"LlmAction | ApiAction"`) -- union type; stored as JSON with a `_type` discriminator. TypeScript type: `LlmAction | ApiAction`.
 
 ---
 

@@ -5,7 +5,7 @@ import { writeGeneratedFile } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
 import { ModuleConfig, AggregateConfig, ValueObjectConfig, isValidModuleConfig } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
-import { capitalize, mapType as mapTypeUtil, isAggregateReference } from '../utils/typeUtils';
+import { capitalize, mapType as mapTypeUtil, isAggregateReference, getReferencedValueObjects } from '../utils/typeUtils';
 
 export class DomainLayerGenerator {
   private availableAggregates: Set<string> = new Set();
@@ -121,14 +121,13 @@ export class DomainLayerGenerator {
       .map(entityName => `import { ${entityName} } from './${entityName}';`)
       .join('\n');
     
-    // Generate imports for value objects used in fields
-    const valueObjectImports = fields
-      .filter(([, fieldConfig]) => this.availableValueObjects.has(capitalize(fieldConfig.type)))
-      .map(([, fieldConfig]) => {
-        const voName = capitalize(fieldConfig.type);
-        return `import { ${voName} } from '../valueObjects/${voName}';`;
-      })
-      .filter((imp, idx, arr) => arr.indexOf(imp) === idx) // dedupe
+    // Generate imports for value objects used in fields (including compound types like Foo[] and Foo | Bar)
+    const referencedVoNames = new Set<string>();
+    fields.forEach(([, fieldConfig]) => {
+      getReferencedValueObjects(fieldConfig.type, this.availableValueObjects).forEach(name => referencedVoNames.add(name));
+    });
+    const valueObjectImports = [...referencedVoNames]
+      .map(voName => `import { ${voName} } from '../valueObjects/${voName}';`)
       .join('\n');
 
     // Generate imports for aggregate references in fields (e.g. idea: { type: Idea })

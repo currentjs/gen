@@ -5,7 +5,7 @@ import { writeGeneratedFile } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
 import { ModuleConfig, WebPageConfig, AggregateConfig, AggregateFieldConfig, ValueObjectConfig, isValidModuleConfig } from '../types/configTypes';
 import { getChildrenOfParent, ParentChildInfo } from '../utils/childEntityUtils';
-import { capitalize } from '../utils/typeUtils';
+import { capitalize, parseFieldType } from '../utils/typeUtils';
 
 export class TemplateGenerator {
   private valueObjects: Record<string, ValueObjectConfig> = {};
@@ -42,7 +42,12 @@ export class TemplateGenerator {
       .filter(([name]) => name !== 'id')
       .slice(0, 5)
       .map(([name, config]) => {
-        const voConfig = this.valueObjects[capitalize((config.type || 'string'))];
+        const typeStr = (config.type || 'string') as string;
+        const parsed = parseFieldType(typeStr);
+        if (parsed.isArray || parsed.isUnion) {
+          return `      <td>{{ item.${name} }}</td>`;
+        }
+        const voConfig = this.valueObjects[capitalize(typeStr)];
         if (voConfig) {
           const parts = Object.keys(voConfig.fields)
             .map(sub => `{{ item.${name}.${sub} }}`)
@@ -113,12 +118,16 @@ ${fieldCells}
     const fieldEntries = Object.entries(child.childFields).filter(([name]) => name !== 'id').slice(0, 5);
     const headers = fieldEntries.map(([name]) => `      <th>${capitalize(name)}</th>`).join('\n');
     const cells = fieldEntries.map(([name, config]) => {
-      const voConfig = this.valueObjects[capitalize((config?.type || 'string') as string)];
-      if (voConfig) {
-        const parts = Object.keys(voConfig.fields)
-          .map(sub => `{{ childItem.${name}.${sub} }}`)
-          .join(' ');
-        return `      <td>${parts}</td>`;
+      const typeStr = (config?.type || 'string') as string;
+      const parsedType = parseFieldType(typeStr);
+      if (!parsedType.isArray && !parsedType.isUnion) {
+        const voConfig = this.valueObjects[capitalize(typeStr)];
+        if (voConfig) {
+          const parts = Object.keys(voConfig.fields)
+            .map(sub => `{{ childItem.${name}.${sub} }}`)
+            .join(' ');
+          return `      <td>${parts}</td>`;
+        }
       }
       return `      <td>{{ childItem.${name} }}</td>`;
     }).join('\n');
@@ -161,7 +170,15 @@ ${actionLinks}
   ): string {
     const fieldRows = fields
       .map(([name, config]) => {
-        const voConfig = this.valueObjects[capitalize((config.type || 'string'))];
+        const typeStr = (config.type || 'string') as string;
+        const parsed = parseFieldType(typeStr);
+        if (parsed.isArray || parsed.isUnion) {
+          return `  <div class="row mb-2">
+    <div class="col-4"><strong>${capitalize(name)}:</strong></div>
+    <div class="col-8">{{ ${name} }}</div>
+  </div>`;
+        }
+        const voConfig = this.valueObjects[capitalize(typeStr)];
         if (voConfig) {
           const parts = Object.keys(voConfig.fields)
             .map(sub => `{{ ${name}.${sub} }}`)
@@ -203,6 +220,17 @@ ${fieldRows}
     return JSON.stringify(
       safeFields.reduce((acc, [name, config]) => {
         const typeStr = typeof config?.type === 'string' ? config.type : 'string';
+        const parsed = parseFieldType(typeStr);
+
+        // Array or union of VOs → stored as JSON, emit single "json" entry
+        if (parsed.isArray || parsed.isUnion) {
+          const anyVoReferenced = parsed.baseTypes.some(bt => this.valueObjects[capitalize(bt)]);
+          if (anyVoReferenced) {
+            acc[name] = 'json';
+            return acc;
+          }
+        }
+
         const capitalizedType = capitalize(typeStr);
         const voConfig = this.valueObjects[capitalizedType];
         if (voConfig) {
@@ -343,12 +371,205 @@ ${columns}
   </div>`;
   }
 
+  /**
+   * Render an array-of-VOs field as checkboxes.
+   * If the VO has a single enum field: one checkbox per enum value.
+   * If the VO has multiple / non-enum fields: one labeled checkbox group per VO subfield.
+   */
+  private renderArrayVoField(name: string, label: string, voName: string, voConfig: ValueObjectConfig, isEdit: boolean): string {
+    const subFields = Object.entries(voConfig.fields);
+
+    // Single enum field: render one checkbox per enum value
+    if (subFields.length === 1) {
+      const [subName, subConfig] = subFields[0];
+      if (typeof subConfig === 'object' && 'values' in subConfig) {
+        const uniqueValues = [...new Set(subConfig.values)];
+        const checkboxes = uniqueValues.map(v => {
+          const checkedExpr = isEdit ? ` {{ (${name} || []).some(function(item){ return item.${subName} === '${v}'; }) ? 'checked' : '' }}` : '';
+          return `      <div class="form-check form-check-inline">
+        <input type="checkbox" class="form-check-input" name="${name}[]" value="${v}"${checkedExpr}>
+        <label class="form-check-label">${v}</label>
+      </div>`;
+        }).join('\n');
+        return `  <div class="mb-3">
+    <label class="form-label">${label}</label>
+    <div>
+${checkboxes}
+    </div>
+  </div>`;
+      }
+    }
+
+    // Multi-field VO: render a repeatable entry group with one checkbox-style row per sub-field
+    const subInputs = subFields.map(([subName, subConfig]) => {
+      const subLabel = capitalize(subName);
+      if (typeof subConfig === 'object' && 'values' in subConfig) {
+        const uniqueValues = [...new Set(subConfig.values)];
+        const options = uniqueValues.map(v => `<option value="${v}">${v}</option>`).join('');
+        return `        <div class="col-auto">
+          <label class="form-label">${subLabel}</label>
+          <select class="form-select form-select-sm" name="${name}[0].${subName}"><option value="">--</option>${options}</select>
+        </div>`;
+      }
+      const inputType = this.getInputType((subConfig as { type: string }).type);
+      return `        <div class="col">
+          <label class="form-label">${subLabel}</label>
+          <input type="${inputType}" class="form-control form-control-sm" name="${name}[0].${subName}" placeholder="${subLabel}">
+        </div>`;
+    }).join('\n');
+
+    return `  <div class="mb-3">
+    <label class="form-label">${label}</label>
+    <div class="border rounded p-2">
+      <div class="row g-2 align-items-end">
+${subInputs}
+      </div>
+      <small class="text-muted">Add multiple ${voName} entries as needed.</small>
+    </div>
+  </div>`;
+  }
+
+  /**
+   * Render a union-of-VOs field as a type selector with sub-fields for each VO type.
+   */
+  private renderUnionVoField(name: string, label: string, unionVoNames: string[], isEdit: boolean): string {
+    const typeOptions = unionVoNames.map(voName => {
+      const sel = isEdit ? ` {{ ${name}._type === '${voName}' ? 'selected' : '' }}` : '';
+      return `      <option value="${voName}"${sel}>${voName}</option>`;
+    }).join('\n');
+
+    const subFieldGroups = unionVoNames.map(voName => {
+      const voConfig = this.valueObjects[voName];
+      if (!voConfig) return '';
+      const subInputs = Object.entries(voConfig.fields).map(([subName, subConfig]) => {
+        const subLabel = capitalize(subName);
+        const fullName = `${name}.${subName}`;
+        if (typeof subConfig === 'object' && 'values' in subConfig) {
+          const uniqueValues = [...new Set(subConfig.values)];
+          const options = uniqueValues.map(v => {
+            const sel = isEdit ? ` {{ ${name}.${subName} === '${v}' ? 'selected' : '' }}` : '';
+            return `            <option value="${v}"${sel}>${v}</option>`;
+          }).join('\n');
+          return `        <div class="col-auto">
+          <label class="form-label">${subLabel}</label>
+          <select class="form-select" id="${fullName}" name="${fullName}">
+            <option value="">-- ${subLabel} --</option>
+${options}
+          </select>
+        </div>`;
+        }
+        const inputType = this.getInputType((subConfig as { type: string }).type);
+        const value = isEdit ? ` value="{{ ${name}.${subName} || '' }}"` : '';
+        return `        <div class="col">
+          <label class="form-label">${subLabel}</label>
+          <input type="${inputType}" class="form-control" id="${fullName}" name="${fullName}" placeholder="${subLabel}"${value}>
+        </div>`;
+      }).join('\n');
+
+      return `      <div class="${name}-fields-${voName}">
+        <div class="row g-2">
+${subInputs}
+        </div>
+      </div>`;
+    }).join('\n');
+
+    return `  <div class="mb-3">
+    <label for="${name}_type" class="form-label">${label} Type</label>
+    <select class="form-select mb-2" id="${name}_type" name="${name}._type">
+      <option value="">-- Select type --</option>
+${typeOptions}
+    </select>
+${subFieldGroups}
+  </div>`;
+  }
+
+  /**
+   * Render an array-of-union-VOs field as a repeatable group where each item
+   * has a type selector and conditionally-shown sub-fields per VO type.
+   */
+  private renderArrayUnionVoField(name: string, label: string, unionVoNames: string[], isEdit: boolean): string {
+    const typeOptions = unionVoNames.map(voName => {
+      return `          <option value="${voName}">${voName}</option>`;
+    }).join('\n');
+
+    const subFieldGroups = unionVoNames.map(voName => {
+      const voConfig = this.valueObjects[voName];
+      if (!voConfig) return '';
+      const subInputs = Object.entries(voConfig.fields).map(([subName, subConfig]) => {
+        const subLabel = capitalize(subName);
+        const fullName = `${name}[0].${subName}`;
+        if (typeof subConfig === 'object' && 'values' in subConfig) {
+          const uniqueValues = [...new Set(subConfig.values)];
+          const options = uniqueValues.map(v => `<option value="${v}">${v}</option>`).join('');
+          return `          <div class="col-auto">
+            <label class="form-label">${subLabel}</label>
+            <select class="form-select form-select-sm" name="${fullName}"><option value="">--</option>${options}</select>
+          </div>`;
+        }
+        const inputType = this.getInputType((subConfig as { type: string }).type);
+        return `          <div class="col">
+            <label class="form-label">${subLabel}</label>
+            <input type="${inputType}" class="form-control form-control-sm" name="${fullName}" placeholder="${subLabel}">
+          </div>`;
+      }).join('\n');
+
+      return `        <div class="${name}-fields-${voName}">
+          <div class="row g-2">
+${subInputs}
+          </div>
+        </div>`;
+    }).join('\n');
+
+    const editHint = isEdit ? ` <!-- existing items rendered server-side -->` : '';
+    return `  <div class="mb-3">
+    <label class="form-label">${label}</label>
+    <div class="border rounded p-2" id="${name}-container">${editHint}
+      <div class="${name}-entry mb-2">
+        <select class="form-select form-select-sm mb-1" name="${name}[0]._type">
+          <option value="">-- Select type --</option>
+${typeOptions}
+        </select>
+${subFieldGroups}
+      </div>
+    </div>
+    <small class="text-muted">Add multiple ${label} entries as needed.</small>
+  </div>`;
+  }
+
   private renderFormField(name: string, config: any, enumValues: string[] = [], isEdit = false): string {
     const required = config.required ? 'required' : '';
     const label = capitalize(name);
-    const fieldType = (config.type || 'string').toLowerCase();
+    const fieldType = (config.type || 'string') as string;
 
-    const capitalizedType = capitalize(fieldType);
+    const parsed = parseFieldType(fieldType);
+
+    // Array of union of value objects
+    if (parsed.isArray && parsed.isUnion) {
+      const unionVoNames = parsed.baseTypes.map(bt => capitalize(bt)).filter(n => this.valueObjects[n]);
+      if (unionVoNames.length > 0) {
+        return this.renderArrayUnionVoField(name, label, unionVoNames, isEdit);
+      }
+    }
+
+    // Array of value objects
+    if (parsed.isArray) {
+      const voName = capitalize(parsed.baseTypes[0]);
+      const voConfig = this.valueObjects[voName];
+      if (voConfig) {
+        return this.renderArrayVoField(name, label, voName, voConfig, isEdit);
+      }
+    }
+
+    // Union of value objects
+    if (parsed.isUnion) {
+      const unionVoNames = parsed.baseTypes.map(bt => capitalize(bt)).filter(n => this.valueObjects[n]);
+      if (unionVoNames.length > 0) {
+        return this.renderUnionVoField(name, label, unionVoNames, isEdit);
+      }
+    }
+
+    // Simple value object
+    const capitalizedType = capitalize(fieldType.toLowerCase());
     const voConfig = this.valueObjects[capitalizedType];
     if (voConfig) {
       return this.renderValueObjectField(name, label, voConfig, required, isEdit);

@@ -1,0 +1,185 @@
+domain:
+  aggregates:
+    Prompt:
+      root: true
+      fields:
+        title:
+          type: string
+          required: true
+        content:
+          type: string
+          required: true
+        # Array of value objects with multiple fields: "LlmAction[]"
+        actions:
+          type: "LlmAction[]"
+          required: false
+        # Array of value objects with single enum field: "Tag[]" (renders as checkboxes)
+        tags:
+          type: "Tag[]"
+          required: false
+        # Union of value objects: "LlmAction | ApiAction"
+        primaryAction:
+          type: "LlmAction | ApiAction"
+          required: false
+        # Array of union of value objects: "(LlmAction | ApiAction)[]"
+        steps:
+          type: "(LlmAction | ApiAction)[]"
+          required: false
+        # Single (existing) value object for regression
+        config:
+          type: PromptConfig
+          required: false
+
+  valueObjects:
+    LlmAction:
+      fields:
+        model:
+          type: string
+        temperature:
+          type: decimal
+          constraints:
+            min: 0
+            max: 2
+
+    ApiAction:
+      fields:
+        url:
+          type: string
+        method:
+          type: enum
+          values: ['GET', 'POST', 'PUT', 'DELETE']
+
+    Tag:
+      fields:
+        name:
+          type: enum
+          values: ['ai', 'coding', 'writing', 'research']
+
+    PromptConfig:
+      fields:
+        maxTokens:
+          type: number
+        language:
+          type: string
+
+useCases:
+  Prompt:
+    list:
+      input:
+        pagination:
+          type: offset
+          defaults:
+            limit: 20
+            maxLimit: 100
+      output:
+        from: Prompt
+        pick: [id, title, content]
+        pagination: true
+      handlers:
+        - default:list
+
+    get:
+      input:
+        identifier: id
+      output:
+        from: Prompt
+      handlers:
+        - default:get
+
+    create:
+      input:
+        from: Prompt
+        pick: [title, content, actions, tags, primaryAction, steps, config]
+      output:
+        from: Prompt
+      handlers:
+        - default:create
+
+    update:
+      input:
+        identifier: id
+        from: Prompt
+        partial: true
+        pick: [title, content, actions, tags, primaryAction, steps, config]
+      output:
+        from: Prompt
+      handlers:
+        - default:update
+
+    delete:
+      input:
+        identifier: id
+      output: void
+      handlers:
+        - default:delete
+
+api:
+  Prompt:
+    prefix: /api/prompt
+    endpoints:
+      - method: GET
+        path: /
+        useCase: Prompt:list
+        auth: all
+
+      - method: GET
+        path: /:id
+        useCase: Prompt:get
+        auth: all
+
+      - method: POST
+        path: /
+        useCase: Prompt:create
+        auth: authenticated
+
+      - method: PUT
+        path: /:id
+        useCase: Prompt:update
+        auth: owner
+
+      - method: DELETE
+        path: /:id
+        useCase: Prompt:delete
+        auth: admin
+
+web:
+  Prompt:
+    prefix: /prompt
+    layout: main_view
+    pages:
+      - path: /
+        useCase: Prompt:list
+        view: promptList
+        auth: all
+
+      - path: /:id
+        useCase: Prompt:get
+        view: promptDetail
+        auth: all
+
+      - path: /create
+        method: GET
+        view: promptCreate
+        auth: authenticated
+
+      - path: /create
+        method: POST
+        useCase: Prompt:create
+        auth: authenticated
+        onSuccess:
+          redirect: /prompt/:id
+          toast: Prompt created successfully
+
+      - path: /:id/edit
+        method: GET
+        useCase: Prompt:get
+        view: promptEdit
+        auth: owner
+
+      - path: /:id/edit
+        method: POST
+        useCase: Prompt:update
+        auth: owner
+        onSuccess:
+          back: true
+          toast: Prompt updated successfully

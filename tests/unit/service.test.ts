@@ -135,3 +135,37 @@ describe('Product service (default handlers only)', () => {
     expect(productService).toContain('.count(ownerId)');
   });
 });
+
+describe('ServiceGenerator - AI module (array and union value objects)', () => {
+  const aiServiceGen = new ServiceGenerator();
+  const config = loadFixture('ai-module.yaml');
+  const result = aiServiceGen.generateFromConfig(config);
+  const promptService = getCode(result as Record<string, unknown>, 'Prompt');
+
+  it('create handler passes array VO field directly from input (no wrapping)', () => {
+    expect(promptService).toContain('input.actions');
+    expect(promptService).toNotContain('{ id: input.actions }');
+  });
+
+  it('create handler passes union VO field directly from input (no wrapping)', () => {
+    expect(promptService).toContain('input.primaryAction');
+    expect(promptService).toNotContain('{ id: input.primaryAction }');
+  });
+
+  it('update handler sets array VO field via setter', () => {
+    expect(promptService).toContain('setActions(');
+    expect(promptService).toContain('input.actions');
+  });
+
+  it('update handler sets union VO field via setter', () => {
+    expect(promptService).toContain('setPrimaryAction(');
+    expect(promptService).toContain('input.primaryAction');
+  });
+
+  it('has standard CRUD handlers', () => {
+    expect(promptService).toContain('async list(');
+    expect(promptService).toContain('async create(');
+    expect(promptService).toContain('async update(');
+    expect(promptService).toContain('async delete(');
+  });
+});
