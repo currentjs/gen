@@ -12,6 +12,7 @@ export interface ClassInfo {
   isController: boolean;
   isInjectable: boolean;
   constructorParams: ConstructorParam[];
+  implementedInterfaces: string[];
 }
 
 export interface InstantiationStep {
@@ -25,6 +26,7 @@ export interface InstantiationStep {
 const INJECTABLE_RE = /@Injectable\s*\(/;
 const CONTROLLER_RE = /@Controller\s*\(/;
 const EXPORT_CLASS_RE = /export\s+class\s+(\w+)/;
+const IMPLEMENTS_RE = /\bimplements\s+([^{]+)/;
 const CONSTRUCTOR_PARAMS_RE = /constructor\s*\(([^)]*)\)/s;
 const PARAM_RE = /(?:private|protected|public)\s+(\w+)\s*:\s*([A-Za-z_]\w*)/g;
 
@@ -57,7 +59,12 @@ export function parseClassFile(filePath: string): ClassInfo | null {
     }
   }
 
-  return { className, filePath, isController, isInjectable, constructorParams };
+  const implMatch = content.match(IMPLEMENTS_RE);
+  const implementedInterfaces = implMatch
+    ? implMatch[1].split(',').map(s => s.trim().replace(/<[^>]*>/g, '').trim()).filter(Boolean)
+    : [];
+
+  return { className, filePath, isController, isInjectable, constructorParams, implementedInterfaces };
 }
 
 function walkTsFiles(dir: string): string[] {
@@ -132,7 +139,7 @@ export function buildInstantiationOrder(
 
     const constructorArgs: string[] = [];
     for (const param of cls.constructorParams) {
-      if (classProviderVar.has(className) && providerVarByType.has(param.type)) {
+      if (classProviderVar.has(className) && param.type === 'ISqlProvider') {
         constructorArgs.push(classProviderVar.get(className)!);
       } else if (providerVarByType.has(param.type)) {
         constructorArgs.push(providerVarByType.get(param.type)!);
