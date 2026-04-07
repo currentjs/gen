@@ -65,11 +65,11 @@ describe('Integration: aggregate references (Review -> Book -> Author) compile c
 
     // Stores use FK columns
     const bookStore = fs.readFileSync(path.join(src, 'modules', 'Library', 'infrastructure', 'stores', 'BookStore.ts'), 'utf8');
-    assert.ok(bookStore.includes('author_id'), 'BookStore uses author_id FK column');
+    assert.ok(bookStore.includes('authorId'), 'BookStore uses author_id FK column');
     assert.ok(bookStore.includes("import { Author }"), 'BookStore imports Author for stub mapping');
 
     const reviewStore = fs.readFileSync(path.join(src, 'modules', 'Library', 'infrastructure', 'stores', 'ReviewStore.ts'), 'utf8');
-    assert.ok(reviewStore.includes('book_id'), 'ReviewStore uses book_id FK column');
+    assert.ok(reviewStore.includes('bookId'), 'ReviewStore uses book_id FK column');
     assert.ok(reviewStore.includes("import { Book }"), 'ReviewStore imports Book for stub mapping');
 
     // Book store handles enum genre field
