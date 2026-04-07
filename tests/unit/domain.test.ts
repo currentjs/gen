@@ -68,4 +68,63 @@ describe('DomainLayerGenerator', () => {
       expect(code).toContain('tags?');
     });
   });
+
+  describe('AI module fixture (array and union value objects)', () => {
+    const aiGen = new DomainLayerGenerator();
+    const config = loadFixture('ai-module.yaml');
+    const result = aiGen.generateFromConfig(config);
+
+    it('generates Prompt entity with array VO field typed as LlmAction[]', () => {
+      const code = getCode(result as Record<string, unknown>, 'Prompt');
+      expect(code).toContain('actions?: LlmAction[]');
+    });
+
+    it('generates Prompt entity with union VO field typed as LlmAction | ApiAction', () => {
+      const code = getCode(result as Record<string, unknown>, 'Prompt');
+      expect(code).toContain('primaryAction?: LlmAction | ApiAction');
+    });
+
+    it('generates Prompt entity with single VO field typed as PromptConfig', () => {
+      const code = getCode(result as Record<string, unknown>, 'Prompt');
+      expect(code).toContain('config?: PromptConfig');
+    });
+
+    it('Prompt entity imports LlmAction value object', () => {
+      const code = getCode(result as Record<string, unknown>, 'Prompt');
+      expect(code).toContain("from '../valueObjects/LlmAction'");
+    });
+
+    it('Prompt entity imports ApiAction value object', () => {
+      const code = getCode(result as Record<string, unknown>, 'Prompt');
+      expect(code).toContain("from '../valueObjects/ApiAction'");
+    });
+
+    it('Prompt entity imports PromptConfig value object', () => {
+      const code = getCode(result as Record<string, unknown>, 'Prompt');
+      expect(code).toContain("from '../valueObjects/PromptConfig'");
+    });
+
+    it('generates LlmAction value object with correct fields', () => {
+      const code = getCode(result as Record<string, unknown>, 'LlmAction');
+      expect(code).toContain('model: string');
+      expect(code).toContain('temperature: number');
+    });
+
+    it('generates ApiAction value object with enum method field', () => {
+      const code = getCode(result as Record<string, unknown>, 'ApiAction');
+      expect(code).toContain('url: string');
+      expect(code).toMatch(/GET.*POST.*PUT.*DELETE|ApiActionMethod/);
+    });
+
+    it('generates Prompt entity with array-of-union VO field typed as (LlmAction | ApiAction)[]', () => {
+      const code = getCode(result as Record<string, unknown>, 'Prompt');
+      expect(code).toContain('steps?: (LlmAction | ApiAction)[]');
+    });
+
+    it('Prompt entity imports both LlmAction and ApiAction for the array-of-union field', () => {
+      const code = getCode(result as Record<string, unknown>, 'Prompt');
+      expect(code).toContain("from '../valueObjects/LlmAction'");
+      expect(code).toContain("from '../valueObjects/ApiAction'");
+    });
+  });
 });

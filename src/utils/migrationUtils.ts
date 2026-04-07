@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { AggregateConfig, AggregateFieldConfig } from '../types/configTypes';
+import { parseFieldType } from './typeUtils';
 
 export interface SchemaState {
   aggregates: Record<string, AggregateConfig>;
@@ -39,10 +40,23 @@ const TYPE_MAPPING: Record<string, string> = {
   object: 'JSON'
 };
 
-export function mapYamlTypeToSql(yamlType: string, availableAggregates: Set<string>): string {
+export function mapYamlTypeToSql(yamlType: string, availableAggregates: Set<string>, availableValueObjects?: Set<string>): string {
+  // Simple aggregate reference → foreign key INT
   if (availableAggregates.has(yamlType)) {
     return 'INT';
   }
+
+  // Compound types: array ("Foo[]") or union ("Foo | Bar") → JSON column
+  const parsed = parseFieldType(yamlType);
+  if (parsed.isArray || parsed.isUnion) {
+    return 'JSON';
+  }
+
+  // Named value object → stored as JSON
+  if (availableValueObjects && availableValueObjects.has(yamlType)) {
+    return 'JSON';
+  }
+
   return TYPE_MAPPING[yamlType] || 'VARCHAR(255)';
 }
 

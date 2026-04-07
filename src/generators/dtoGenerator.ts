@@ -12,7 +12,7 @@ import {
   isValidModuleConfig 
 } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
-import { capitalize, mapType as mapTypeUtil, isAggregateReference } from '../utils/typeUtils';
+import { capitalize, mapType as mapTypeUtil, isAggregateReference, getReferencedValueObjects, isValueObjectFieldType } from '../utils/typeUtils';
 
 export class DtoGenerator {
   private availableAggregates: Map<string, AggregateConfig> = new Map();
@@ -23,8 +23,7 @@ export class DtoGenerator {
   }
 
   private isValueObjectType(yamlType: string): boolean {
-    const capitalizedType = capitalize(yamlType);
-    return this.availableValueObjects.has(capitalizedType);
+    return isValueObjectFieldType(yamlType, this.availableValueObjects);
   }
 
   private getValidationCode(fieldName: string, fieldType: string, isRequired: boolean): string[] {
@@ -464,11 +463,11 @@ ${mappingsStr}
         );
       }
 
-      // Check each field for value object types
+      // Check each field for value object types (including compound types like Foo[] and Foo | Bar)
       fieldsToCheck.forEach(([, fieldConfig]) => {
-        if (this.isValueObjectType(fieldConfig.type)) {
-          valueObjects.add(capitalize(fieldConfig.type));
-        }
+        getReferencedValueObjects(fieldConfig.type, this.availableValueObjects).forEach(voName => {
+          valueObjects.add(voName);
+        });
       });
     }
 

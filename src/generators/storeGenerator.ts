@@ -6,7 +6,7 @@ import { colors } from '../utils/colors';
 import { ModuleConfig, AggregateConfig, AggregateFieldConfig, ValueObjectConfig, isValidModuleConfig } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
 import { storeTemplates, storeFileTemplate } from './templates/storeTemplates';
-import { capitalize, mapRowType, isAggregateReference } from '../utils/typeUtils';
+import { capitalize, mapRowType, isAggregateReference, parseFieldType, getReferencedValueObjects } from '../utils/typeUtils';
 
 export class StoreGenerator {
   private availableValueObjects: Map<string, ValueObjectConfig> = new Map();
@@ -17,8 +17,18 @@ export class StoreGenerator {
   }
 
   private isValueObjectType(fieldType: string): boolean {
-    const capitalizedType = capitalize(fieldType);
-    return this.availableValueObjects.has(capitalizedType);
+    const { baseTypes } = parseFieldType(fieldType);
+    return baseTypes.some(bt => this.availableValueObjects.has(capitalize(bt)));
+  }
+
+  private isArrayVoType(fieldType: string): boolean {
+    const parsed = parseFieldType(fieldType);
+    return parsed.isArray && parsed.baseTypes.some(bt => this.availableValueObjects.has(capitalize(bt)));
+  }
+
+  private isUnionVoType(fieldType: string): boolean {
+    const parsed = parseFieldType(fieldType);
+    return parsed.isUnion && parsed.baseTypes.some(bt => this.availableValueObjects.has(capitalize(bt)));
   }
 
   private getValueObjectName(fieldType: string): string {
@@ -82,6 +92,20 @@ export class StoreGenerator {
     return `      ${fieldName}: entity.${fieldName} ? JSON.stringify(entity.${fieldName}) : undefined`;
   }
 
+  /** Serialization for an array-of-VOs field. */
+  private generateArrayVoSerialization(fieldName: string): string {
+    return `      ${fieldName}: entity.${fieldName} ? JSON.stringify(entity.${fieldName}) : undefined`;
+  }
+
+  /** Serialization for a union-of-VOs field. Uses _type discriminator. */
+  private generateUnionVoSerialization(fieldName: string, unionVoNames: string[]): string {
+    const checks = unionVoNames
+      .map(voName => `entity.${fieldName} instanceof ${voName} ? '${voName}'`)
+      .join(' : ');
+    const discriminator = `${checks} : 'unknown'`;
+    return `      ${fieldName}: entity.${fieldName} ? JSON.stringify({ _type: ${discriminator}, ...entity.${fieldName} }) : undefined`;
+  }
+
   /** Single line for deserializing a value object from row (rowToModel). */
   private generateValueObjectDeserialization(
     fieldName: string,
@@ -103,6 +127,62 @@ export class StoreGenerator {
       return `      row.${fieldName} ? new ${voName}(row.${fieldName}) : undefined`;
     }
     return `      row.${fieldName} ? new ${voName}(...Object.values(JSON.parse(row.${fieldName}))) : undefined`;
+  }
+
+  /** Deserialization for an array-of-VOs field. */
+  private generateArrayVoDeserialization(
+    fieldName: string,
+    voName: string,
+    voConfig: ValueObjectConfig
+  ): string {
+    const voFields = Object.keys(voConfig.fields);
+    const itemArgs = voFields.length > 0
+      ? voFields.map(f => `item.${f}`).join(', ')
+      : '...Object.values(item)';
+    return `      row.${fieldName} ? (JSON.parse(row.${fieldName}) as any[]).map((item: any) => new ${voName}(${itemArgs})) : []`;
+  }
+
+  /** Deserialization for a union-of-VOs field. Uses _type discriminator. */
+  private generateUnionVoDeserialization(
+    fieldName: string,
+    unionVoNames: string[],
+    unionVoConfigs: Record<string, ValueObjectConfig>
+  ): string {
+    const cases = unionVoNames.map(voName => {
+      const cfg = unionVoConfigs[voName];
+      const voFields = cfg ? Object.keys(cfg.fields) : [];
+      const args = voFields.length > 0
+        ? voFields.map(f => `parsed.${f}`).join(', ')
+        : '...Object.values(parsed)';
+      return `if (parsed._type === '${voName}') return new ${voName}(${args});`;
+    }).join(' ');
+    return `      row.${fieldName} ? (() => { const parsed = JSON.parse(row.${fieldName}); ${cases} return undefined; })() : undefined`;
+  }
+
+  /** Serialization for an array-of-union-VOs field. Each element tagged with _type discriminator. */
+  private generateArrayUnionVoSerialization(fieldName: string, unionVoNames: string[]): string {
+    const checks = unionVoNames
+      .map(voName => `item instanceof ${voName} ? '${voName}'`)
+      .join(' : ');
+    const discriminator = `${checks} : 'unknown'`;
+    return `      ${fieldName}: entity.${fieldName} ? JSON.stringify(entity.${fieldName}.map((item: any) => ({ _type: ${discriminator}, ...item }))) : undefined`;
+  }
+
+  /** Deserialization for an array-of-union-VOs field. Each element reconstructed via _type. */
+  private generateArrayUnionVoDeserialization(
+    fieldName: string,
+    unionVoNames: string[],
+    unionVoConfigs: Record<string, ValueObjectConfig>
+  ): string {
+    const cases = unionVoNames.map(voName => {
+      const cfg = unionVoConfigs[voName];
+      const voFields = cfg ? Object.keys(cfg.fields) : [];
+      const args = voFields.length > 0
+        ? voFields.map(f => `item.${f}`).join(', ')
+        : '...Object.values(item)';
+      return `if (item._type === '${voName}') return new ${voName}(${args});`;
+    }).join(' ');
+    return `      row.${fieldName} ? (JSON.parse(row.${fieldName}) as any[]).map((item: any) => { ${cases} return undefined; }) : []`;
   }
 
   /** Single line for datetime conversion: toDate (row->model) or toMySQL (entity->row). */
@@ -182,8 +262,39 @@ export class StoreGenerator {
         return;
       }
       
-      // Handle value object conversion - deserialize from JSON
+      // Handle value object conversion - deserialize from JSON (simple, array, union, or array-of-union)
       if (this.isValueObjectType(fieldType)) {
+        const parsed = parseFieldType(fieldType);
+
+        if (parsed.isArray && parsed.isUnion) {
+          const unionVoNames = parsed.baseTypes.map(bt => capitalize(bt)).filter(name => this.availableValueObjects.has(name));
+          const unionVoConfigs: Record<string, ValueObjectConfig> = {};
+          unionVoNames.forEach(name => {
+            const cfg = this.availableValueObjects.get(name);
+            if (cfg) unionVoConfigs[name] = cfg;
+          });
+          result.push(this.generateArrayUnionVoDeserialization(fieldName, unionVoNames, unionVoConfigs));
+          return;
+        }
+
+        if (parsed.isArray) {
+          const voName = capitalize(parsed.baseTypes[0]);
+          const voConfig = this.availableValueObjects.get(voName);
+          result.push(this.generateArrayVoDeserialization(fieldName, voName, voConfig || { fields: {} }));
+          return;
+        }
+
+        if (parsed.isUnion) {
+          const unionVoNames = parsed.baseTypes.map(bt => capitalize(bt)).filter(name => this.availableValueObjects.has(name));
+          const unionVoConfigs: Record<string, ValueObjectConfig> = {};
+          unionVoNames.forEach(name => {
+            const cfg = this.availableValueObjects.get(name);
+            if (cfg) unionVoConfigs[name] = cfg;
+          });
+          result.push(this.generateUnionVoDeserialization(fieldName, unionVoNames, unionVoConfigs));
+          return;
+        }
+
         const voName = this.getValueObjectName(fieldType);
         const voConfig = this.getValueObjectConfig(fieldType);
         if (voConfig) {
@@ -221,8 +332,27 @@ export class StoreGenerator {
         return;
       }
       
-      // Handle value object - serialize to JSON
+      // Handle value object - serialize to JSON (simple, array, union, or array-of-union)
       if (this.isValueObjectType(fieldType)) {
+        const parsed = parseFieldType(fieldType);
+
+        if (parsed.isArray && parsed.isUnion) {
+          const unionVoNames = parsed.baseTypes.map(bt => capitalize(bt)).filter(name => this.availableValueObjects.has(name));
+          result.push(this.generateArrayUnionVoSerialization(fieldName, unionVoNames));
+          return;
+        }
+
+        if (parsed.isArray) {
+          result.push(this.generateArrayVoSerialization(fieldName));
+          return;
+        }
+
+        if (parsed.isUnion) {
+          const unionVoNames = parsed.baseTypes.map(bt => capitalize(bt)).filter(name => this.availableValueObjects.has(name));
+          result.push(this.generateUnionVoSerialization(fieldName, unionVoNames));
+          return;
+        }
+
         const voConfig = this.getValueObjectConfig(fieldType);
         if (voConfig) {
           result.push(this.generateValueObjectSerialization(fieldName, this.getValueObjectName(fieldType), voConfig));
@@ -249,6 +379,22 @@ export class StoreGenerator {
           return this.generateDatetimeConversion(fieldName, 'toMySQL');
         }
         if (this.isValueObjectType(fieldType)) {
+          const parsed = parseFieldType(fieldType);
+
+          if (parsed.isArray && parsed.isUnion) {
+            const unionVoNames = parsed.baseTypes.map(bt => capitalize(bt)).filter(name => this.availableValueObjects.has(name));
+            return this.generateArrayUnionVoSerialization(fieldName, unionVoNames);
+          }
+
+          if (parsed.isArray) {
+            return this.generateArrayVoSerialization(fieldName);
+          }
+
+          if (parsed.isUnion) {
+            const unionVoNames = parsed.baseTypes.map(bt => capitalize(bt)).filter(name => this.availableValueObjects.has(name));
+            return this.generateUnionVoSerialization(fieldName, unionVoNames);
+          }
+
           const voConfig = this.getValueObjectConfig(fieldType);
           if (voConfig) {
             return this.generateValueObjectSerialization(fieldName, this.getValueObjectName(fieldType), voConfig);
@@ -266,34 +412,29 @@ export class StoreGenerator {
 
   private generateValueObjectImports(fields: [string, AggregateFieldConfig][]): string {
     const imports: string[] = [];
-    
+
     fields.forEach(([, fieldConfig]) => {
-      if (this.isValueObjectType(fieldConfig.type)) {
-        const voName = this.getValueObjectName(fieldConfig.type);
-        const voConfig = this.getValueObjectConfig(fieldConfig.type);
-        
-        // Import the class
+      if (!this.isValueObjectType(fieldConfig.type)) return;
+
+      // Collect all VO names referenced in this field type (handles Foo[], Foo | Bar)
+      const referencedVoNames = getReferencedValueObjects(fieldConfig.type, this.availableValueObjects);
+
+      referencedVoNames.forEach(voName => {
+        const voConfig = this.availableValueObjects.get(voName);
         const importItems = [voName];
-        
-        // Also import the type if it's an enum
-        if (voConfig) {
+
+        // Also import enum type alias if present (only for simple single-VO fields)
+        if (voConfig && !parseFieldType(fieldConfig.type).isArray && !parseFieldType(fieldConfig.type).isUnion) {
           const enumTypeName = this.getValueObjectFieldTypeName(voName, voConfig);
-          if (enumTypeName) {
-            importItems.push(enumTypeName);
-          }
+          if (enumTypeName) importItems.push(enumTypeName);
         }
-        
+
         imports.push(`import { ${importItems.join(', ')} } from '../../domain/valueObjects/${voName}';`);
-      }
+      });
     });
-    
-    // Dedupe imports
+
     const uniqueImports = [...new Set(imports)];
-    
-    if (uniqueImports.length === 0) {
-      return '';
-    }
-    
+    if (uniqueImports.length === 0) return '';
     return '\n' + uniqueImports.join('\n');
   }
 
