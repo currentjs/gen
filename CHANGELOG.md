@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.5] - 2026-04-07
+
+- data access layer generation fixes and improvements
+
 ## [0.5.4] - 2026-04-07
 
 - Array and union value objects
