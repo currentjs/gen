@@ -184,14 +184,41 @@ export async function handleGenerateAll(
       const providerVarByType = new Map<string, string>();
       providerVarByType.set('ISqlProvider', dbVarByKey[allDatabaseKeys[0]] ?? 'dbMysql');
 
+      // Scan local providers and register their class names + implemented interfaces
+      const providerCastLines: string[] = [];
+      if (providersConfig) {
+        const GENERIC_INTERFACES = new Set(['IProvider', 'ISqlProvider']);
+        for (const [provName, mod] of Object.entries(providersConfig)) {
+          if (!mod || typeof mod !== 'string') continue;
+          const isLocal = mod.startsWith('.') || mod.startsWith('/');
+          if (!isLocal) continue;
+
+          const providerDir = path.resolve(srcDir, mod);
+          const providerClasses = scanModuleClasses(providerDir);
+
+          for (const cls of providerClasses) {
+            const varName = provName.charAt(0).toLowerCase() + provName.slice(1);
+            providerVarByType.set(cls.className, varName);
+            for (const iface of cls.implementedInterfaces) {
+              if (!GENERIC_INTERFACES.has(iface)) {
+                providerVarByType.set(iface, varName);
+              }
+            }
+            providerCastLines.push(
+              `const ${varName} = providers['${provName}'] as ${cls.className};`
+            );
+          }
+        }
+      }
+
       // Per-class provider var: map each class to its module's database variable
       const classProviderVar = new Map<string, string>();
       for (const scan of moduleScans) {
         const dbVar = dbVarByKey[scan.databaseKey] ?? dbVarByKey[Object.keys(dbVarByKey)[0]];
         const classes = allClasses.filter(c => c.filePath.startsWith(scan.moduleDir + path.sep));
         for (const cls of classes) {
-          const hasProviderParam = cls.constructorParams.some(p => providerVarByType.has(p.type));
-          if (hasProviderParam) {
+          const hasSqlProviderParam = cls.constructorParams.some(p => p.type === 'ISqlProvider');
+          if (hasSqlProviderParam) {
             classProviderVar.set(cls.className, dbVar);
           }
         }
@@ -224,6 +251,9 @@ export async function handleGenerateAll(
       const wiringLines: string[] = [];
 
       wiringLines.push(dbLines.join('\n'));
+      if (providerCastLines.length > 0) {
+        wiringLines.push(providerCastLines.join('\n'));
+      }
 
       const nonControllers = steps.filter(s => !s.isController);
       const controllers = steps.filter(s => s.isController);
