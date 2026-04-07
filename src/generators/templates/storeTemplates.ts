@@ -2,9 +2,9 @@ export const storeTemplates = {
   rowInterface: `export interface {{ENTITY_NAME}}Row {
   id: number;
 {{ROW_FIELDS}}
-  created_at: string;
-  updated_at: string;
-  deleted_at?: string;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string;
 }`,
 
   storeClass: `/**
@@ -20,6 +20,10 @@ export class {{ENTITY_NAME}}Store {
     return date.toISOString().slice(0, 19).replace('T', ' ');
   }
 
+  private ensureParsed(value: any): any {
+    return typeof value === 'string' ? JSON.parse(value) : value;
+  }
+
   private rowToModel(row: {{ENTITY_NAME}}Row): {{ENTITY_NAME}} {
     return new {{ENTITY_NAME}}(
       row.id,
@@ -31,7 +35,7 @@ export class {{ENTITY_NAME}}Store {
 
   async getById(id: number): Promise<{{ENTITY_NAME}} | null> {
     const result = await this.db.query(
-      \`SELECT {{FIELD_NAMES}} FROM \\\`\${this.tableName}\\\` WHERE id = :id AND deleted_at IS NULL\`,
+      \`SELECT {{FIELD_NAMES}} FROM \\\`\${this.tableName}\\\` WHERE id = :id AND deletedAt IS NULL\`,
       { id }
     );
 
@@ -45,16 +49,17 @@ export class {{ENTITY_NAME}}Store {
     const now = new Date();
     const data: Partial<{{ENTITY_NAME}}Row> = {
 {{INSERT_DATA_MAPPING}},
-      created_at: this.toMySQLDatetime(now),
-      updated_at: this.toMySQLDatetime(now)
+      createdAt: this.toMySQLDatetime(now),
+      updatedAt: this.toMySQLDatetime(now)
     };
 
-    const fieldsList = Object.keys(data).map(f => \`\\\`\${f}\\\`\`).join(', ');
-    const placeholders = Object.keys(data).map(f => \`:\${f}\`).join(', ');
+    const cleanData = Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined));
+    const fieldsList = Object.keys(cleanData).map(f => \`\\\`\${f}\\\`\`).join(', ');
+    const placeholders = Object.keys(cleanData).map(f => \`:\${f}\`).join(', ');
 
     const result = await this.db.query(
       \`INSERT INTO \\\`\${this.tableName}\\\` (\${fieldsList}) VALUES (\${placeholders})\`,
-      data
+      cleanData
     );
 
     if (result.success && result.insertId) {
@@ -67,17 +72,19 @@ export class {{ENTITY_NAME}}Store {
 
   async update(id: number, entity: {{ENTITY_NAME}}): Promise<{{ENTITY_NAME}}> {
     const now = new Date();
-    const data: Partial<{{ENTITY_NAME}}Row> & { id: number } = {
+    const rawData: Partial<{{ENTITY_NAME}}Row> = {
 {{UPDATE_DATA_MAPPING}},
-      updated_at: this.toMySQLDatetime(now),
-      id
+      updatedAt: this.toMySQLDatetime(now)
     };
 
-    const updateFields = {{UPDATE_FIELDS_ARRAY}}.map(f => \`\\\`\${f}\\\` = :\${f}\`).join(', ');
+    const cleanData = Object.fromEntries(Object.entries(rawData).filter(([, v]) => v !== undefined));
+    const updateFields = {{UPDATE_FIELDS_ARRAY}}
+      .filter(f => f in cleanData)
+      .map(f => \`\\\`\${f}\\\` = :\${f}\`).join(', ');
 
     const result = await this.db.query(
-      \`UPDATE \\\`\${this.tableName}\\\` SET \${updateFields}, updated_at = :updated_at WHERE id = :id\`,
-      data
+      \`UPDATE \\\`\${this.tableName}\\\` SET \${updateFields}, updatedAt = :updatedAt WHERE id = :id\`,
+      { ...cleanData, id }
     );
 
     if (result.success) {
@@ -90,8 +97,8 @@ export class {{ENTITY_NAME}}Store {
   async softDelete(id: number): Promise<boolean> {
     const now = new Date();
     const result = await this.db.query(
-      \`UPDATE \\\`\${this.tableName}\\\` SET deleted_at = :deleted_at WHERE id = :id\`,
-      { deleted_at: this.toMySQLDatetime(now), id }
+      \`UPDATE \\\`\${this.tableName}\\\` SET deletedAt = :deletedAt WHERE id = :id\`,
+      { deletedAt: this.toMySQLDatetime(now), id }
     );
 
     return result.success;

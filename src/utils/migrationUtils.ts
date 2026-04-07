@@ -33,8 +33,12 @@ export interface ForeignKeyInfo {
 const TYPE_MAPPING: Record<string, string> = {
   string: 'VARCHAR(255)',
   number: 'INT',
+  integer: 'INT',
+  decimal: 'DECIMAL(10,2)',
   boolean: 'TINYINT(1)',
   datetime: 'DATETIME',
+  date: 'DATETIME',
+  id: 'INT',
   json: 'JSON',
   array: 'JSON',
   object: 'JSON'
@@ -60,8 +64,9 @@ export function mapYamlTypeToSql(yamlType: string, availableAggregates: Set<stri
   return TYPE_MAPPING[yamlType] || 'VARCHAR(255)';
 }
 
+/** Table name matches the store convention: singular lowercase aggregate name. */
 export function getTableName(aggregateName: string): string {
-  return aggregateName.toLowerCase() + 's';
+  return aggregateName.toLowerCase();
 }
 
 export function getForeignKeyFieldName(fieldName: string): string {
@@ -72,13 +77,42 @@ export function isRelationshipField(fieldType: string, availableAggregates: Set<
   return availableAggregates.has(fieldType);
 }
 
-export function generateCreateTableSQL(name: string, aggregate: AggregateConfig, availableAggregates: Set<string>): string {
+/**
+ * Build a map of child entity name → parent entity name from the aggregates config.
+ * Used to determine parent ID column names for child entity tables.
+ */
+export function buildChildToParentMap(aggregates: Record<string, AggregateConfig>): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const [parentName, config] of Object.entries(aggregates)) {
+    for (const childName of (config.entities || [])) {
+      map.set(childName, parentName);
+    }
+  }
+  return map;
+}
+
+export function generateCreateTableSQL(
+  name: string,
+  aggregate: AggregateConfig,
+  availableAggregates: Set<string>,
+  availableValueObjects?: Set<string>,
+  parentIdField?: string
+): string {
   const tableName = getTableName(name);
   const columns: string[] = [];
   const indexes: string[] = [];
   const foreignKeys: string[] = [];
 
   columns.push('  id INT AUTO_INCREMENT PRIMARY KEY');
+
+  // Root aggregates get an ownerId column; child entities get a parent ID column.
+  if (parentIdField) {
+    columns.push(`  ${parentIdField} INT NOT NULL`);
+    indexes.push(`  INDEX idx_${tableName}_${parentIdField} (${parentIdField})`);
+  } else if (aggregate.root !== false) {
+    columns.push('  ownerId INT NOT NULL');
+    indexes.push(`  INDEX idx_${tableName}_ownerId (ownerId)`);
+  }
 
   for (const [fieldName, field] of Object.entries(aggregate.fields)) {
     if (isRelationshipField(field.type, availableAggregates)) {
@@ -95,55 +129,67 @@ export function generateCreateTableSQL(name: string, aggregate: AggregateConfig,
         `    ON UPDATE CASCADE`
       );
     } else {
-      const sqlType = mapYamlTypeToSql(field.type, availableAggregates);
+      const sqlType = mapYamlTypeToSql(field.type, availableAggregates, availableValueObjects);
       const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
       columns.push(`  ${fieldName} ${sqlType} ${nullable}`);
-      if (['string', 'number'].includes(field.type)) {
+      if (['string', 'number', 'integer', 'id'].includes(field.type)) {
         indexes.push(`  INDEX idx_${tableName}_${fieldName} (${fieldName})`);
       }
     }
   }
 
-  columns.push('  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP');
-  columns.push('  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP');
-  columns.push('  deleted_at DATETIME NULL DEFAULT NULL');
+  columns.push('  createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP');
+  columns.push('  updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP');
+  columns.push('  deletedAt DATETIME NULL DEFAULT NULL');
 
-  indexes.push(`  INDEX idx_${tableName}_deleted_at (deleted_at)`);
-  indexes.push(`  INDEX idx_${tableName}_created_at (created_at)`);
+  indexes.push(`  INDEX idx_${tableName}_deletedAt (deletedAt)`);
+  indexes.push(`  INDEX idx_${tableName}_createdAt (createdAt)`);
 
   const allParts = [...columns, ...indexes, ...foreignKeys];
-  return `CREATE TABLE IF NOT EXISTS ${tableName} (\n${allParts.join(',\n')}\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`;
+  return `CREATE TABLE IF NOT EXISTS \`${tableName}\` (\n${allParts.join(',\n')}\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`;
 }
 
 export function generateDropTableSQL(tableName: string): string {
-  return `DROP TABLE IF EXISTS ${tableName};`;
+  return `DROP TABLE IF EXISTS \`${tableName}\`;`;
 }
 
-export function generateAddColumnSQL(tableName: string, fieldName: string, field: AggregateFieldConfig, availableAggregates: Set<string>): string {
+export function generateAddColumnSQL(
+  tableName: string,
+  fieldName: string,
+  field: AggregateFieldConfig,
+  availableAggregates: Set<string>,
+  availableValueObjects?: Set<string>
+): string {
   if (isRelationshipField(field.type, availableAggregates)) {
     const foreignKeyName = getForeignKeyFieldName(fieldName);
     const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
-    return `ALTER TABLE ${tableName} ADD COLUMN ${foreignKeyName} INT ${nullable};`;
+    return `ALTER TABLE \`${tableName}\` ADD COLUMN \`${foreignKeyName}\` INT ${nullable};`;
   } else {
-    const sqlType = mapYamlTypeToSql(field.type, availableAggregates);
+    const sqlType = mapYamlTypeToSql(field.type, availableAggregates, availableValueObjects);
     const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
-    return `ALTER TABLE ${tableName} ADD COLUMN ${fieldName} ${sqlType} ${nullable};`;
+    return `ALTER TABLE \`${tableName}\` ADD COLUMN \`${fieldName}\` ${sqlType} ${nullable};`;
   }
 }
 
 export function generateDropColumnSQL(tableName: string, columnName: string): string {
-  return `ALTER TABLE ${tableName} DROP COLUMN ${columnName};`;
+  return `ALTER TABLE \`${tableName}\` DROP COLUMN \`${columnName}\`;`;
 }
 
-export function generateModifyColumnSQL(tableName: string, fieldName: string, field: AggregateFieldConfig, availableAggregates: Set<string>): string {
+export function generateModifyColumnSQL(
+  tableName: string,
+  fieldName: string,
+  field: AggregateFieldConfig,
+  availableAggregates: Set<string>,
+  availableValueObjects?: Set<string>
+): string {
   if (isRelationshipField(field.type, availableAggregates)) {
     const foreignKeyName = getForeignKeyFieldName(fieldName);
     const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
-    return `ALTER TABLE ${tableName} MODIFY COLUMN ${foreignKeyName} INT ${nullable};`;
+    return `ALTER TABLE \`${tableName}\` MODIFY COLUMN \`${foreignKeyName}\` INT ${nullable};`;
   } else {
-    const sqlType = mapYamlTypeToSql(field.type, availableAggregates);
+    const sqlType = mapYamlTypeToSql(field.type, availableAggregates, availableValueObjects);
     const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
-    return `ALTER TABLE ${tableName} MODIFY COLUMN ${fieldName} ${sqlType} ${nullable};`;
+    return `ALTER TABLE \`${tableName}\` MODIFY COLUMN \`${fieldName}\` ${sqlType} ${nullable};`;
   }
 }
 
@@ -200,15 +246,23 @@ function sortAggregatesByDependencies(aggregates: Record<string, AggregateConfig
   return sorted;
 }
 
-export function compareSchemas(oldState: SchemaState | null, newAggregates: Record<string, AggregateConfig>): string[] {
+export function compareSchemas(
+  oldState: SchemaState | null,
+  newAggregates: Record<string, AggregateConfig>,
+  availableValueObjects?: Set<string>
+): string[] {
   const sqlStatements: string[] = [];
   const availableAggregates = new Set(Object.keys(newAggregates));
+  const childToParent = buildChildToParentMap(newAggregates);
 
   if (!oldState || !oldState.aggregates || Object.keys(oldState.aggregates).length === 0) {
     const sorted = sortAggregatesByDependencies(newAggregates, availableAggregates);
     for (const [name, aggregate] of sorted) {
-      sqlStatements.push(`-- Create ${name.toLowerCase()}s table`);
-      sqlStatements.push(generateCreateTableSQL(name, aggregate, availableAggregates));
+      const tableName = getTableName(name);
+      const parentName = childToParent.get(name);
+      const parentIdField = parentName ? `${parentName.toLowerCase()}Id` : undefined;
+      sqlStatements.push(`-- Create ${tableName} table`);
+      sqlStatements.push(generateCreateTableSQL(name, aggregate, availableAggregates, availableValueObjects, parentIdField));
       sqlStatements.push('');
     }
     return sqlStatements;
@@ -230,10 +284,12 @@ export function compareSchemas(oldState: SchemaState | null, newAggregates: Reco
   for (const [name, newAggregate] of Object.entries(newAggregates)) {
     const oldAggregate = oldAggregates[name];
     const tableName = getTableName(name);
+    const parentName = childToParent.get(name);
+    const parentIdField = parentName ? `${parentName.toLowerCase()}Id` : undefined;
 
     if (!oldAggregate) {
       sqlStatements.push(`-- Create ${tableName} table`);
-      sqlStatements.push(generateCreateTableSQL(name, newAggregate, availableAggregates));
+      sqlStatements.push(generateCreateTableSQL(name, newAggregate, availableAggregates, availableValueObjects, parentIdField));
       sqlStatements.push('');
     } else {
       const oldFields = oldAggregate.fields;
@@ -257,7 +313,7 @@ export function compareSchemas(oldState: SchemaState | null, newAggregates: Reco
 
         if (!oldField) {
           sqlStatements.push(`-- Add column ${fieldName} to ${tableName}`);
-          sqlStatements.push(generateAddColumnSQL(tableName, fieldName, newField, availableAggregates));
+          sqlStatements.push(generateAddColumnSQL(tableName, fieldName, newField, availableAggregates, availableValueObjects));
           sqlStatements.push('');
         } else {
           const typeChanged = oldField.type !== newField.type;
@@ -265,7 +321,7 @@ export function compareSchemas(oldState: SchemaState | null, newAggregates: Reco
 
           if (typeChanged || requiredChanged) {
             sqlStatements.push(`-- Modify column ${fieldName} in ${tableName}`);
-            sqlStatements.push(generateModifyColumnSQL(tableName, fieldName, newField, availableAggregates));
+            sqlStatements.push(generateModifyColumnSQL(tableName, fieldName, newField, availableAggregates, availableValueObjects));
             sqlStatements.push('');
           }
         }

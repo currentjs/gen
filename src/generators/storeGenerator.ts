@@ -115,7 +115,7 @@ export class StoreGenerator {
     const voFields = Object.keys(voConfig.fields);
     if (voFields.length > 1) {
       const voArgs = voFields.map(f => `parsed.${f}`).join(', ');
-      return `      row.${fieldName} ? (() => { const parsed = JSON.parse(row.${fieldName}); return new ${voName}(${voArgs}); })() : undefined`;
+      return `      row.${fieldName} ? (() => { const parsed = this.ensureParsed(row.${fieldName}); return new ${voName}(${voArgs}); })() : undefined`;
     }
     if (voFields.length === 1) {
       const singleFieldType = voConfig.fields[voFields[0]];
@@ -126,7 +126,7 @@ export class StoreGenerator {
       }
       return `      row.${fieldName} ? new ${voName}(row.${fieldName}) : undefined`;
     }
-    return `      row.${fieldName} ? new ${voName}(...Object.values(JSON.parse(row.${fieldName}))) : undefined`;
+    return `      row.${fieldName} ? new ${voName}(...Object.values(this.ensureParsed(row.${fieldName}))) : undefined`;
   }
 
   /** Deserialization for an array-of-VOs field. */
@@ -139,7 +139,7 @@ export class StoreGenerator {
     const itemArgs = voFields.length > 0
       ? voFields.map(f => `item.${f}`).join(', ')
       : '...Object.values(item)';
-    return `      row.${fieldName} ? (JSON.parse(row.${fieldName}) as any[]).map((item: any) => new ${voName}(${itemArgs})) : []`;
+    return `      row.${fieldName} ? (this.ensureParsed(row.${fieldName}) as any[]).map((item: any) => new ${voName}(${itemArgs})) : []`;
   }
 
   /** Deserialization for a union-of-VOs field. Uses _type discriminator. */
@@ -156,7 +156,7 @@ export class StoreGenerator {
         : '...Object.values(parsed)';
       return `if (parsed._type === '${voName}') return new ${voName}(${args});`;
     }).join(' ');
-    return `      row.${fieldName} ? (() => { const parsed = JSON.parse(row.${fieldName}); ${cases} return undefined; })() : undefined`;
+    return `      row.${fieldName} ? (() => { const parsed = this.ensureParsed(row.${fieldName}); ${cases} return undefined; })() : undefined`;
   }
 
   /** Serialization for an array-of-union-VOs field. Each element tagged with _type discriminator. */
@@ -182,7 +182,7 @@ export class StoreGenerator {
         : '...Object.values(item)';
       return `if (item._type === '${voName}') return new ${voName}(${args});`;
     }).join(' ');
-    return `      row.${fieldName} ? (JSON.parse(row.${fieldName}) as any[]).map((item: any) => { ${cases} return undefined; }) : []`;
+    return `      row.${fieldName} ? (this.ensureParsed(row.${fieldName}) as any[]).map((item: any) => { ${cases} return undefined; }) : []`;
   }
 
   /** Single line for datetime conversion: toDate (row->model) or toMySQL (entity->row). */
@@ -210,7 +210,7 @@ export class StoreGenerator {
     
     fields.forEach(([fieldName, fieldConfig]) => {
       if (this.isAggregateField(fieldConfig)) {
-        result.push(`  ${fieldName}_id?: number;`);
+        result.push(`  ${fieldName}Id?: number;`);
         return;
       }
       const tsType = this.mapTypeToRowType(fieldConfig.type);
@@ -224,7 +224,7 @@ export class StoreGenerator {
   private generateFieldNamesStr(fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
     const fieldNames = ['id'];
     fieldNames.push(childInfo ? childInfo.parentIdField : 'ownerId');
-    fieldNames.push(...fields.map(([name, config]) => this.isAggregateField(config) ? `${name}_id` : name));
+    fieldNames.push(...fields.map(([name, config]) => this.isAggregateField(config) ? `${name}Id` : name));
     return fieldNames.map(f => `\\\`${f}\\\``).join(', ');
   }
 
@@ -246,7 +246,7 @@ export class StoreGenerator {
 
       // Handle aggregate reference - create stub from FK
       if (this.isAggregateField(fieldConfig)) {
-        result.push(`      row.${fieldName}_id != null ? ({ id: row.${fieldName}_id } as unknown as ${fieldType}) : undefined`);
+        result.push(`      row.${fieldName}Id != null ? ({ id: row.${fieldName}Id } as unknown as ${fieldType}) : undefined`);
         return;
       }
       
@@ -300,7 +300,7 @@ export class StoreGenerator {
         if (voConfig) {
           result.push(this.generateValueObjectDeserialization(fieldName, voName, voConfig));
         } else {
-          result.push(`      row.${fieldName} ? new ${voName}(...Object.values(JSON.parse(row.${fieldName}))) : undefined`);
+          result.push(`      row.${fieldName} ? new ${voName}(...Object.values(this.ensureParsed(row.${fieldName}))) : undefined`);
         }
         return;
       }
@@ -322,7 +322,7 @@ export class StoreGenerator {
 
       // Handle aggregate reference - extract FK id
       if (this.isAggregateField(fieldConfig)) {
-        result.push(`      ${fieldName}_id: entity.${fieldName}?.id`);
+        result.push(`      ${fieldName}Id: entity.${fieldName}?.id`);
         return;
       }
       
@@ -373,7 +373,7 @@ export class StoreGenerator {
       .map(([fieldName, fieldConfig]) => {
         const fieldType = fieldConfig.type;
         if (this.isAggregateField(fieldConfig)) {
-          return `      ${fieldName}_id: entity.${fieldName}?.id`;
+          return `      ${fieldName}Id: entity.${fieldName}?.id`;
         }
         if (fieldType === 'datetime' || fieldType === 'date') {
           return this.generateDatetimeConversion(fieldName, 'toMySQL');
@@ -407,7 +407,7 @@ export class StoreGenerator {
   }
 
   private generateUpdateFieldsArray(fields: [string, AggregateFieldConfig][]): string {
-    return JSON.stringify(fields.map(([name, config]) => this.isAggregateField(config) ? `${name}_id` : name));
+    return JSON.stringify(fields.map(([name, config]) => this.isAggregateField(config) ? `${name}Id` : name));
   }
 
   private generateValueObjectImports(fields: [string, AggregateFieldConfig][]): string {
@@ -467,7 +467,7 @@ export class StoreGenerator {
     const offset = (page - 1) * limit;${ownerFilter}
     const params: Record<string, any> = { limit: String(limit), offset: String(offset) };${ownerParamsSetup}
     const result = await this.db.query(
-      \`SELECT ${fieldNamesStr} FROM \\\`\${this.tableName}\\\` WHERE deleted_at IS NULL${ownerFilterRef} LIMIT :limit OFFSET :offset\`,
+      \`SELECT ${fieldNamesStr} FROM \\\`\${this.tableName}\\\` WHERE deletedAt IS NULL${ownerFilterRef} LIMIT :limit OFFSET :offset\`,
       params
     );
 
@@ -480,7 +480,7 @@ export class StoreGenerator {
     const getAll = `  async getAll(${isRoot ? 'ownerId?: number' : ''}): Promise<${modelName}[]> {${ownerFilter}
     const params: Record<string, any> = {};${ownerParamsSetup}
     const result = await this.db.query(
-      \`SELECT ${fieldNamesStr} FROM \\\`\${this.tableName}\\\` WHERE deleted_at IS NULL${ownerFilterRef}\`,
+      \`SELECT ${fieldNamesStr} FROM \\\`\${this.tableName}\\\` WHERE deletedAt IS NULL${ownerFilterRef}\`,
       params
     );
 
@@ -493,7 +493,7 @@ export class StoreGenerator {
     const count = `  async count(${isRoot ? 'ownerId?: number' : ''}): Promise<number> {${ownerFilter}
     const params: Record<string, any> = {};${ownerParamsSetup}
     const result = await this.db.query(
-      \`SELECT COUNT(*) as count FROM \\\`\${this.tableName}\\\` WHERE deleted_at IS NULL${ownerFilterRef}\`,
+      \`SELECT COUNT(*) as count FROM \\\`\${this.tableName}\\\` WHERE deletedAt IS NULL${ownerFilterRef}\`,
       params
     );
 
@@ -508,13 +508,13 @@ export class StoreGenerator {
 
   private generateGetByParentIdMethod(modelName: string, fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
     if (!childInfo) return '';
-    const fieldList = ['id', childInfo.parentIdField, ...fields.map(([name, config]) => this.isAggregateField(config) ? `${name}_id` : name)].map(f => '\\`' + f + '\\`').join(', ');
+    const fieldList = ['id', childInfo.parentIdField, ...fields.map(([name, config]) => this.isAggregateField(config) ? `${name}Id` : name)].map(f => '\\`' + f + '\\`').join(', ');
     const parentIdField = childInfo.parentIdField;
     return `
 
   async getByParentId(parentId: number): Promise<${modelName}[]> {
     const result = await this.db.query(
-      \`SELECT ${fieldList} FROM \\\`\${this.tableName}\\\` WHERE \\\`${parentIdField}\\\` = :parentId AND deleted_at IS NULL\`,
+      \`SELECT ${fieldList} FROM \\\`\${this.tableName}\\\` WHERE \\\`${parentIdField}\\\` = :parentId AND deletedAt IS NULL\`,
       { parentId }
     );
 
@@ -537,7 +537,7 @@ export class StoreGenerator {
    */
   async getResourceOwner(id: number): Promise<number | null> {
     const result = await this.db.query(
-      \`SELECT p.ownerId FROM \\\`\${this.tableName}\\\` c INNER JOIN \\\`${parentTable}\\\` p ON p.id = c.\\\`${parentIdField}\\\` WHERE c.id = :id AND c.deleted_at IS NULL\`,
+      \`SELECT p.ownerId FROM \\\`\${this.tableName}\\\` c INNER JOIN \\\`${parentTable}\\\` p ON p.id = c.\\\`${parentIdField}\\\` WHERE c.id = :id AND c.deletedAt IS NULL\`,
       { id }
     );
 
@@ -555,7 +555,7 @@ export class StoreGenerator {
    */
   async getResourceOwner(id: number): Promise<number | null> {
     const result = await this.db.query(
-      \`SELECT ownerId FROM \\\`\${this.tableName}\\\` WHERE id = :id AND deleted_at IS NULL\`,
+      \`SELECT ownerId FROM \\\`\${this.tableName}\\\` WHERE id = :id AND deletedAt IS NULL\`,
       { id }
     );
 

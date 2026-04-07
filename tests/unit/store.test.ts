@@ -32,15 +32,15 @@ describe('StoreGenerator', () => {
       expect(invoiceStore).toContain('Promise<number | null>');
     });
 
-    it('Row interface includes created_at, updated_at, deleted_at', () => {
+    it('Row interface includes createdAt, updatedAt, deletedAt (camelCase)', () => {
       expect(invoiceStore).toContain('InvoiceRow');
-      expect(invoiceStore).toContain('deleted_at');
-      expect(invoiceStore).toContain('created_at');
+      expect(invoiceStore).toContain('deletedAt');
+      expect(invoiceStore).toContain('createdAt');
     });
 
-    it('softDelete uses deleted_at', () => {
+    it('softDelete uses deletedAt (camelCase)', () => {
       expect(invoiceStore).toContain('softDelete');
-      expect(invoiceStore).toContain('deleted_at');
+      expect(invoiceStore).toContain('deletedAt');
     });
 
     it('generates getPaginated with optional ownerId for root entity', () => {
@@ -60,6 +60,28 @@ describe('StoreGenerator', () => {
     it('getPaginated and getAll filter by ownerId when provided', () => {
       expect(invoiceStore).toContain("ownerId != null ? ' AND");
       expect(invoiceStore).toContain('params.ownerId = ownerId');
+    });
+
+    it('insert filters undefined values with cleanData', () => {
+      expect(invoiceStore).toContain('cleanData');
+      expect(invoiceStore).toContain('filter(([, v]) => v !== undefined)');
+    });
+
+    it('insert uses createdAt and updatedAt (camelCase)', () => {
+      expect(invoiceStore).toContain('createdAt: this.toMySQLDatetime');
+      expect(invoiceStore).toContain('updatedAt: this.toMySQLDatetime');
+    });
+
+    it('SQL uses deletedAt IS NULL (camelCase)', () => {
+      expect(invoiceStore).toContain('deletedAt IS NULL');
+    });
+
+    it('value object VO uses ensureParsed instead of JSON.parse for deserialization', () => {
+      expect(invoiceStore).toContain('this.ensureParsed(row.');
+    });
+
+    it('store has ensureParsed helper method', () => {
+      expect(invoiceStore).toContain('private ensureParsed(value: any): any');
     });
   });
 
@@ -82,6 +104,30 @@ describe('StoreGenerator', () => {
       expect(productStore).toContain('async getAll(ownerId?: number): Promise<Product[]>');
       expect(productStore).toContain('async count(ownerId?: number): Promise<number>');
     });
+
+    it('json field passes through without parsing (no JSON.parse in rowToModel for plain json)', () => {
+      expect(productStore).toNotContain('JSON.parse(row.tags)');
+    });
+  });
+
+  describe('Library store (aggregate FK references)', () => {
+    const libStoreGen = new StoreGenerator();
+    const config = loadFixture('library.yaml');
+    const result = libStoreGen.generateFromConfig(config);
+    const bookStore = getCode(result as Record<string, unknown>, 'Book');
+
+    it('FK column uses camelCase Id suffix (authorId not author_id)', () => {
+      expect(bookStore).toContain('authorId');
+      expect(bookStore).toNotContain('author_id');
+    });
+
+    it('rowToModel reads camelCase FK column (row.authorId)', () => {
+      expect(bookStore).toContain('row.authorId');
+    });
+
+    it('insert uses camelCase FK column (authorId: entity.author?.id)', () => {
+      expect(bookStore).toContain('authorId: entity.author?.id');
+    });
   });
 
   describe('AI module store (array and union value objects)', () => {
@@ -99,8 +145,8 @@ describe('StoreGenerator', () => {
       expect(promptStore).toMatch(/primaryAction\??: string/);
     });
 
-    it('array VO field is deserialized with JSON.parse and .map()', () => {
-      expect(promptStore).toContain('JSON.parse(row.actions)');
+    it('array VO field is deserialized with ensureParsed and .map()', () => {
+      expect(promptStore).toContain('this.ensureParsed(row.actions)');
       expect(promptStore).toContain('.map(');
       expect(promptStore).toContain('new LlmAction(');
     });
@@ -110,7 +156,7 @@ describe('StoreGenerator', () => {
     });
 
     it('union VO field is deserialized using _type discriminator', () => {
-      expect(promptStore).toContain('JSON.parse(row.primaryAction)');
+      expect(promptStore).toContain('this.ensureParsed(row.primaryAction)');
       expect(promptStore).toContain("parsed._type === 'LlmAction'");
       expect(promptStore).toContain("parsed._type === 'ApiAction'");
     });
@@ -136,8 +182,8 @@ describe('StoreGenerator', () => {
       expect(promptStore).toContain('instanceof ApiAction');
     });
 
-    it('array-of-union VO field is deserialized with JSON.parse, .map(), and _type switch', () => {
-      expect(promptStore).toContain('JSON.parse(row.steps)');
+    it('array-of-union VO field is deserialized with ensureParsed, .map(), and _type switch', () => {
+      expect(promptStore).toContain('this.ensureParsed(row.steps)');
       expect(promptStore).toContain('.map((item: any)');
       expect(promptStore).toContain("item._type === 'LlmAction'");
       expect(promptStore).toContain("item._type === 'ApiAction'");
