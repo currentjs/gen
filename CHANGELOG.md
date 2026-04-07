@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.4] - 2026-04-07
+
+- Array and union value objects
+
 ## [0.5.3] - 2026-04-07
 
 - expand autowiring (DI) for providers
