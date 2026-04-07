@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.3] - 2026-04-07
+
+- expand autowiring (DI) for providers
+
 ## [0.5.2] - 2026-03-21
 
 - skip templates on generation; introduced a flag to regenerate templates
