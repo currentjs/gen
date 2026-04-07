@@ -14,12 +14,18 @@ import {
   getMigrationFileName
 } from '../utils/migrationUtils';
 
-function collectAggregatesFromModules(appYamlPath: string): Record<string, AggregateConfig> {
+interface CollectedSchema {
+  aggregates: Record<string, AggregateConfig>;
+  valueObjects: Set<string>;
+}
+
+function collectSchemaFromModules(appYamlPath: string): CollectedSchema {
   const appConfig = loadAppConfig(appYamlPath);
   const moduleEntries = getModuleEntries(appConfig);
   const projectRoot = path.dirname(appYamlPath);
 
   const allAggregates: Record<string, AggregateConfig> = {};
+  const allValueObjects = new Set<string>();
   const sources: string[] = [];
 
   for (const entry of moduleEntries) {
@@ -46,6 +52,13 @@ function collectAggregatesFromModules(appYamlPath: string): Record<string, Aggre
     const count = Object.keys(aggregates).length;
 
     Object.assign(allAggregates, aggregates);
+
+    if (moduleConfig.domain.valueObjects) {
+      for (const voName of Object.keys(moduleConfig.domain.valueObjects)) {
+        allValueObjects.add(voName);
+      }
+    }
+
     sources.push(`${entry.name} (${count} aggregate(s))`);
   }
 
@@ -54,7 +67,7 @@ function collectAggregatesFromModules(appYamlPath: string): Record<string, Aggre
     console.log(colors.gray(`   Sources: ${sources.join(', ')}`));
   }
 
-  return allAggregates;
+  return { aggregates: allAggregates, valueObjects: allValueObjects };
 }
 
 export function handleMigrateCommit(yamlPath?: string): void {
@@ -79,7 +92,7 @@ export function handleMigrateCommit(yamlPath?: string): void {
 
     // eslint-disable-next-line no-console
     console.log(colors.cyan('\n📋 Collecting aggregates from all modules...'));
-    const currentAggregates = collectAggregatesFromModules(resolvedYamlPath);
+    const { aggregates: currentAggregates, valueObjects: currentValueObjects } = collectSchemaFromModules(resolvedYamlPath);
 
     if (Object.keys(currentAggregates).length === 0) {
       // eslint-disable-next-line no-console
@@ -102,7 +115,7 @@ export function handleMigrateCommit(yamlPath?: string): void {
 
     // eslint-disable-next-line no-console
     console.log(colors.cyan('\n🔍 Comparing schemas...'));
-    const sqlStatements = compareSchemas(oldState, currentAggregates);
+    const sqlStatements = compareSchemas(oldState, currentAggregates, currentValueObjects);
 
     if (sqlStatements.length === 0 || sqlStatements.every(s => s.trim() === '' || s.startsWith('--'))) {
       // eslint-disable-next-line no-console
@@ -127,7 +140,7 @@ export function handleMigrateCommit(yamlPath?: string): void {
     const newState: SchemaState = {
       aggregates: currentAggregates,
       version: timestamp,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     };
 
     saveSchemaState(stateFilePath, newState);

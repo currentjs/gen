@@ -749,7 +749,7 @@ Authorization can be configured on both API endpoints and web pages. The `auth` 
 |-------|------|-------------|
 | `"all"` | `string` | Public access. No authentication required. |
 | `"authenticated"` | `string` | Any logged-in user (valid JWT). |
-| `"owner"` | `string` | User must own the resource (matched via `owner_id` field). |
+| `"owner"` | `string` | User must own the resource (matched via `ownerId` column). |
 | `"admin"`, `"editor"`, etc. | `string` | User must have this role (from JWT `role` field). |
 | `["owner", "admin"]` | `string[]` | User must match any one of the listed roles (OR logic). |
 
@@ -767,15 +767,15 @@ Authorization can be configured on both API endpoints and web pages. The `auth` 
 | `datetime` | `Date` | `string` | Date and time. |
 | `date` | `Date` | `string` | Date only. |
 | `id` | `number` | `number` | Foreign key / reference identifier. |
-| `json` | `any` | `string` | Arbitrary JSON data. |
-| `array` | `any[]` | `string` | Array (stored as JSON string). |
-| `object` | `object` | `string` | Object (stored as JSON string). |
+| `json` | `any` | `any` | Arbitrary JSON data. MySQL returns parsed objects. |
+| `array` | `any[]` | `any[]` | Array (stored as JSON, returned as parsed array). |
+| `object` | `object` | `any` | Object (stored as JSON, returned as parsed object). |
 | `enum` | `string` | `string` | Enumerated string. Requires `values` to be set. |
 
 Additionally, the `type` field can reference:
 
-- Another **aggregate name** -- treated as a foreign key. The domain type becomes the referenced entity class; the store column becomes `<fieldName>Id` of type `number`.
-- A **value object name** -- the domain type becomes the value object class; stored as a JSON string in the database.
+- Another **aggregate name** -- treated as a foreign key. The domain type becomes the referenced entity class; the store column becomes `<fieldName>Id` (camelCase) of type `number`.
+- A **value object name** -- the domain type becomes the value object class; stored as a JSON column in the database (MySQL returns it pre-parsed).
 - A **value object name with `[]` suffix** (e.g., `"Money[]"`) -- array of that value object class; stored as a JSON array in the database. TypeScript type: `Money[]`.
 - A **pipe-separated list of value object names** (e.g., `"LlmAction | ApiAction"`) -- union type; stored as JSON with a `_type` discriminator. TypeScript type: `LlmAction | ApiAction`.
 
@@ -825,14 +825,14 @@ The following fields are added automatically and must not be included in the YAM
 
 - **Root aggregates:** `id`, `ownerId`.
 - **Child entities:** `id`, `<parentEntityName>Id` (e.g., `invoiceId` for a child of `Invoice`).
-- **Store tables:** `id`, `created_at`, `updated_at`, `deleted_at`, `owner_id` (or parent ID column).
+- **All tables:** `id`, `ownerId` (root) or `<parentName>Id` (child), `createdAt`, `updatedAt`, `deletedAt`.
 
 ### Naming Conventions
 
 - Module names in `app.yaml` should be PascalCase (e.g., `Blog`).
 - Module directories are created using the name as provided to `create module`.
 - Module YAML files are named in lowercase (e.g., `blog.yaml`).
-- Database table names are the lowercased entity name with an `s` suffix (e.g., `blogs`).
+- Database table names are the singular lowercased entity name (e.g., `blog` for a `Blog` aggregate). This applies to both the generated store and the migration SQL.
 
 ### Template Regeneration
 
@@ -872,4 +872,9 @@ Code outside these markers is preserved across regeneration. Code inside is repl
 
 ### Migration Compatibility
 
-The `migrate commit` command uses a different model format (`models` array with `name` and `fields` properties) than the main generators (`domain.aggregates` map). These two formats are not interchangeable. Ensure the correct format is used for each command.
+The `migrate commit` command reads the same `domain.aggregates` format as all other generators. Generated SQL includes:
+- `ownerId INT NOT NULL` on root aggregate tables.
+- `<parentName>Id INT NOT NULL` on child entity tables (e.g., `invoiceId` for `InvoiceItem` of `Invoice`).
+- All audit columns in camelCase: `createdAt`, `updatedAt`, `deletedAt`.
+- FK column names using camelCase `Id` suffix (e.g., `authorId` not `author_id`).
+- Value object fields typed as `JSON` (requires value objects to be resolvable from module YAML files).

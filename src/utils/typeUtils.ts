@@ -32,9 +32,9 @@ export const ROW_TYPE_MAPPING: Record<string, string> = {
   datetime: 'string',
   date: 'string',
   id: 'number',
-  json: 'string',
-  array: 'string',
-  object: 'string',
+  json: 'any',
+  array: 'any[]',
+  object: 'any',
   enum: 'string'
 } as const;
 
