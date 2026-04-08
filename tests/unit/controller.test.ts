@@ -31,6 +31,7 @@ describe('ControllerGenerator - API auth scenarios', () => {
     it('get and create require context.request.user when auth is authenticated', () => {
       expect(apiCode).toContain('context.request.user');
       expect(apiCode).toContain('Authentication required');
+      expect(apiCode).toContain('UnauthorizedError');
     });
   });
 
@@ -43,6 +44,8 @@ describe('ControllerGenerator - API auth scenarios', () => {
       expect(apiCode).toContain('getResourceOwner');
       expect(apiCode).toContain('isOwner');
       expect(apiCode).toContain('Access denied');
+      expect(apiCode).toContain('ForbiddenError');
+      expect(apiCode).toContain('NotFoundError');
     });
   });
 
