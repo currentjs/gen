@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.6] - 2026-04-08
+
+- database identifier types (numeric, uuid, nanoid)
+
 ## [0.5.5] - 2026-04-07
 
 - data access layer generation fixes and improvements
