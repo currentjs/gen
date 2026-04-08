@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { AggregateConfig, AggregateFieldConfig } from '../types/configTypes';
+import { AggregateConfig, AggregateFieldConfig, IdentifierType } from '../types/configTypes';
 import { parseFieldType } from './typeUtils';
 
 export interface SchemaState {
@@ -44,10 +44,26 @@ const TYPE_MAPPING: Record<string, string> = {
   object: 'JSON'
 };
 
-export function mapYamlTypeToSql(yamlType: string, availableAggregates: Set<string>, availableValueObjects?: Set<string>): string {
-  // Simple aggregate reference → foreign key INT
+export function getIdColumnDefinition(idType: IdentifierType = 'numeric'): string {
+  switch (idType) {
+    case 'uuid':   return 'id BINARY(16) PRIMARY KEY DEFAULT (UUID_TO_BIN(UUID(), 1))';
+    case 'nanoid': return 'id VARCHAR(21) PRIMARY KEY';
+    default:       return 'id INT AUTO_INCREMENT PRIMARY KEY';
+  }
+}
+
+export function getFkColumnType(idType: IdentifierType = 'numeric'): string {
+  switch (idType) {
+    case 'uuid':   return 'BINARY(16)';
+    case 'nanoid': return 'VARCHAR(21)';
+    default:       return 'INT';
+  }
+}
+
+export function mapYamlTypeToSql(yamlType: string, availableAggregates: Set<string>, availableValueObjects?: Set<string>, identifiers: IdentifierType = 'numeric'): string {
+  // Simple aggregate reference → foreign key column matching PK type
   if (availableAggregates.has(yamlType)) {
-    return 'INT';
+    return getFkColumnType(identifiers);
   }
 
   // Compound types: array ("Foo[]") or union ("Foo | Bar") → JSON column
@@ -96,21 +112,23 @@ export function generateCreateTableSQL(
   aggregate: AggregateConfig,
   availableAggregates: Set<string>,
   availableValueObjects?: Set<string>,
-  parentIdField?: string
+  parentIdField?: string,
+  identifiers: IdentifierType = 'numeric'
 ): string {
   const tableName = getTableName(name);
   const columns: string[] = [];
   const indexes: string[] = [];
   const foreignKeys: string[] = [];
+  const fkType = getFkColumnType(identifiers);
 
-  columns.push('  id INT AUTO_INCREMENT PRIMARY KEY');
+  columns.push(`  ${getIdColumnDefinition(identifiers)}`);
 
   // Root aggregates get an ownerId column; child entities get a parent ID column.
   if (parentIdField) {
-    columns.push(`  ${parentIdField} INT NOT NULL`);
+    columns.push(`  ${parentIdField} ${fkType} NOT NULL`);
     indexes.push(`  INDEX idx_${tableName}_${parentIdField} (${parentIdField})`);
   } else if (aggregate.root !== false) {
-    columns.push('  ownerId INT NOT NULL');
+    columns.push(`  ownerId ${fkType} NOT NULL`);
     indexes.push(`  INDEX idx_${tableName}_ownerId (ownerId)`);
   }
 
@@ -118,7 +136,7 @@ export function generateCreateTableSQL(
     if (isRelationshipField(field.type, availableAggregates)) {
       const foreignKeyName = getForeignKeyFieldName(fieldName);
       const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
-      columns.push(`  ${foreignKeyName} INT ${nullable}`);
+      columns.push(`  ${foreignKeyName} ${fkType} ${nullable}`);
       indexes.push(`  INDEX idx_${tableName}_${foreignKeyName} (${foreignKeyName})`);
       const refTableName = getTableName(field.type);
       foreignKeys.push(
@@ -129,7 +147,7 @@ export function generateCreateTableSQL(
         `    ON UPDATE CASCADE`
       );
     } else {
-      const sqlType = mapYamlTypeToSql(field.type, availableAggregates, availableValueObjects);
+      const sqlType = mapYamlTypeToSql(field.type, availableAggregates, availableValueObjects, identifiers);
       const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
       columns.push(`  ${fieldName} ${sqlType} ${nullable}`);
       if (['string', 'number', 'integer', 'id'].includes(field.type)) {
@@ -158,14 +176,15 @@ export function generateAddColumnSQL(
   fieldName: string,
   field: AggregateFieldConfig,
   availableAggregates: Set<string>,
-  availableValueObjects?: Set<string>
+  availableValueObjects?: Set<string>,
+  identifiers: IdentifierType = 'numeric'
 ): string {
   if (isRelationshipField(field.type, availableAggregates)) {
     const foreignKeyName = getForeignKeyFieldName(fieldName);
     const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
-    return `ALTER TABLE \`${tableName}\` ADD COLUMN \`${foreignKeyName}\` INT ${nullable};`;
+    return `ALTER TABLE \`${tableName}\` ADD COLUMN \`${foreignKeyName}\` ${getFkColumnType(identifiers)} ${nullable};`;
   } else {
-    const sqlType = mapYamlTypeToSql(field.type, availableAggregates, availableValueObjects);
+    const sqlType = mapYamlTypeToSql(field.type, availableAggregates, availableValueObjects, identifiers);
     const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
     return `ALTER TABLE \`${tableName}\` ADD COLUMN \`${fieldName}\` ${sqlType} ${nullable};`;
   }
@@ -180,14 +199,15 @@ export function generateModifyColumnSQL(
   fieldName: string,
   field: AggregateFieldConfig,
   availableAggregates: Set<string>,
-  availableValueObjects?: Set<string>
+  availableValueObjects?: Set<string>,
+  identifiers: IdentifierType = 'numeric'
 ): string {
   if (isRelationshipField(field.type, availableAggregates)) {
     const foreignKeyName = getForeignKeyFieldName(fieldName);
     const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
-    return `ALTER TABLE \`${tableName}\` MODIFY COLUMN \`${foreignKeyName}\` INT ${nullable};`;
+    return `ALTER TABLE \`${tableName}\` MODIFY COLUMN \`${foreignKeyName}\` ${getFkColumnType(identifiers)} ${nullable};`;
   } else {
-    const sqlType = mapYamlTypeToSql(field.type, availableAggregates, availableValueObjects);
+    const sqlType = mapYamlTypeToSql(field.type, availableAggregates, availableValueObjects, identifiers);
     const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
     return `ALTER TABLE \`${tableName}\` MODIFY COLUMN \`${fieldName}\` ${sqlType} ${nullable};`;
   }
@@ -249,7 +269,8 @@ function sortAggregatesByDependencies(aggregates: Record<string, AggregateConfig
 export function compareSchemas(
   oldState: SchemaState | null,
   newAggregates: Record<string, AggregateConfig>,
-  availableValueObjects?: Set<string>
+  availableValueObjects?: Set<string>,
+  identifiers: IdentifierType = 'numeric'
 ): string[] {
   const sqlStatements: string[] = [];
   const availableAggregates = new Set(Object.keys(newAggregates));
@@ -262,7 +283,7 @@ export function compareSchemas(
       const parentName = childToParent.get(name);
       const parentIdField = parentName ? `${parentName.toLowerCase()}Id` : undefined;
       sqlStatements.push(`-- Create ${tableName} table`);
-      sqlStatements.push(generateCreateTableSQL(name, aggregate, availableAggregates, availableValueObjects, parentIdField));
+      sqlStatements.push(generateCreateTableSQL(name, aggregate, availableAggregates, availableValueObjects, parentIdField, identifiers));
       sqlStatements.push('');
     }
     return sqlStatements;
@@ -289,7 +310,7 @@ export function compareSchemas(
 
     if (!oldAggregate) {
       sqlStatements.push(`-- Create ${tableName} table`);
-      sqlStatements.push(generateCreateTableSQL(name, newAggregate, availableAggregates, availableValueObjects, parentIdField));
+      sqlStatements.push(generateCreateTableSQL(name, newAggregate, availableAggregates, availableValueObjects, parentIdField, identifiers));
       sqlStatements.push('');
     } else {
       const oldFields = oldAggregate.fields;
@@ -313,7 +334,7 @@ export function compareSchemas(
 
         if (!oldField) {
           sqlStatements.push(`-- Add column ${fieldName} to ${tableName}`);
-          sqlStatements.push(generateAddColumnSQL(tableName, fieldName, newField, availableAggregates, availableValueObjects));
+          sqlStatements.push(generateAddColumnSQL(tableName, fieldName, newField, availableAggregates, availableValueObjects, identifiers));
           sqlStatements.push('');
         } else {
           const typeChanged = oldField.type !== newField.type;
@@ -321,7 +342,7 @@ export function compareSchemas(
 
           if (typeChanged || requiredChanged) {
             sqlStatements.push(`-- Modify column ${fieldName} in ${tableName}`);
-            sqlStatements.push(generateModifyColumnSQL(tableName, fieldName, newField, availableAggregates, availableValueObjects));
+            sqlStatements.push(generateModifyColumnSQL(tableName, fieldName, newField, availableAggregates, availableValueObjects, identifiers));
             sqlStatements.push('');
           }
         }

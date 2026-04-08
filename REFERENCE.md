@@ -1,6 +1,6 @@
 # CurrentJS Generator -- Reference
 
-Version: 0.5.2
+Version: 0.5.6
 
 ---
 
@@ -332,17 +332,17 @@ modules:
 
 ### Fields
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `providers` | `Record<string, string>` | `{ mysql: "@currentjs/provider-mysql" }` | Map of provider key to npm package or local path. |
-| `config.database` | `string` | `"mysql"` | Default database provider key (must match a key in `providers`). |
-| `config.styling` | `string` | `"bootstrap"` | Default styling framework. |
-| `config.identifiers` | `string` | `"id"` | Default primary key field name. |
-| `modules` | `Record<string, ModuleEntry>` | `{}` | Map of module name to module entry. |
-| `modules.<Name>.path` | `string` | -- | Relative path from project root to the module's YAML file. Required. |
-| `modules.<Name>.database` | `string` | Inherits from `config.database` | Database provider override for this module. |
-| `modules.<Name>.styling` | `string` | Inherits from `config.styling` | Styling override for this module. |
-| `modules.<Name>.identifiers` | `string` | Inherits from `config.identifiers` | Identifiers override for this module. |
+| Field | Type                          | Default                                  | Description |
+|-------|-------------------------------|------------------------------------------|-------------|
+| `providers` | `Record<string, string>`      | `{ mysql: "@currentjs/provider-mysql" }` | Map of provider key to npm package or local path. |
+| `config.database` | `string`                      | `"mysql"`                                | Default database provider key (must match a key in `providers`). |
+| `config.styling` | `string`                      | `"bootstrap"`                            | Default styling framework. |
+| `config.identifiers` | `string`                      | `numeric`                                 | Primary key and FK column type. See [Identifier Types](#identifier-types). |
+| `modules` | `Record<string, ModuleEntry>` | `{}`                                     | Map of module name to module entry. |
+| `modules.<Name>.path` | `string`                      | --                                       | Relative path from project root to the module's YAML file. Required. |
+| `modules.<Name>.database` | `string`                      | Inherits from `config.database`          | Database provider override for this module. |
+| `modules.<Name>.styling` | `string`                      | Inherits from `config.styling`           | Styling override for this module. |
+| `modules.<Name>.identifiers` | `numeric` \                   | `uuid` \                                 | `nanoid` | Inherits from `config.identifiers` | Identifier type override for this specific module. |
 
 ### Provider Import Resolution
 
@@ -350,6 +350,40 @@ Provider values can be:
 
 - An npm package name (e.g., `"@currentjs/provider-mysql"`).
 - A local path starting with `./` or `/`, resolved relative to the `src/` directory.
+
+---
+
+### Identifier Types
+
+The `config.identifiers` setting in `app.yaml` controls how primary keys and foreign keys are generated across the whole application.
+
+| Value | SQL column type | TypeScript type | ID generation |
+|-------|-----------------|-----------------|---------------|
+| `numeric` | `INT AUTO_INCREMENT PRIMARY KEY` | `number` | Database auto-increment |
+| `uuid` | `BINARY(16) PRIMARY KEY DEFAULT (UUID_TO_BIN(UUID(), 1))` | `string` | `crypto.randomUUID()` before insert |
+| `nanoid` | `VARCHAR(21) PRIMARY KEY` | `string` | Custom `generateNanoId()` using `crypto.randomBytes` |
+
+The value is **case-insensitive**: `NanoID`, `nanoid`, and `NANOID` are all equivalent. The legacy value `id` is treated as `numeric` for backward compatibility.
+
+### Changing the identifier type
+
+Set `identifiers` in `app.yaml`:
+
+```yaml
+config:
+  identifiers: uuid   # or: numeric, nanoid
+```
+
+You can also override it per module by setting `identifiers` in the module entry inside `app.yaml`:
+
+```yaml
+modules:
+  MyModule:
+    path: src/modules/MyModule
+    identifiers: nanoid
+```
+
+> **Note**: Changing the identifier type after data exists in the database requires a manual data migration. The `currentjs migrate commit` command only generates the DDL for the _current_ setting.
 
 ---
 
@@ -826,6 +860,16 @@ The following fields are added automatically and must not be included in the YAM
 - **Root aggregates:** `id`, `ownerId`.
 - **Child entities:** `id`, `<parentEntityName>Id` (e.g., `invoiceId` for a child of `Invoice`).
 - **All tables:** `id`, `ownerId` (root) or `<parentName>Id` (child), `createdAt`, `updatedAt`, `deletedAt`.
+
+The TypeScript type and SQL column type of `id`, `ownerId`, and all FK columns depend on the `config.identifiers` setting:
+
+| `identifiers` | TypeScript type | SQL column |
+|---------------|-----------------|------------|
+| `numeric` | `number` | `INT AUTO_INCREMENT PRIMARY KEY` |
+| `uuid` | `string` | `BINARY(16) PRIMARY KEY DEFAULT (UUID_TO_BIN(UUID(), 1))` |
+| `nanoid` | `string` | `VARCHAR(21) PRIMARY KEY` |
+
+See the [Identifier Types](#identifier-types) section for full details.
 
 ### Naming Conventions
 

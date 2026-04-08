@@ -169,3 +169,72 @@ describe('ServiceGenerator - AI module (array and union value objects)', () => {
     expect(promptService).toContain('async delete(');
   });
 });
+
+describe('ServiceGenerator — identifier types', () => {
+
+  describe('uuid identifiers', () => {
+    const gen = new ServiceGenerator();
+    const config = loadFixture('product.yaml');
+    const result = gen.generateFromConfig(config, 'uuid');
+    const code = result['Product'];
+
+    it('get method accepts string id', () => {
+      expect(code).toContain('async get(id: string)');
+    });
+
+    it('update method accepts string id', () => {
+      expect(code).toContain('async update(id: string,');
+    });
+
+    it('delete method accepts string id', () => {
+      expect(code).toContain('async delete(id: string)');
+    });
+
+    it('getResourceOwner accepts and returns string', () => {
+      expect(code).toContain('async getResourceOwner(id: string): Promise<string | null>');
+    });
+
+    it('create uses empty string placeholder', () => {
+      expect(code).toContain("new Product('',");
+      expect(code).toNotContain('new Product(0,');
+    });
+  });
+
+  describe('nanoid identifiers', () => {
+    const gen = new ServiceGenerator();
+    const config = loadFixture('product.yaml');
+    const result = gen.generateFromConfig(config, 'nanoid');
+    const code = result['Product'];
+
+    it('get method accepts string id', () => {
+      expect(code).toContain('async get(id: string)');
+    });
+
+    it('getResourceOwner accepts and returns string', () => {
+      expect(code).toContain('async getResourceOwner(id: string): Promise<string | null>');
+    });
+
+    it('create uses empty string placeholder', () => {
+      expect(code).toContain("new Product('',");
+    });
+  });
+
+  describe('numeric identifiers (default)', () => {
+    const gen = new ServiceGenerator();
+    const config = loadFixture('product.yaml');
+    const result = gen.generateFromConfig(config, 'numeric');
+    const code = result['Product'];
+
+    it('get method accepts number id', () => {
+      expect(code).toContain('async get(id: number)');
+    });
+
+    it('getResourceOwner accepts and returns number', () => {
+      expect(code).toContain('async getResourceOwner(id: number): Promise<number | null>');
+    });
+
+    it('create uses 0 placeholder', () => {
+      expect(code).toContain('new Product(0,');
+    });
+  });
+});

@@ -9,13 +9,16 @@ import {
   WebPageConfig,
   AuthConfig,
   UseCasesConfig,
-  isValidModuleConfig 
+  isValidModuleConfig,
+  IdentifierType,
+  idTsType
 } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo, getChildrenOfParent, ParentChildInfo } from '../utils/childEntityUtils';
 import { capitalize } from '../utils/typeUtils';
 import { AUTH_ROLES, AUTH_ERRORS } from '../utils/constants';
 
 export class ControllerGenerator {
+  private identifiers: IdentifierType = 'numeric';
 
   private getHttpDecorator(method: string): string {
     switch (method.toUpperCase()) {
@@ -284,7 +287,8 @@ export class ControllerGenerator {
       if (childInfo) {
         parseLogic = `const input = ${inputClass}.parse({ ...context.request.body, ${childInfo.parentIdField}: context.request.parameters.${childInfo.parentIdField} });`;
       } else {
-        parseLogic = `const input = ${inputClass}.parse({ ...context.request.body, ownerId: context.request.user?.id });`;
+        const idTs = idTsType(this.identifiers);
+        parseLogic = `const input = ${inputClass}.parse({ ...context.request.body, ownerId: context.request.user?.id as ${idTs} });`;
       }
     } else if (action === 'update') {
       parseLogic = `const input = ${inputClass}.parse({ ...context.request.body, id: context.request.parameters.id });`;
@@ -452,7 +456,8 @@ export class ControllerGenerator {
         if (childInfo) {
           parseLogic = `const input = ${inputClass}.parse({ ...context.request.body, ${childInfo.parentIdField}: context.request.parameters.${childInfo.parentIdField} });`;
         } else {
-          parseLogic = `const input = ${inputClass}.parse({ ...context.request.body, ownerId: context.request.user?.id });`;
+          const idTs = idTsType(this.identifiers);
+          parseLogic = `const input = ${inputClass}.parse({ ...context.request.body, ownerId: context.request.user?.id as ${idTs} });`;
         }
       } else {
         parseLogic = `const input = ${inputClass}.parse(context.request.body);`;
@@ -706,8 +711,9 @@ ${methods.join('\n\n')}
 }`;
   }
 
-  public generateFromConfig(config: ModuleConfig): Record<string, string> {
+  public generateFromConfig(config: ModuleConfig, identifiers: IdentifierType = 'numeric'): Record<string, string> {
     const result: Record<string, string> = {};
+    this.identifiers = identifiers;
     const childEntityMap = buildChildEntityMap(config);
 
     // Generate API controllers
@@ -745,7 +751,7 @@ ${methods.join('\n\n')}
     return result;
   }
 
-  public generateFromYamlFile(yamlFilePath: string): Record<string, string> {
+  public generateFromYamlFile(yamlFilePath: string, identifiers: IdentifierType = 'numeric'): Record<string, string> {
     const yamlContent = fs.readFileSync(yamlFilePath, 'utf8');
     const config = parseYaml(yamlContent);
 
@@ -753,15 +759,16 @@ ${methods.join('\n\n')}
       throw new Error('Configuration does not match new module format. Expected domain/useCases/api/web structure.');
     }
 
-    return this.generateFromConfig(config);
+    return this.generateFromConfig(config, identifiers);
   }
 
   public async generateAndSaveFiles(
     yamlFilePath: string,
     moduleDir: string,
-    opts?: { force?: boolean; skipOnConflict?: boolean }
+    opts?: { force?: boolean; skipOnConflict?: boolean },
+    identifiers: IdentifierType = 'numeric'
   ): Promise<string[]> {
-    const controllersByName = this.generateFromYamlFile(yamlFilePath);
+    const controllersByName = this.generateFromYamlFile(yamlFilePath, identifiers);
     
     const controllersDir = path.join(moduleDir, 'infrastructure', 'controllers');
     fs.mkdirSync(controllersDir, { recursive: true });

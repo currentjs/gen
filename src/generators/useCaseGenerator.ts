@@ -7,12 +7,15 @@ import {
   ModuleConfig, 
   UseCaseDefinition,
   AggregateConfig,
-  isValidModuleConfig 
+  isValidModuleConfig,
+  IdentifierType,
+  idTsType
 } from '../types/configTypes';
 import { capitalize } from '../utils/typeUtils';
 
 export class UseCaseGenerator {
   private availableAggregates: Map<string, AggregateConfig> = new Map();
+  private identifiers: IdentifierType = 'numeric';
 
   private generateUseCaseMethod(
     modelName: string,
@@ -71,7 +74,7 @@ export class UseCaseGenerator {
     const returnStatement = '\n    return result;';
 
     const methodParams = actionName === 'list'
-      ? `input: ${inputType}, ownerId?: number`
+      ? `input: ${inputType}, ownerId?: ${idTsType(this.identifiers)}`
       : `input: ${inputType}`;
 
     return `  async ${methodName}(${methodParams}): Promise<${returnType}> {
@@ -81,13 +84,14 @@ ${handlerCalls}${returnStatement}
 
   private generateGetResourceOwnerMethod(modelName: string): string {
     const serviceVar = `${modelName.toLowerCase()}Service`;
+    const idTs = idTsType(this.identifiers);
     
     return `
   /**
    * Get the owner ID of a resource by its ID.
    * Used for pre-mutation authorization checks in controllers.
    */
-  async getResourceOwner(id: number): Promise<number | null> {
+  async getResourceOwner(id: ${idTs}): Promise<${idTs} | null> {
     return await this.${serviceVar}.getResourceOwner(id);
   }`;
   }
@@ -136,8 +140,9 @@ ${methods}${getResourceOwnerMethod}
 }`;
   }
 
-  public generateFromConfig(config: ModuleConfig): Record<string, string> {
+  public generateFromConfig(config: ModuleConfig, identifiers: IdentifierType = 'numeric'): Record<string, string> {
     const result: Record<string, string> = {};
+    this.identifiers = identifiers;
 
     // Collect all aggregates to know which are roots
     this.availableAggregates.clear();
@@ -155,7 +160,7 @@ ${methods}${getResourceOwnerMethod}
     return result;
   }
 
-  public generateFromYamlFile(yamlFilePath: string): Record<string, string> {
+  public generateFromYamlFile(yamlFilePath: string, identifiers: IdentifierType = 'numeric'): Record<string, string> {
     const yamlContent = fs.readFileSync(yamlFilePath, 'utf8');
     const config = parseYaml(yamlContent);
 
@@ -163,15 +168,16 @@ ${methods}${getResourceOwnerMethod}
       throw new Error('Configuration does not match new module format. Expected useCases structure.');
     }
 
-    return this.generateFromConfig(config);
+    return this.generateFromConfig(config, identifiers);
   }
 
   public async generateAndSaveFiles(
     yamlFilePath: string,
     moduleDir: string,
-    opts?: { force?: boolean; skipOnConflict?: boolean }
+    opts?: { force?: boolean; skipOnConflict?: boolean },
+    identifiers: IdentifierType = 'numeric'
   ): Promise<void> {
-    const useCasesByModel = this.generateFromYamlFile(yamlFilePath);
+    const useCasesByModel = this.generateFromYamlFile(yamlFilePath, identifiers);
     
     const useCasesDir = path.join(moduleDir, 'application', 'useCases');
     fs.mkdirSync(useCasesDir, { recursive: true });

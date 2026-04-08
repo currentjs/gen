@@ -170,3 +170,47 @@ describe('ControllerGenerator - web layout rendering', () => {
     expect(webCode).toNotContain('@Render("plain",');
   });
 });
+
+describe('ControllerGenerator — identifier types', () => {
+  describe('uuid identifiers', () => {
+    const gen = new ControllerGenerator();
+    const config = loadFixture('product.yaml');
+    const result = gen.generateFromConfig(config, 'uuid');
+    const apiCode = getCode(result as Record<string, unknown>, 'ProductApi');
+    const webCode = getCode(result as Record<string, unknown>, 'ProductWeb');
+
+    it('API create action casts user id as string', () => {
+      expect(apiCode).toContain('context.request.user?.id as string');
+      expect(apiCode).toNotContain('context.request.user?.id as number');
+    });
+
+    it('Web create action casts user id as string', () => {
+      expect(webCode).toContain('context.request.user?.id as string');
+      expect(webCode).toNotContain('context.request.user?.id as number');
+    });
+  });
+
+  describe('nanoid identifiers', () => {
+    const gen = new ControllerGenerator();
+    const config = loadFixture('product.yaml');
+    const result = gen.generateFromConfig(config, 'nanoid');
+    const apiCode = getCode(result as Record<string, unknown>, 'ProductApi');
+
+    it('API create action casts user id as string', () => {
+      expect(apiCode).toContain('context.request.user?.id as string');
+      expect(apiCode).toNotContain('context.request.user?.id as number');
+    });
+  });
+
+  describe('numeric identifiers (default)', () => {
+    const gen = new ControllerGenerator();
+    const config = loadFixture('product.yaml');
+    const result = gen.generateFromConfig(config, 'numeric');
+    const apiCode = getCode(result as Record<string, unknown>, 'ProductApi');
+
+    it('API create action casts user id as number', () => {
+      expect(apiCode).toContain('context.request.user?.id as number');
+      expect(apiCode).toNotContain('context.request.user?.id as string');
+    });
+  });
+});

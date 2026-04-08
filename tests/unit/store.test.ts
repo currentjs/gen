@@ -191,3 +191,149 @@ describe('StoreGenerator', () => {
   });
 
 });
+
+describe('StoreGenerator — uuid identifiers', () => {
+  const uuidGen = new StoreGenerator();
+  const config = loadFixture('product.yaml');
+  const result = uuidGen.generateFromConfig(config, 'uuid');
+  const store = getCode(result as Record<string, unknown>, 'Product');
+
+  it('row interface has id: string', () => {
+    expect(store).toContain('id: string;');
+  });
+
+  it('row interface has ownerId: string', () => {
+    expect(store).toContain('ownerId: string;');
+  });
+
+  it('getById accepts string id', () => {
+    expect(store).toContain('async getById(id: string)');
+  });
+
+  it('getResourceOwner accepts and returns string', () => {
+    expect(store).toContain('async getResourceOwner(id: string): Promise<string | null>');
+  });
+
+  it('SELECT uses BIN_TO_UUID for id column', () => {
+    // In generated template strings, backticks are escaped as \`
+    expect(store).toContain('BIN_TO_UUID(\\`id\\`, 1) as \\`id\\`');
+  });
+
+  it('SELECT uses BIN_TO_UUID for ownerId column', () => {
+    expect(store).toContain('BIN_TO_UUID(\\`ownerId\\`, 1) as \\`ownerId\\`');
+  });
+
+  it('WHERE clause uses UUID_TO_BIN for id comparison', () => {
+    expect(store).toContain('id = UUID_TO_BIN(:id, 1)');
+  });
+
+  it('insert pre-generates id via randomUUID', () => {
+    expect(store).toContain('const newId = randomUUID()');
+  });
+
+  it('insert data includes the pre-generated id', () => {
+    expect(store).toContain('id: newId,');
+  });
+
+  it('imports randomUUID from crypto', () => {
+    expect(store).toContain("from 'crypto'");
+    expect(store).toContain('randomUUID');
+  });
+
+  it('does not use insertId for uuid', () => {
+    expect(store).toNotContain('result.insertId');
+  });
+
+  it('update accepts string id', () => {
+    expect(store).toContain('async update(id: string,');
+  });
+
+  it('softDelete accepts string id', () => {
+    expect(store).toContain('async softDelete(id: string)');
+  });
+
+  it('hardDelete accepts string id', () => {
+    expect(store).toContain('async hardDelete(id: string)');
+  });
+});
+
+describe('StoreGenerator — nanoid identifiers', () => {
+  const nanoidGen = new StoreGenerator();
+  const config = loadFixture('product.yaml');
+  const result = nanoidGen.generateFromConfig(config, 'nanoid');
+  const store = getCode(result as Record<string, unknown>, 'Product');
+
+  it('row interface has id: string', () => {
+    expect(store).toContain('id: string;');
+  });
+
+  it('row interface has ownerId: string', () => {
+    expect(store).toContain('ownerId: string;');
+  });
+
+  it('getById accepts string id', () => {
+    expect(store).toContain('async getById(id: string)');
+  });
+
+  it('getResourceOwner accepts and returns string', () => {
+    expect(store).toContain('async getResourceOwner(id: string): Promise<string | null>');
+  });
+
+  it('SELECT does NOT use BIN_TO_UUID (no binary conversion needed)', () => {
+    expect(store).toNotContain('BIN_TO_UUID');
+  });
+
+  it('WHERE clause uses plain id comparison (no UUID_TO_BIN)', () => {
+    expect(store).toContain('id = :id');
+    expect(store).toNotContain('UUID_TO_BIN(:id');
+  });
+
+  it('insert pre-generates id via generateNanoId()', () => {
+    expect(store).toContain('const newId = this.generateNanoId()');
+  });
+
+  it('insert data includes the pre-generated id', () => {
+    expect(store).toContain('id: newId,');
+  });
+
+  it('store class contains generateNanoId private method', () => {
+    expect(store).toContain('private generateNanoId(size = 21)');
+    expect(store).toContain('randomBytes(size)');
+  });
+
+  it('imports randomBytes from crypto', () => {
+    expect(store).toContain("from 'crypto'");
+    expect(store).toContain('randomBytes');
+  });
+
+  it('does not use insertId for nanoid', () => {
+    expect(store).toNotContain('result.insertId');
+  });
+
+  it('does not import randomUUID (uses randomBytes instead)', () => {
+    expect(store).toNotContain('randomUUID');
+  });
+});
+
+describe('StoreGenerator — numeric identifiers (default, backward compat)', () => {
+  const numGen = new StoreGenerator();
+  const config = loadFixture('product.yaml');
+  const result = numGen.generateFromConfig(config, 'numeric');
+  const store = getCode(result as Record<string, unknown>, 'Product');
+
+  it('row interface has id: number', () => {
+    expect(store).toContain('id: number;');
+  });
+
+  it('row interface has ownerId: number', () => {
+    expect(store).toContain('ownerId: number;');
+  });
+
+  it('uses result.insertId for insert', () => {
+    expect(store).toContain('result.insertId');
+  });
+
+  it('does not import crypto', () => {
+    expect(store).toNotContain("from 'crypto'");
+  });
+});

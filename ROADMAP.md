@@ -11,7 +11,7 @@
 | ✅ fix DI (autowiring) providers  | gen         | 0.5.3                  | M    |                                                                                 |
 | ✅ Array and union value objs     | gen         | 0.5.4                  | M    |                                                                                 |
 | ✅ Fix data access layer gen      | gen         | 0.5.5                  | S    |                                                                                 |
-| Configurable identifier types    | gen         | 0.5.6                  | M    | Support int/uuid/string in app config                                           |
+| ✅ Configurable identifier types  | gen         | 0.5.6                  | M    | Support int/uuid/string in app config                                           |
 | HTTP error handling              | router, gen | gen: 0.5.7 router: 0.2 | M    | Add errors to router, use in generator                                          |
 | Support of tailwind in tpls      | gen         | 0.5.8                  | M    | setting in app.yaml                                                             |
 | Database migrations              | gen         | 0.5.9                  | L    |                                                                                 |

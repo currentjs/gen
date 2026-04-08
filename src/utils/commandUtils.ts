@@ -11,6 +11,7 @@ import { ServiceGenerator } from '../generators/serviceGenerator';
 import { ControllerGenerator } from '../generators/controllerGenerator';
 import { StoreGenerator } from '../generators/storeGenerator';
 import { TemplateGenerator } from '../generators/templateGenerator';
+import { normalizeIdentifierType } from '../types/configTypes';
 
 export interface ModuleEntry {
   path: string;
@@ -33,7 +34,7 @@ export interface AppConfig {
 
 const DEFAULT_DATABASE = 'mysql';
 const DEFAULT_STYLING = 'bootstrap';
-const DEFAULT_IDENTIFIERS = 'id';
+const DEFAULT_IDENTIFIERS = 'numeric';
 
 export function loadAppConfig(yamlPath: string): AppConfig {
   const raw = fs.readFileSync(yamlPath, 'utf8');
@@ -61,7 +62,7 @@ export interface ModuleEntryResolved {
   path: string;
   database: string;
   styling: string;
-  identifiers: string;
+  identifiers: import('../types/configTypes').IdentifierType;
 }
 
 export function getModuleEntries(config: AppConfig): ModuleEntryResolved[] {
@@ -69,14 +70,15 @@ export function getModuleEntries(config: AppConfig): ModuleEntryResolved[] {
   const global = config.config || {};
   const database = global.database ?? DEFAULT_DATABASE;
   const styling = global.styling ?? DEFAULT_STYLING;
-  const identifiers = global.identifiers ?? DEFAULT_IDENTIFIERS;
+  const rawIdentifiers = global.identifiers ?? DEFAULT_IDENTIFIERS;
+  const identifiers = normalizeIdentifierType(rawIdentifiers);
   const globalConfig = { database, styling, identifiers };
   return Object.entries(config.modules).map(([name, entry]) => ({
     name,
     path: entry.path,
     database: entry.database ?? globalConfig.database,
     styling: entry.styling ?? globalConfig.styling,
-    identifiers: entry.identifiers ?? globalConfig.identifiers
+    identifiers: normalizeIdentifierType(entry.identifiers ?? globalConfig.identifiers)
   }));
 }
 

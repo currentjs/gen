@@ -100,3 +100,98 @@ describe('DtoGenerator', () => {
     });
   });
 });
+
+describe('DtoGenerator — identifier types', () => {
+  describe('uuid identifiers', () => {
+    const gen = new DtoGenerator();
+    const config = loadFixture('product.yaml');
+    const result = gen.generateFromConfig(config, 'uuid');
+
+    it('get input DTO has id: string', () => {
+      const code = getCode(result as Record<string, unknown>, 'ProductGet');
+      expect(code).toContain('readonly id: string');
+      expect(code).toNotContain('readonly id: number');
+    });
+
+    it('get input DTO does not use parseInt for id', () => {
+      const code = getCode(result as Record<string, unknown>, 'ProductGet');
+      expect(code).toNotContain('parseInt(b.id');
+      expect(code).toContain('b.id as string');
+    });
+
+    it('create input DTO has ownerId: string', () => {
+      const code = getCode(result as Record<string, unknown>, 'ProductCreate');
+      expect(code).toContain('readonly ownerId: string');
+      expect(code).toNotContain('readonly ownerId: number');
+    });
+
+    it('create input DTO does not use parseInt for ownerId', () => {
+      const code = getCode(result as Record<string, unknown>, 'ProductCreate');
+      expect(code).toNotContain('parseInt(b.ownerId');
+      expect(code).toContain('b.ownerId as string');
+    });
+
+    it('get output DTO has readonly id: string (inside ProductGet file)', () => {
+      // The ProductGetOutput class is contained within the ProductGet code file
+      const code = getCode(result as Record<string, unknown>, 'ProductGet');
+      expect(code).toContain('class ProductGetOutput');
+      expect(code).toContain('readonly id: string');
+    });
+  });
+
+  describe('nanoid identifiers', () => {
+    const gen = new DtoGenerator();
+    const config = loadFixture('product.yaml');
+    const result = gen.generateFromConfig(config, 'nanoid');
+
+    it('get input DTO has id: string', () => {
+      const code = getCode(result as Record<string, unknown>, 'ProductGet');
+      expect(code).toContain('readonly id: string');
+      expect(code).toNotContain('readonly id: number');
+    });
+
+    it('get input DTO does not use parseInt for id', () => {
+      const code = getCode(result as Record<string, unknown>, 'ProductGet');
+      expect(code).toNotContain('parseInt(b.id');
+      expect(code).toContain('b.id as string');
+    });
+
+    it('create input DTO has ownerId: string', () => {
+      const code = getCode(result as Record<string, unknown>, 'ProductCreate');
+      expect(code).toContain('readonly ownerId: string');
+    });
+
+    it('get output DTO has readonly id: string (inside ProductGet file)', () => {
+      const code = getCode(result as Record<string, unknown>, 'ProductGet');
+      expect(code).toContain('class ProductGetOutput');
+      expect(code).toContain('readonly id: string');
+    });
+  });
+
+  describe('numeric identifiers (default)', () => {
+    const gen = new DtoGenerator();
+    const config = loadFixture('product.yaml');
+    const result = gen.generateFromConfig(config, 'numeric');
+
+    it('get input DTO has id: number', () => {
+      const code = getCode(result as Record<string, unknown>, 'ProductGet');
+      expect(code).toContain('readonly id: number');
+    });
+
+    it('get input DTO uses parseInt for id', () => {
+      const code = getCode(result as Record<string, unknown>, 'ProductGet');
+      expect(code).toContain('parseInt(b.id');
+    });
+
+    it('create input DTO has ownerId: number', () => {
+      const code = getCode(result as Record<string, unknown>, 'ProductCreate');
+      expect(code).toContain('readonly ownerId: number');
+    });
+
+    it('get output DTO has readonly id: number (inside ProductGet file)', () => {
+      const code = getCode(result as Record<string, unknown>, 'ProductGet');
+      expect(code).toContain('class ProductGetOutput');
+      expect(code).toContain('readonly id: number');
+    });
+  });
+});

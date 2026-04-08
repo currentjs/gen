@@ -3,13 +3,14 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { writeGeneratedFile } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
-import { ModuleConfig, AggregateConfig, ValueObjectConfig, isValidModuleConfig } from '../types/configTypes';
+import { ModuleConfig, AggregateConfig, ValueObjectConfig, isValidModuleConfig, IdentifierType, idTsType } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
 import { capitalize, mapType as mapTypeUtil, isAggregateReference, getReferencedValueObjects } from '../utils/typeUtils';
 
 export class DomainLayerGenerator {
   private availableAggregates: Set<string> = new Set();
   private availableValueObjects: Set<string> = new Set();
+  private identifiers: IdentifierType = 'numeric';
 
   private mapType(yamlType: string): string {
     return mapTypeUtil(yamlType, this.availableAggregates, this.availableValueObjects);
@@ -143,11 +144,12 @@ export class DomainLayerGenerator {
     const imports = [entityImports, valueObjectImports, aggregateRefImports].filter(Boolean).join('\n');
 
     // Generate constructor parameters: id, then ownerId (root) or parentId field (child)
-    const constructorParams: string[] = ['public id: number'];
+    const idTs = idTsType(this.identifiers);
+    const constructorParams: string[] = [`public id: ${idTs}`];
     if (childInfo) {
-      constructorParams.push(`public ${childInfo.parentIdField}: number`);
+      constructorParams.push(`public ${childInfo.parentIdField}: ${idTs}`);
     } else {
-      constructorParams.push('public ownerId: number');
+      constructorParams.push(`public ownerId: ${idTs}`);
     }
     
     // Sort fields: required first, then optional
@@ -258,8 +260,9 @@ ${setterMethods}
 }`;
   }
 
-  public generateFromConfig(config: ModuleConfig): Record<string, { code: string; type: 'entity' | 'valueObject' }> {
+  public generateFromConfig(config: ModuleConfig, identifiers: IdentifierType = 'numeric'): Record<string, { code: string; type: 'entity' | 'valueObject' }> {
     const result: Record<string, { code: string; type: 'entity' | 'valueObject' }> = {};
+    this.identifiers = identifiers;
     
     // First pass: collect all aggregate and value object names
     if (config.domain.aggregates) {
@@ -299,7 +302,7 @@ ${setterMethods}
     return result;
   }
 
-  public generateFromYamlFile(yamlFilePath: string): Record<string, { code: string; type: 'entity' | 'valueObject' }> {
+  public generateFromYamlFile(yamlFilePath: string, identifiers: IdentifierType = 'numeric'): Record<string, { code: string; type: 'entity' | 'valueObject' }> {
     const yamlContent = fs.readFileSync(yamlFilePath, 'utf8');
     const config = parseYaml(yamlContent);
 
@@ -307,15 +310,16 @@ ${setterMethods}
       throw new Error('Configuration does not match new module format. Expected domain.aggregates structure.');
     }
 
-    return this.generateFromConfig(config);
+    return this.generateFromConfig(config, identifiers);
   }
 
   public async generateAndSaveFiles(
     yamlFilePath: string,
     moduleDir: string,
-    opts?: { force?: boolean; skipOnConflict?: boolean }
+    opts?: { force?: boolean; skipOnConflict?: boolean },
+    identifiers: IdentifierType = 'numeric'
   ): Promise<void> {
-    const codeByEntity = this.generateFromYamlFile(yamlFilePath);
+    const codeByEntity = this.generateFromYamlFile(yamlFilePath, identifiers);
     
     const entitiesDir = path.join(moduleDir, 'domain', 'entities');
     const valueObjectsDir = path.join(moduleDir, 'domain', 'valueObjects');

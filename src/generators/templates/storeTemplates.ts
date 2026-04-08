@@ -1,6 +1,6 @@
 export const storeTemplates = {
   rowInterface: `export interface {{ENTITY_NAME}}Row {
-  id: number;
+  id: {{ID_TYPE}};
 {{ROW_FIELDS}}
   createdAt: string;
   updatedAt: string;
@@ -23,20 +23,20 @@ export class {{ENTITY_NAME}}Store {
   private ensureParsed(value: any): any {
     return typeof value === 'string' ? JSON.parse(value) : value;
   }
-
+{{ID_HELPERS}}
   private rowToModel(row: {{ENTITY_NAME}}Row): {{ENTITY_NAME}} {
     return new {{ENTITY_NAME}}(
-      row.id,
+      {{ROW_ID_EXPR}},
 {{ROW_TO_MODEL_MAPPING}}
     );
   }
 
 {{LIST_METHODS}}
 
-  async getById(id: number): Promise<{{ENTITY_NAME}} | null> {
+  async getById(id: {{ID_TYPE}}): Promise<{{ENTITY_NAME}} | null> {
     const result = await this.db.query(
-      \`SELECT {{FIELD_NAMES}} FROM \\\`\${this.tableName}\\\` WHERE id = :id AND deletedAt IS NULL\`,
-      { id }
+      \`SELECT {{FIELD_NAMES}} FROM \\\`\${this.tableName}\\\` WHERE {{WHERE_ID_EXPR}} AND deletedAt IS NULL\`,
+      { id{{ID_PARAM_EXPR}} }
     );
 
     if (result.success && result.data && result.data.length > 0) {
@@ -47,8 +47,9 @@ export class {{ENTITY_NAME}}Store {
 
   async insert(entity: {{ENTITY_NAME}}): Promise<{{ENTITY_NAME}}> {
     const now = new Date();
+{{INSERT_ID_PRE_LOGIC}}
     const data: Partial<{{ENTITY_NAME}}Row> = {
-{{INSERT_DATA_MAPPING}},
+{{INSERT_ID_DATA}}{{INSERT_DATA_MAPPING}},
       createdAt: this.toMySQLDatetime(now),
       updatedAt: this.toMySQLDatetime(now)
     };
@@ -62,15 +63,15 @@ export class {{ENTITY_NAME}}Store {
       cleanData
     );
 
-    if (result.success && result.insertId) {
-      const newId = typeof result.insertId === 'string' ? parseInt(result.insertId, 10) : result.insertId;
+    if (result.success{{INSERT_SUCCESS_COND}}) {
+      {{INSERT_GET_ID}}
       return this.getById(newId) as Promise<{{ENTITY_NAME}}>;
     }
 
     throw new Error('Failed to insert {{ENTITY_NAME}}');
   }
 
-  async update(id: number, entity: {{ENTITY_NAME}}): Promise<{{ENTITY_NAME}}> {
+  async update(id: {{ID_TYPE}}, entity: {{ENTITY_NAME}}): Promise<{{ENTITY_NAME}}> {
     const now = new Date();
     const rawData: Partial<{{ENTITY_NAME}}Row> = {
 {{UPDATE_DATA_MAPPING}},
@@ -83,8 +84,8 @@ export class {{ENTITY_NAME}}Store {
       .map(f => \`\\\`\${f}\\\` = :\${f}\`).join(', ');
 
     const result = await this.db.query(
-      \`UPDATE \\\`\${this.tableName}\\\` SET \${updateFields}, updatedAt = :updatedAt WHERE id = :id\`,
-      { ...cleanData, id }
+      \`UPDATE \\\`\${this.tableName}\\\` SET \${updateFields}, updatedAt = :updatedAt WHERE {{WHERE_ID_EXPR}}\`,
+      { ...cleanData, id{{ID_PARAM_EXPR}} }
     );
 
     if (result.success) {
@@ -94,20 +95,20 @@ export class {{ENTITY_NAME}}Store {
     throw new Error('Failed to update {{ENTITY_NAME}}');
   }
 
-  async softDelete(id: number): Promise<boolean> {
+  async softDelete(id: {{ID_TYPE}}): Promise<boolean> {
     const now = new Date();
     const result = await this.db.query(
-      \`UPDATE \\\`\${this.tableName}\\\` SET deletedAt = :deletedAt WHERE id = :id\`,
-      { deletedAt: this.toMySQLDatetime(now), id }
+      \`UPDATE \\\`\${this.tableName}\\\` SET deletedAt = :deletedAt WHERE {{WHERE_ID_EXPR}}\`,
+      { deletedAt: this.toMySQLDatetime(now), id{{ID_PARAM_EXPR}} }
     );
 
     return result.success;
   }
 
-  async hardDelete(id: number): Promise<boolean> {
+  async hardDelete(id: {{ID_TYPE}}): Promise<boolean> {
     const result = await this.db.query(
-      \`DELETE FROM \\\`\${this.tableName}\\\` WHERE id = :id\`,
-      { id }
+      \`DELETE FROM \\\`\${this.tableName}\\\` WHERE {{WHERE_ID_EXPR}}\`,
+      { id{{ID_PARAM_EXPR}} }
     );
 
     return result.success;
@@ -118,7 +119,7 @@ export class {{ENTITY_NAME}}Store {
 
 export const storeFileTemplate = `import { Injectable } from '../../../../system';
 import { {{ENTITY_IMPORT_ITEMS}} } from '../../domain/entities/{{ENTITY_NAME}}';
-import type { ISqlProvider } from '@currentjs/provider-mysql';{{VALUE_OBJECT_IMPORTS}}{{AGGREGATE_REF_IMPORTS}}
+import type { ISqlProvider } from '@currentjs/provider-mysql';{{CRYPTO_IMPORT}}{{VALUE_OBJECT_IMPORTS}}{{AGGREGATE_REF_IMPORTS}}
 
 {{ROW_INTERFACE}}
 

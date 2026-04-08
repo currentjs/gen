@@ -492,6 +492,8 @@ Collects all aggregate definitions from module YAMLs, compares them against the 
 
 The migration file contains `CREATE TABLE`, `ALTER TABLE ADD/MODIFY/DROP COLUMN`, and `DROP TABLE` statements as needed. Foreign keys, indexes, and standard timestamp columns (`created_at`, `updated_at`, `deleted_at`) are handled automatically.
 
+The SQL types of primary keys and foreign keys are determined by the `config.identifiers` setting in `app.yaml`.
+
 After generating the file, the schema state is updated so the next `migrate commit` only produces a diff of subsequent changes.
 
 ### `migrate push` *(not yet implemented)*

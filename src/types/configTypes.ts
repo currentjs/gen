@@ -2,6 +2,22 @@
  * Type definitions for the Clean Architecture module configuration
  */
 
+// ============= IDENTIFIER TYPES =============
+
+export type IdentifierType = 'numeric' | 'uuid' | 'nanoid';
+
+export function normalizeIdentifierType(value: string): IdentifierType {
+  const lower = value.toLowerCase();
+  if (lower === 'id' || lower === 'numeric') return 'numeric';
+  if (lower === 'uuid') return 'uuid';
+  if (lower === 'nanoid') return 'nanoid';
+  throw new Error(`Unknown identifier type: "${value}". Expected: numeric, uuid, or nanoid`);
+}
+
+export function idTsType(identifiers: IdentifierType): 'number' | 'string' {
+  return identifiers === 'numeric' ? 'number' : 'string';
+}
+
 // ============= DOMAIN LAYER =============
 
 export interface FieldDefinition {
