@@ -68,18 +68,19 @@ export async function handleGenerateAll(
     // eslint-disable-next-line no-console
     console.log(colors.blue(`\nGenerating module: ${path.basename(moduleDir)}`));
 
+    const identifiers = entry.identifiers;
     // eslint-disable-next-line no-await-in-loop
-    await domainGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
+    await domainGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers);
     // eslint-disable-next-line no-await-in-loop
-    await dtoGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
+    await dtoGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers);
     // eslint-disable-next-line no-await-in-loop
-    await useCaseGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
+    await useCaseGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers);
     // eslint-disable-next-line no-await-in-loop
-    await serviceGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
+    await serviceGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers);
     // eslint-disable-next-line no-await-in-loop
-    await storeGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
+    await storeGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers);
     // eslint-disable-next-line no-await-in-loop
-    await controllerGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts);
+    await controllerGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers);
     // eslint-disable-next-line no-await-in-loop
     await templateGen.generateAndSaveFiles(moduleYamlPath, moduleDir, { force: opts?.force, skipOnConflict: opts?.skip, onlyIfMissing: !opts?.withTemplates });
 

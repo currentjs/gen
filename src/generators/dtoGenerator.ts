@@ -9,7 +9,9 @@ import {
   UseCaseOutputConfig,
   AggregateConfig,
   ValueObjectConfig,
-  isValidModuleConfig 
+  isValidModuleConfig,
+  IdentifierType,
+  idTsType
 } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
 import { capitalize, mapType as mapTypeUtil, isAggregateReference, getReferencedValueObjects, isValueObjectFieldType } from '../utils/typeUtils';
@@ -17,6 +19,7 @@ import { capitalize, mapType as mapTypeUtil, isAggregateReference, getReferenced
 export class DtoGenerator {
   private availableAggregates: Map<string, AggregateConfig> = new Map();
   private availableValueObjects: Map<string, ValueObjectConfig> = new Map();
+  private identifiers: IdentifierType = 'numeric';
 
   private mapType(yamlType: string): string {
     return mapTypeUtil(yamlType, this.availableAggregates, this.availableValueObjects);
@@ -95,13 +98,17 @@ export class DtoGenerator {
     // Handle identifier (for get, update, delete)
     if (inputConfig.identifier) {
       const fieldName = inputConfig.identifier;
-      fieldDeclarations.push(`  readonly ${fieldName}: number;`);
-      constructorParams.push(`${fieldName}: number`);
+      const idTs = idTsType(this.identifiers);
+      const idTransform = this.identifiers === 'numeric'
+        ? `typeof b.${fieldName} === 'string' ? parseInt(b.${fieldName}, 10) : b.${fieldName} as number`
+        : `b.${fieldName} as string`;
+      fieldDeclarations.push(`  readonly ${fieldName}: ${idTs};`);
+      constructorParams.push(`${fieldName}: ${idTs}`);
       constructorAssignments.push(`    this.${fieldName} = ${fieldName};`);
       validationChecks.push(`    if (b.${fieldName} === undefined || b.${fieldName} === null) {
       throw new Error('${fieldName} is required');
     }`);
-      fieldTransforms.push(`      ${fieldName}: typeof b.${fieldName} === 'string' ? parseInt(b.${fieldName}, 10) : b.${fieldName} as number`);
+      fieldTransforms.push(`      ${fieldName}: ${idTransform}`);
     }
 
     // Handle pagination
@@ -150,22 +157,27 @@ export class DtoGenerator {
       
       if (isCreateAction) {
         const ownerOrParentField = childInfo ? childInfo.parentIdField : 'ownerId';
-        fieldDeclarations.push(`  readonly ${ownerOrParentField}: number;`);
-        constructorParams.push(`${ownerOrParentField}: number`);
+        const idTs = idTsType(this.identifiers);
+        const ownerTransform = this.identifiers === 'numeric'
+          ? `typeof b.${ownerOrParentField} === 'string' ? parseInt(b.${ownerOrParentField}, 10) : b.${ownerOrParentField} as number`
+          : `b.${ownerOrParentField} as string`;
+        fieldDeclarations.push(`  readonly ${ownerOrParentField}: ${idTs};`);
+        constructorParams.push(`${ownerOrParentField}: ${idTs}`);
         constructorAssignments.push(`    this.${ownerOrParentField} = ${ownerOrParentField};`);
         validationChecks.push(`    if (b.${ownerOrParentField} === undefined || b.${ownerOrParentField} === null) {
       throw new Error('${ownerOrParentField} is required');
     }`);
-        fieldTransforms.push(`      ${ownerOrParentField}: typeof b.${ownerOrParentField} === 'string' ? parseInt(b.${ownerOrParentField}, 10) : b.${ownerOrParentField} as number`);
+        fieldTransforms.push(`      ${ownerOrParentField}: ${ownerTransform}`);
       }
 
       // Add fields
+      const aggIdTs = idTsType(this.identifiers);
       fieldsToInclude.forEach(([fieldName, fieldConfig]) => {
         if (fieldName === 'id' || fieldConfig.auto) return;
 
         const isAggRef = isAggregateReference(fieldConfig.type, this.availableAggregates);
-        const tsType = isAggRef ? 'number' : this.mapType(fieldConfig.type);
-        const effectiveFieldType = isAggRef ? 'number' : fieldConfig.type;
+        const tsType = isAggRef ? aggIdTs : this.mapType(fieldConfig.type);
+        const effectiveFieldType = isAggRef ? (this.identifiers === 'numeric' ? 'number' : 'string') : fieldConfig.type;
         // Aggregate references are always optional in DTOs; other fields default to required
         const isRequired = !isAggRef && !inputConfig.partial && fieldConfig.required !== false;
         const optional = isRequired ? '' : '?';
@@ -265,8 +277,9 @@ ${transformsStr}
 
     // Always include id for entity outputs
     if (outputConfig.from) {
-      fieldDeclarations.push(`  readonly id: number;`);
-      constructorParams.push(`id: number`);
+      const idTs = idTsType(this.identifiers);
+      fieldDeclarations.push(`  readonly id: ${idTs};`);
+      constructorParams.push(`id: ${idTs}`);
       fromMappings.push(`      id: entity.id`);
     }
 
@@ -283,11 +296,12 @@ ${transformsStr}
       }
 
       // Add fields
+      const idTs = idTsType(this.identifiers);
       fieldsToInclude.forEach(([fieldName, fieldConfig]) => {
         if (fieldName === 'id') return;
 
         const isAggRef = isAggregateReference(fieldConfig.type, this.availableAggregates);
-        const tsType = isAggRef ? 'number' : this.mapType(fieldConfig.type);
+        const tsType = isAggRef ? idTs : this.mapType(fieldConfig.type);
         const isOptional = fieldConfig.required === false || isAggRef;
         const optional = isOptional ? '?' : '';
         
@@ -483,8 +497,9 @@ ${mappingsStr}
     return { valueObjects, entities };
   }
 
-  public generateFromConfig(config: ModuleConfig): Record<string, string> {
+  public generateFromConfig(config: ModuleConfig, identifiers: IdentifierType = 'numeric'): Record<string, string> {
     const result: Record<string, string> = {};
+    this.identifiers = identifiers;
 
     // Collect all aggregates
     if (config.domain.aggregates) {
@@ -567,7 +582,7 @@ ${mappingsStr}
     return result;
   }
 
-  public generateFromYamlFile(yamlFilePath: string): Record<string, string> {
+  public generateFromYamlFile(yamlFilePath: string, identifiers: IdentifierType = 'numeric'): Record<string, string> {
     const yamlContent = fs.readFileSync(yamlFilePath, 'utf8');
     const config = parseYaml(yamlContent);
 
@@ -575,15 +590,16 @@ ${mappingsStr}
       throw new Error('Configuration does not match new module format. Expected useCases structure.');
     }
 
-    return this.generateFromConfig(config);
+    return this.generateFromConfig(config, identifiers);
   }
 
   public async generateAndSaveFiles(
     yamlFilePath: string,
     moduleDir: string,
-    opts?: { force?: boolean; skipOnConflict?: boolean }
+    opts?: { force?: boolean; skipOnConflict?: boolean },
+    identifiers: IdentifierType = 'numeric'
   ): Promise<void> {
-    const dtosByName = this.generateFromYamlFile(yamlFilePath);
+    const dtosByName = this.generateFromYamlFile(yamlFilePath, identifiers);
     
     const dtoDir = path.join(moduleDir, 'application', 'dto');
     fs.mkdirSync(dtoDir, { recursive: true });

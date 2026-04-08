@@ -8,7 +8,9 @@ import {
   UseCaseDefinition,
   UseCaseInputConfig,
   AggregateConfig,
-  isValidModuleConfig 
+  isValidModuleConfig,
+  IdentifierType,
+  idTsType
 } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
 import { capitalize, mapType as mapTypeUtil, isAggregateReference } from '../utils/typeUtils';
@@ -26,6 +28,7 @@ interface HandlerContext {
 
 export class ServiceGenerator {
   private availableAggregates: Map<string, AggregateConfig> = new Map();
+  private identifiers: IdentifierType = 'numeric';
 
   private mapType(yamlType: string): string {
     return mapTypeUtil(yamlType, this.availableAggregates);
@@ -203,8 +206,9 @@ export class ServiceGenerator {
   ): string {
     const returnType = `{ items: ${modelName}[]; total: number; page: number; limit: number }`;
 
+    const idTs = idTsType(this.identifiers);
     if (hasPagination) {
-      return `  async list(page: number = 1, limit: number = 20, ownerId?: number): Promise<${returnType}> {
+      return `  async list(page: number = 1, limit: number = 20, ownerId?: ${idTs}): Promise<${returnType}> {
     const [items, total] = await Promise.all([
       this.${storeName}.getPaginated(page, limit, ownerId),
       this.${storeName}.count(ownerId)
@@ -213,14 +217,15 @@ export class ServiceGenerator {
   }`;
     }
 
-    return `  async list(ownerId?: number): Promise<${returnType}> {
+    return `  async list(ownerId?: ${idTs}): Promise<${returnType}> {
     const items = await this.${storeName}.getAll(ownerId);
     return { items, total: items.length, page: 1, limit: items.length };
   }`;
   }
 
   private generateGetHandler(modelName: string, storeName: string, entityLower: string): string {
-    return `  async get(id: number): Promise<${modelName}> {
+    const idTs = idTsType(this.identifiers);
+    return `  async get(id: ${idTs}): Promise<${modelName}> {
     const ${entityLower} = await this.${storeName}.getById(id);
     if (!${entityLower}) {
       throw new Error('${modelName} not found');
@@ -263,8 +268,9 @@ export class ServiceGenerator {
       return `input.${fieldName}`;
     }).join(', ');
     const constructorArgs = `input.${firstArgField}, ${fieldArgs}`;
+    const idPlaceholder = this.identifiers === 'numeric' ? '0' : "''";
     return `  async create(input: ${inputType}): Promise<${modelName}> {
-    const ${entityLower} = new ${modelName}(0, ${constructorArgs});
+    const ${entityLower} = new ${modelName}(${idPlaceholder}, ${constructorArgs});
     return await this.${storeName}.insert(${entityLower});
   }`;
   }
@@ -274,8 +280,10 @@ export class ServiceGenerator {
     storeName: string,
     aggregateConfig: AggregateConfig,
     inputType: string,
-    dtoFields: Set<string>
+    dtoFields: Set<string>,
+    _identifiers?: IdentifierType
   ): string {
+    const idTs = idTsType(this.identifiers);
     const setterCalls = Object.entries(aggregateConfig.fields)
       .filter(([fieldName, fieldConfig]) => !fieldConfig.auto && fieldName !== 'id' && dtoFields.has(fieldName))
       .map(([fieldName, fieldConfig]) => {
@@ -296,7 +304,7 @@ export class ServiceGenerator {
     }`;
       })
       .join('\n');
-    return `  async update(id: number, input: ${inputType}): Promise<${modelName}> {
+    return `  async update(id: ${idTs}, input: ${inputType}): Promise<${modelName}> {
     const existing${modelName} = await this.${storeName}.getById(id);
     if (!existing${modelName}) {
       throw new Error('${modelName} not found');
@@ -309,7 +317,8 @@ ${setterCalls}
   }
 
   private generateDeleteHandler(modelName: string, storeName: string): string {
-    return `  async delete(id: number): Promise<{ success: boolean; message: string }> {
+    const idTs = idTsType(this.identifiers);
+    return `  async delete(id: ${idTs}): Promise<{ success: boolean; message: string }> {
     const success = await this.${storeName}.softDelete(id);
     if (!success) {
       throw new Error('${modelName} not found or could not be deleted');
@@ -383,21 +392,23 @@ ${setterCalls}
   private generateListByParentMethod(modelName: string, childInfo?: ChildEntityInfo): string {
     if (!childInfo) return '';
     const storeVar = `${modelName.toLowerCase()}Store`;
+    const idTs = idTsType(this.identifiers);
     return `
-  async listByParent(parentId: number): Promise<${modelName}[]> {
+  async listByParent(parentId: ${idTs}): Promise<${modelName}[]> {
     return await this.${storeVar}.getByParentId(parentId);
   }`;
   }
 
   private generateGetResourceOwnerMethod(modelName: string): string {
     const storeVar = `${modelName.toLowerCase()}Store`;
+    const idTs = idTsType(this.identifiers);
     
     return `
   /**
    * Get the owner ID of a resource by its ID.
    * Used for pre-mutation authorization checks.
    */
-  async getResourceOwner(id: number): Promise<number | null> {
+  async getResourceOwner(id: ${idTs}): Promise<${idTs} | null> {
     return await this.${storeVar}.getResourceOwner(id);
   }`;
   }
@@ -501,8 +512,9 @@ ${methods.join('\n\n')}
 }`;
   }
 
-  public generateFromConfig(config: ModuleConfig): Record<string, string> {
+  public generateFromConfig(config: ModuleConfig, identifiers: IdentifierType = 'numeric'): Record<string, string> {
     const result: Record<string, string> = {};
+    this.identifiers = identifiers;
 
     // Collect all aggregates
     if (config.domain.aggregates) {
@@ -529,7 +541,7 @@ ${methods.join('\n\n')}
     return result;
   }
 
-  public generateFromYamlFile(yamlFilePath: string): Record<string, string> {
+  public generateFromYamlFile(yamlFilePath: string, identifiers: IdentifierType = 'numeric'): Record<string, string> {
     const yamlContent = fs.readFileSync(yamlFilePath, 'utf8');
     const config = parseYaml(yamlContent);
 
@@ -537,15 +549,16 @@ ${methods.join('\n\n')}
       throw new Error('Configuration does not match new module format. Expected useCases structure.');
     }
 
-    return this.generateFromConfig(config);
+    return this.generateFromConfig(config, identifiers);
   }
 
   public async generateAndSaveFiles(
     yamlFilePath: string,
     moduleDir: string,
-    opts?: { force?: boolean; skipOnConflict?: boolean }
+    opts?: { force?: boolean; skipOnConflict?: boolean },
+    identifiers: IdentifierType = 'numeric'
   ): Promise<void> {
-    const servicesByModel = this.generateFromYamlFile(yamlFilePath);
+    const servicesByModel = this.generateFromYamlFile(yamlFilePath, identifiers);
     
     const servicesDir = path.join(moduleDir, 'application', 'services');
     fs.mkdirSync(servicesDir, { recursive: true });

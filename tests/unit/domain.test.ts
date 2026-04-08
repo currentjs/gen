@@ -128,3 +128,54 @@ describe('DomainLayerGenerator', () => {
     });
   });
 });
+
+describe('DomainLayerGenerator — identifier types', () => {
+  describe('uuid identifiers', () => {
+    const gen = new DomainLayerGenerator();
+    const config = loadFixture('product.yaml');
+    const result = gen.generateFromConfig(config, 'uuid');
+    const code = getCode(result as Record<string, unknown>, 'Product');
+
+    it('entity has id: string instead of id: number', () => {
+      expect(code).toContain('public id: string');
+      expect(code).toNotContain('public id: number');
+    });
+
+    it('entity has ownerId: string instead of ownerId: number', () => {
+      expect(code).toContain('public ownerId: string');
+      expect(code).toNotContain('public ownerId: number');
+    });
+  });
+
+  describe('nanoid identifiers', () => {
+    const gen = new DomainLayerGenerator();
+    const config = loadFixture('product.yaml');
+    const result = gen.generateFromConfig(config, 'nanoid');
+    const code = getCode(result as Record<string, unknown>, 'Product');
+
+    it('entity has id: string for nanoid', () => {
+      expect(code).toContain('public id: string');
+      expect(code).toNotContain('public id: number');
+    });
+
+    it('entity has ownerId: string for nanoid', () => {
+      expect(code).toContain('public ownerId: string');
+      expect(code).toNotContain('public ownerId: number');
+    });
+  });
+
+  describe('numeric identifiers (default)', () => {
+    const gen = new DomainLayerGenerator();
+    const config = loadFixture('product.yaml');
+    const result = gen.generateFromConfig(config, 'numeric');
+    const code = getCode(result as Record<string, unknown>, 'Product');
+
+    it('entity retains id: number for numeric', () => {
+      expect(code).toContain('public id: number');
+    });
+
+    it('entity retains ownerId: number for numeric', () => {
+      expect(code).toContain('public ownerId: number');
+    });
+  });
+});

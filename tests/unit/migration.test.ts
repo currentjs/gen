@@ -7,6 +7,8 @@ import {
   compareSchemas,
   buildChildToParentMap,
   mapYamlTypeToSql,
+  getIdColumnDefinition,
+  getFkColumnType,
 } from '../../src/utils/migrationUtils.js';
 import { AggregateConfig } from '../../src/types/configTypes.js';
 
@@ -334,4 +336,158 @@ describe('migrationUtils', () => {
     });
   });
 
+});
+
+describe('getIdColumnDefinition', () => {
+  it('returns INT AUTO_INCREMENT for numeric (default)', () => {
+    expect(getIdColumnDefinition('numeric')).toContain('INT AUTO_INCREMENT PRIMARY KEY');
+  });
+
+  it('returns BINARY(16) with UUID default for uuid', () => {
+    const col = getIdColumnDefinition('uuid');
+    expect(col).toContain('BINARY(16) PRIMARY KEY');
+    expect(col).toContain('UUID_TO_BIN(UUID(), 1)');
+  });
+
+  it('returns VARCHAR(21) for nanoid', () => {
+    const col = getIdColumnDefinition('nanoid');
+    expect(col).toContain('VARCHAR(21) PRIMARY KEY');
+    expect(col).toNotContain('AUTO_INCREMENT');
+  });
+});
+
+describe('getFkColumnType', () => {
+  it('returns INT for numeric', () => {
+    assert.strictEqual(getFkColumnType('numeric'), 'INT');
+  });
+
+  it('returns BINARY(16) for uuid', () => {
+    assert.strictEqual(getFkColumnType('uuid'), 'BINARY(16)');
+  });
+
+  it('returns VARCHAR(21) for nanoid', () => {
+    assert.strictEqual(getFkColumnType('nanoid'), 'VARCHAR(21)');
+  });
+});
+
+describe('mapYamlTypeToSql — identifier-aware aggregate FK type', () => {
+  const aggregates = new Set(['Author']);
+
+  it('maps aggregate reference to INT for numeric (default)', () => {
+    assert.strictEqual(mapYamlTypeToSql('Author', aggregates, undefined, 'numeric'), 'INT');
+  });
+
+  it('maps aggregate reference to BINARY(16) for uuid', () => {
+    assert.strictEqual(mapYamlTypeToSql('Author', aggregates, undefined, 'uuid'), 'BINARY(16)');
+  });
+
+  it('maps aggregate reference to VARCHAR(21) for nanoid', () => {
+    assert.strictEqual(mapYamlTypeToSql('Author', aggregates, undefined, 'nanoid'), 'VARCHAR(21)');
+  });
+});
+
+describe('generateCreateTableSQL — uuid identifiers', () => {
+  const rootAggregate: AggregateConfig = {
+    root: true,
+    fields: {
+      title: { type: 'string', required: true },
+      author: { type: 'Author', required: false },
+    },
+  };
+  const available = new Set(['Post', 'Author']);
+  const sql = generateCreateTableSQL('Post', rootAggregate, available, undefined, undefined, 'uuid');
+
+  it('id column is BINARY(16) with UUID default', () => {
+    expect(sql).toContain('id BINARY(16) PRIMARY KEY DEFAULT (UUID_TO_BIN(UUID(), 1))');
+    expect(sql).toNotContain('AUTO_INCREMENT');
+  });
+
+  it('ownerId column is BINARY(16) for root aggregate', () => {
+    expect(sql).toContain('ownerId BINARY(16) NOT NULL');
+    expect(sql).toNotContain('ownerId INT');
+  });
+
+  it('FK column is BINARY(16)', () => {
+    expect(sql).toContain('authorId BINARY(16)');
+    expect(sql).toNotContain('authorId INT');
+  });
+});
+
+describe('generateCreateTableSQL — nanoid identifiers', () => {
+  const rootAggregate: AggregateConfig = {
+    root: true,
+    fields: {
+      title: { type: 'string', required: true },
+    },
+  };
+  const available = new Set(['Post']);
+  const sql = generateCreateTableSQL('Post', rootAggregate, available, undefined, undefined, 'nanoid');
+
+  it('id column is VARCHAR(21) with no AUTO_INCREMENT', () => {
+    expect(sql).toContain('id VARCHAR(21) PRIMARY KEY');
+    expect(sql).toNotContain('AUTO_INCREMENT');
+  });
+
+  it('ownerId column is VARCHAR(21) for root aggregate', () => {
+    expect(sql).toContain('ownerId VARCHAR(21) NOT NULL');
+    expect(sql).toNotContain('ownerId INT');
+  });
+});
+
+describe('generateCreateTableSQL — nanoid child entity', () => {
+  const childAggregate: AggregateConfig = {
+    fields: {
+      quantity: { type: 'integer', required: true },
+    },
+  };
+  const available = new Set(['Invoice', 'InvoiceItem']);
+  const sql = generateCreateTableSQL('InvoiceItem', childAggregate, available, undefined, 'invoiceId', 'nanoid');
+
+  it('parent ID column is VARCHAR(21)', () => {
+    expect(sql).toContain('invoiceId VARCHAR(21) NOT NULL');
+    expect(sql).toNotContain('invoiceId INT');
+  });
+});
+
+describe('compareSchemas — uuid identifiers initial migration', () => {
+  const aggregates: Record<string, AggregateConfig> = {
+    Post: {
+      root: true,
+      fields: {
+        title: { type: 'string', required: true },
+      },
+    },
+  };
+  const statements = compareSchemas(null, aggregates, undefined, 'uuid');
+  const joined = statements.join('\n');
+
+  it('generates BINARY(16) PRIMARY KEY for uuid', () => {
+    expect(joined).toContain('BINARY(16) PRIMARY KEY');
+    expect(joined).toContain('UUID_TO_BIN(UUID(), 1)');
+  });
+
+  it('generates BINARY(16) ownerId for uuid', () => {
+    expect(joined).toContain('ownerId BINARY(16) NOT NULL');
+  });
+});
+
+describe('compareSchemas — nanoid identifiers initial migration', () => {
+  const aggregates: Record<string, AggregateConfig> = {
+    Post: {
+      root: true,
+      fields: {
+        title: { type: 'string', required: true },
+      },
+    },
+  };
+  const statements = compareSchemas(null, aggregates, undefined, 'nanoid');
+  const joined = statements.join('\n');
+
+  it('generates VARCHAR(21) PRIMARY KEY for nanoid', () => {
+    expect(joined).toContain('id VARCHAR(21) PRIMARY KEY');
+  });
+
+  it('generates VARCHAR(21) ownerId for nanoid', () => {
+    expect(joined).toContain('ownerId VARCHAR(21) NOT NULL');
+  });
 });

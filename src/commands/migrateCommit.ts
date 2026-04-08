@@ -4,7 +4,7 @@ import { parse as parseYaml } from 'yaml';
 import { colors } from '../utils/colors';
 import { resolveYamlPath } from '../utils/cliUtils';
 import { loadAppConfig, getModuleEntries } from '../utils/commandUtils';
-import { isValidModuleConfig, AggregateConfig } from '../types/configTypes';
+import { isValidModuleConfig, AggregateConfig, normalizeIdentifierType, IdentifierType } from '../types/configTypes';
 import {
   SchemaState,
   loadSchemaState,
@@ -17,6 +17,7 @@ import {
 interface CollectedSchema {
   aggregates: Record<string, AggregateConfig>;
   valueObjects: Set<string>;
+  identifiers: IdentifierType;
 }
 
 function collectSchemaFromModules(appYamlPath: string): CollectedSchema {
@@ -27,6 +28,8 @@ function collectSchemaFromModules(appYamlPath: string): CollectedSchema {
   const allAggregates: Record<string, AggregateConfig> = {};
   const allValueObjects = new Set<string>();
   const sources: string[] = [];
+  const rawIdentifiers = appConfig.config?.identifiers ?? 'numeric';
+  const identifiers = normalizeIdentifierType(rawIdentifiers);
 
   for (const entry of moduleEntries) {
     const moduleYamlPath = path.isAbsolute(entry.path)
@@ -67,7 +70,7 @@ function collectSchemaFromModules(appYamlPath: string): CollectedSchema {
     console.log(colors.gray(`   Sources: ${sources.join(', ')}`));
   }
 
-  return { aggregates: allAggregates, valueObjects: allValueObjects };
+  return { aggregates: allAggregates, valueObjects: allValueObjects, identifiers };
 }
 
 export function handleMigrateCommit(yamlPath?: string): void {
@@ -92,7 +95,7 @@ export function handleMigrateCommit(yamlPath?: string): void {
 
     // eslint-disable-next-line no-console
     console.log(colors.cyan('\n📋 Collecting aggregates from all modules...'));
-    const { aggregates: currentAggregates, valueObjects: currentValueObjects } = collectSchemaFromModules(resolvedYamlPath);
+    const { aggregates: currentAggregates, valueObjects: currentValueObjects, identifiers } = collectSchemaFromModules(resolvedYamlPath);
 
     if (Object.keys(currentAggregates).length === 0) {
       // eslint-disable-next-line no-console
@@ -115,7 +118,7 @@ export function handleMigrateCommit(yamlPath?: string): void {
 
     // eslint-disable-next-line no-console
     console.log(colors.cyan('\n🔍 Comparing schemas...'));
-    const sqlStatements = compareSchemas(oldState, currentAggregates, currentValueObjects);
+    const sqlStatements = compareSchemas(oldState, currentAggregates, currentValueObjects, identifiers);
 
     if (sqlStatements.length === 0 || sqlStatements.every(s => s.trim() === '' || s.startsWith('--'))) {
       // eslint-disable-next-line no-console

@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { writeGeneratedFile } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
-import { ModuleConfig, AggregateConfig, AggregateFieldConfig, ValueObjectConfig, isValidModuleConfig } from '../types/configTypes';
+import { ModuleConfig, AggregateConfig, AggregateFieldConfig, ValueObjectConfig, isValidModuleConfig, IdentifierType, idTsType } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
 import { storeTemplates, storeFileTemplate } from './templates/storeTemplates';
 import { capitalize, mapRowType, isAggregateReference, parseFieldType, getReferencedValueObjects } from '../utils/typeUtils';
@@ -11,6 +11,7 @@ import { capitalize, mapRowType, isAggregateReference, parseFieldType, getRefere
 export class StoreGenerator {
   private availableValueObjects: Map<string, ValueObjectConfig> = new Map();
   private availableAggregates: Set<string> = new Set();
+  private identifiers: IdentifierType = 'numeric';
 
   private isAggregateField(fieldConfig: AggregateFieldConfig): boolean {
     return isAggregateReference(fieldConfig.type, this.availableAggregates);
@@ -204,13 +205,14 @@ export class StoreGenerator {
 
   private generateRowFields(fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
     const result: string[] = [];
+    const idTs = idTsType(this.identifiers);
     
     const ownerOrParentField = childInfo ? childInfo.parentIdField : 'ownerId';
-    result.push(`  ${ownerOrParentField}: number;`);
+    result.push(`  ${ownerOrParentField}: ${idTs};`);
     
     fields.forEach(([fieldName, fieldConfig]) => {
       if (this.isAggregateField(fieldConfig)) {
-        result.push(`  ${fieldName}Id?: number;`);
+        result.push(`  ${fieldName}Id?: ${idTs};`);
         return;
       }
       const tsType = this.mapTypeToRowType(fieldConfig.type);
@@ -222,10 +224,28 @@ export class StoreGenerator {
   }
 
   private generateFieldNamesStr(fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
-    const fieldNames = ['id'];
-    fieldNames.push(childInfo ? childInfo.parentIdField : 'ownerId');
-    fieldNames.push(...fields.map(([name, config]) => this.isAggregateField(config) ? `${name}Id` : name));
-    return fieldNames.map(f => `\\\`${f}\\\``).join(', ');
+    const isUuid = this.identifiers === 'uuid';
+    const ownerOrParentField = childInfo ? childInfo.parentIdField : 'ownerId';
+    const allFields = [
+      'id',
+      ownerOrParentField,
+      ...fields.map(([name, config]) => this.isAggregateField(config) ? `${name}Id` : name)
+    ];
+
+    if (!isUuid) {
+      return allFields.map(f => `\\\`${f}\\\``).join(', ');
+    }
+
+    // For UUID: id-type columns need BIN_TO_UUID wrapping in SELECT
+    const idFields = new Set(['id', ownerOrParentField]);
+    fields.forEach(([name, config]) => {
+      if (this.isAggregateField(config)) idFields.add(`${name}Id`);
+    });
+
+    return allFields.map(f => {
+      if (idFields.has(f)) return `BIN_TO_UUID(\\\`${f}\\\`, 1) as \\\`${f}\\\``;
+      return `\\\`${f}\\\``;
+    }).join(', ');
   }
 
   private generateRowToModelMapping(modelName: string, fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
@@ -454,9 +474,15 @@ export class StoreGenerator {
 
   private generateListMethods(modelName: string, fieldNamesStr: string, childInfo?: ChildEntityInfo): string {
     const isRoot = !childInfo;
-    const ownerParam = isRoot ? ', ownerId?: number' : '';
+    const isUuid = this.identifiers === 'uuid';
+    const idTs = idTsType(this.identifiers);
+    const ownerParam = isRoot ? `, ownerId?: ${idTs}` : '';
+    // UUID_TO_BIN(:ownerId, 1) — the ", 1" is a SQL literal inside the query string, not a JS param key
+    const ownerFilterExpr = isUuid
+      ? `' AND \\\`ownerId\\\` = UUID_TO_BIN(:ownerId, 1)'`
+      : `' AND \\\`ownerId\\\` = :ownerId'`;
     const ownerFilter = isRoot
-      ? `\n    const ownerFilter = ownerId != null ? ' AND \\\`ownerId\\\` = :ownerId' : '';`
+      ? `\n    const ownerFilter = ownerId != null ? ${ownerFilterExpr} : '';`
       : '';
     const ownerFilterRef = isRoot ? '\${ownerFilter}' : '';
     const ownerParamsSetup = isRoot
@@ -477,7 +503,7 @@ export class StoreGenerator {
     return [];
   }`;
 
-    const getAll = `  async getAll(${isRoot ? 'ownerId?: number' : ''}): Promise<${modelName}[]> {${ownerFilter}
+    const getAll = `  async getAll(${isRoot ? `ownerId?: ${idTs}` : ''}): Promise<${modelName}[]> {${ownerFilter}
     const params: Record<string, any> = {};${ownerParamsSetup}
     const result = await this.db.query(
       \`SELECT ${fieldNamesStr} FROM \\\`\${this.tableName}\\\` WHERE deletedAt IS NULL${ownerFilterRef}\`,
@@ -490,7 +516,7 @@ export class StoreGenerator {
     return [];
   }`;
 
-    const count = `  async count(${isRoot ? 'ownerId?: number' : ''}): Promise<number> {${ownerFilter}
+    const count = `  async count(${isRoot ? `ownerId?: ${idTs}` : ''}): Promise<number> {${ownerFilter}
     const params: Record<string, any> = {};${ownerParamsSetup}
     const result = await this.db.query(
       \`SELECT COUNT(*) as count FROM \\\`\${this.tableName}\\\` WHERE deletedAt IS NULL${ownerFilterRef}\`,
@@ -508,13 +534,28 @@ export class StoreGenerator {
 
   private generateGetByParentIdMethod(modelName: string, fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
     if (!childInfo) return '';
-    const fieldList = ['id', childInfo.parentIdField, ...fields.map(([name, config]) => this.isAggregateField(config) ? `${name}Id` : name)].map(f => '\\`' + f + '\\`').join(', ');
+    const isUuid = this.identifiers === 'uuid';
+    const idTs = idTsType(this.identifiers);
     const parentIdField = childInfo.parentIdField;
+
+    // Build field list for SELECT (reuse the same UUID-aware logic)
+    const idFields = new Set(['id', parentIdField]);
+    fields.forEach(([name, config]) => {
+      if (this.isAggregateField(config)) idFields.add(`${name}Id`);
+    });
+    const rawFields = ['id', parentIdField, ...fields.map(([name, config]) => this.isAggregateField(config) ? `${name}Id` : name)];
+    const bt = '\\`';
+    const fieldList = isUuid
+      ? rawFields.map(f => idFields.has(f) ? `BIN_TO_UUID(${bt}${f}${bt}, 1) as ${bt}${f}${bt}` : `${bt}${f}${bt}`).join(', ')
+      : rawFields.map(f => `${bt}${f}${bt}`).join(', ');
+
+    const whereExpr = isUuid ? `\\\`${parentIdField}\\\` = UUID_TO_BIN(:parentId, 1)` : `\\\`${parentIdField}\\\` = :parentId`;
+
     return `
 
-  async getByParentId(parentId: number): Promise<${modelName}[]> {
+  async getByParentId(parentId: ${idTs}): Promise<${modelName}[]> {
     const result = await this.db.query(
-      \`SELECT ${fieldList} FROM \\\`\${this.tableName}\\\` WHERE \\\`${parentIdField}\\\` = :parentId AND deletedAt IS NULL\`,
+      \`SELECT ${fieldList} FROM \\\`\${this.tableName}\\\` WHERE ${whereExpr} AND deletedAt IS NULL\`,
       { parentId }
     );
 
@@ -526,23 +567,33 @@ export class StoreGenerator {
   }
 
   private generateGetResourceOwnerMethod(childInfo?: ChildEntityInfo): string {
+    const isUuid = this.identifiers === 'uuid';
+    const idTs = idTsType(this.identifiers);
+    const whereExpr = isUuid ? 'id = UUID_TO_BIN(:id, 1)' : 'id = :id';
+    const ownerSelect = isUuid ? 'BIN_TO_UUID(p.ownerId, 1) as ownerId' : 'p.ownerId';
+    const ownerSelectSimple = isUuid ? 'BIN_TO_UUID(ownerId, 1) as ownerId' : 'ownerId';
+
     if (childInfo) {
       const parentTable = childInfo.parentTableName;
       const parentIdField = childInfo.parentIdField;
+      const joinExpr = isUuid
+        ? `p.id = UUID_TO_BIN(c.\\\`${parentIdField}\\\`, 1)`
+        : `p.id = c.\\\`${parentIdField}\\\``;
+      const cWhereExpr = isUuid ? 'c.id = UUID_TO_BIN(:id, 1)' : 'c.id = :id';
       return `
 
   /**
    * Get the owner ID of a resource by its ID (via parent entity).
    * Used for pre-mutation authorization checks.
    */
-  async getResourceOwner(id: number): Promise<number | null> {
+  async getResourceOwner(id: ${idTs}): Promise<${idTs} | null> {
     const result = await this.db.query(
-      \`SELECT p.ownerId FROM \\\`\${this.tableName}\\\` c INNER JOIN \\\`${parentTable}\\\` p ON p.id = c.\\\`${parentIdField}\\\` WHERE c.id = :id AND c.deletedAt IS NULL\`,
+      \`SELECT ${ownerSelect} FROM \\\`\${this.tableName}\\\` c INNER JOIN \\\`${parentTable}\\\` p ON ${joinExpr} WHERE ${cWhereExpr} AND c.deletedAt IS NULL\`,
       { id }
     );
 
     if (result.success && result.data && result.data.length > 0) {
-      return result.data[0].ownerId as number;
+      return result.data[0].ownerId as ${idTs};
     }
     return null;
   }`;
@@ -553,17 +604,84 @@ export class StoreGenerator {
    * Get the owner ID of a resource by its ID.
    * Used for pre-mutation authorization checks.
    */
-  async getResourceOwner(id: number): Promise<number | null> {
+  async getResourceOwner(id: ${idTs}): Promise<${idTs} | null> {
     const result = await this.db.query(
-      \`SELECT ownerId FROM \\\`\${this.tableName}\\\` WHERE id = :id AND deletedAt IS NULL\`,
+      \`SELECT ${ownerSelectSimple} FROM \\\`\${this.tableName}\\\` WHERE ${whereExpr} AND deletedAt IS NULL\`,
       { id }
     );
 
     if (result.success && result.data && result.data.length > 0) {
-      return result.data[0].ownerId as number;
+      return result.data[0].ownerId as ${idTs};
     }
     return null;
   }`;
+  }
+
+  private generateIdHelpers(): string {
+    if (this.identifiers === 'nanoid') {
+      return `
+  private generateNanoId(size = 21): string {
+    const alphabet = "useABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
+    let id = "";
+    const bytes = randomBytes(size);
+
+    for (let i = 0; i < size; i++) {
+      // We use a bitwise AND with 63 because 63 is 00111111 in binary.
+      // This maps any byte to a value between 0 and 63.
+      id += alphabet[bytes[i] & 63];
+    }
+
+    return id;
+  }
+`;
+    }
+    return '';
+  }
+
+  private generateInsertIdVariables(): { preLine: string; dataLine: string; successCond: string; getId: string } {
+    switch (this.identifiers) {
+      case 'uuid':
+        return {
+          preLine: '    const newId = randomUUID();',
+          dataLine: '      id: newId,\n',
+          successCond: '',
+          getId: ''
+        };
+      case 'nanoid':
+        return {
+          preLine: '    const newId = this.generateNanoId();',
+          dataLine: '      id: newId,\n',
+          successCond: '',
+          getId: ''
+        };
+      default:
+        return {
+          preLine: '',
+          dataLine: '',
+          successCond: ' && result.insertId',
+          getId: 'const newId = typeof result.insertId === \'string\' ? parseInt(result.insertId, 10) : result.insertId;'
+        };
+    }
+  }
+
+  private generateWhereIdExpr(): string {
+    return this.identifiers === 'uuid' ? 'id = UUID_TO_BIN(:id, 1)' : 'id = :id';
+  }
+
+  private generateIdParamExpr(): string {
+    // The ", 1" in UUID_TO_BIN(:id, 1) is a literal in the SQL string, NOT a JS params key.
+    // The params object always uses just { id }, so this expression is always empty.
+    return '';
+  }
+
+  private generateRowIdExpr(): string {
+    return this.identifiers === 'uuid' ? 'row.id' : 'row.id';
+  }
+
+  private generateCryptoImport(): string {
+    if (this.identifiers === 'uuid') return `\nimport { randomUUID } from 'crypto';`;
+    if (this.identifiers === 'nanoid') return `\nimport { randomBytes } from 'crypto';`;
+    return '';
   }
 
   private generateStore(modelName: string, aggregateConfig: AggregateConfig, childInfo?: ChildEntityInfo): string {
@@ -574,18 +692,29 @@ export class StoreGenerator {
     const sortedFields = this.sortFieldsForConstructor(fields);
 
     const fieldNamesStr = this.generateFieldNamesStr(fields, childInfo);
+    const idVars = this.generateInsertIdVariables();
+    const idTs = idTsType(this.identifiers);
 
     const variables: Record<string, string> = {
       ENTITY_NAME: modelName,
       TABLE_NAME: tableName,
+      ID_TYPE: idTs,
       ROW_FIELDS: this.generateRowFields(fields, childInfo),
       FIELD_NAMES: fieldNamesStr,
+      ROW_ID_EXPR: this.generateRowIdExpr(),
+      WHERE_ID_EXPR: this.generateWhereIdExpr(),
+      ID_PARAM_EXPR: this.generateIdParamExpr(),
       ROW_TO_MODEL_MAPPING: this.generateRowToModelMapping(modelName, sortedFields, childInfo),
+      INSERT_ID_PRE_LOGIC: idVars.preLine,
+      INSERT_ID_DATA: idVars.dataLine,
       INSERT_DATA_MAPPING: this.generateInsertDataMapping(fields, childInfo),
+      INSERT_SUCCESS_COND: idVars.successCond,
+      INSERT_GET_ID: idVars.getId,
       UPDATE_DATA_MAPPING: this.generateUpdateDataMapping(fields),
       UPDATE_FIELDS_ARRAY: this.generateUpdateFieldsArray(fields),
       VALUE_OBJECT_IMPORTS: this.generateValueObjectImports(fields),
       AGGREGATE_REF_IMPORTS: this.generateAggregateRefImports(modelName, fields),
+      ID_HELPERS: this.generateIdHelpers(),
       LIST_METHODS: this.generateListMethods(modelName, fieldNamesStr, childInfo),
       GET_BY_PARENT_ID_METHOD: this.generateGetByParentIdMethod(modelName, fields, childInfo),
       GET_RESOURCE_OWNER_METHOD: this.generateGetResourceOwnerMethod(childInfo)
@@ -607,13 +736,15 @@ export class StoreGenerator {
       ENTITY_IMPORT_ITEMS: entityImportItems.join(', '),
       ROW_INTERFACE: rowInterface,
       STORE_CLASS: storeClass,
+      CRYPTO_IMPORT: this.generateCryptoImport(),
       VALUE_OBJECT_IMPORTS: variables.VALUE_OBJECT_IMPORTS,
       AGGREGATE_REF_IMPORTS: variables.AGGREGATE_REF_IMPORTS
     });
   }
 
-  public generateFromConfig(config: ModuleConfig): Record<string, string> {
+  public generateFromConfig(config: ModuleConfig, identifiers: IdentifierType = 'numeric'): Record<string, string> {
     const result: Record<string, string> = {};
+    this.identifiers = identifiers;
 
     // First, collect all value object names and configs
     this.availableValueObjects.clear();
@@ -643,7 +774,7 @@ export class StoreGenerator {
     return result;
   }
 
-  public generateFromYamlFile(yamlFilePath: string): Record<string, string> {
+  public generateFromYamlFile(yamlFilePath: string, identifiers: IdentifierType = 'numeric'): Record<string, string> {
     const yamlContent = fs.readFileSync(yamlFilePath, 'utf8');
     const config = parseYaml(yamlContent);
 
@@ -651,15 +782,16 @@ export class StoreGenerator {
       throw new Error('Configuration does not match new module format. Expected domain.aggregates structure.');
     }
 
-    return this.generateFromConfig(config);
+    return this.generateFromConfig(config, identifiers);
   }
 
   public async generateAndSaveFiles(
     yamlFilePath: string,
     moduleDir: string,
-    opts?: { force?: boolean; skipOnConflict?: boolean }
+    opts?: { force?: boolean; skipOnConflict?: boolean },
+    identifiers: IdentifierType = 'numeric'
   ): Promise<void> {
-    const storesByModel = this.generateFromYamlFile(yamlFilePath);
+    const storesByModel = this.generateFromYamlFile(yamlFilePath, identifiers);
     
     const storesDir = path.join(moduleDir, 'infrastructure', 'stores');
     fs.mkdirSync(storesDir, { recursive: true });

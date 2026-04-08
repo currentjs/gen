@@ -3,5 +3,5 @@ providers:
 config:
   database: mysql
   styling: bootstrap
-  identifiers: id
+  identifiers: numeric
 modules: {}
