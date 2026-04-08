@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.7] - 2026-04-08
+
+- HTTP errors in generated controllers
+
 ## [0.5.6] - 2026-04-08
 
 - database identifier types (numeric, uuid, nanoid)
