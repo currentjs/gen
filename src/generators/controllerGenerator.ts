@@ -54,6 +54,31 @@ export class ControllerGenerator {
   }
 
   /**
+   * Determine which HTTP error classes from @currentjs/router are needed
+   * based on the auth configs of all endpoints in a controller.
+   */
+  private getNeededHttpErrorImports(auths: (AuthConfig | undefined)[]): string[] {
+    const needed = new Set<string>();
+    for (const auth of auths) {
+      const roles = this.normalizeAuth(auth);
+      if (roles.length === 0 || (roles.length === 1 && roles[0] === AUTH_ROLES.ALL)) continue;
+
+      needed.add('UnauthorizedError');
+
+      const roleChecks = roles.filter(r => r !== AUTH_ROLES.OWNER && r !== AUTH_ROLES.ALL && r !== AUTH_ROLES.AUTHENTICATED);
+      if (roleChecks.length > 0) {
+        needed.add('ForbiddenError');
+      }
+
+      if (roles.includes(AUTH_ROLES.OWNER)) {
+        needed.add('ForbiddenError');
+        needed.add('NotFoundError');
+      }
+    }
+    return Array.from(needed).sort();
+  }
+
+  /**
    * Generate pre-fetch authentication/authorization check code.
    * This runs before fetching the entity and validates authentication and role-based access.
    * @param auth - The auth requirement: 'all', 'authenticated', 'owner', role names, or array of roles
@@ -69,7 +94,7 @@ export class ControllerGenerator {
     // If only 'authenticated' is specified
     if (roles.length === 1 && roles[0] === AUTH_ROLES.AUTHENTICATED) {
       return `if (!context.request.user) {
-      throw new Error('${AUTH_ERRORS.REQUIRED}');
+      throw new UnauthorizedError('${AUTH_ERRORS.REQUIRED}');
     }`;
     }
 
@@ -77,7 +102,7 @@ export class ControllerGenerator {
     // (owner check happens post-fetch)
     if (roles.length === 1 && roles[0] === AUTH_ROLES.OWNER) {
       return `if (!context.request.user) {
-      throw new Error('${AUTH_ERRORS.REQUIRED}');
+      throw new UnauthorizedError('${AUTH_ERRORS.REQUIRED}');
     }`;
     }
 
@@ -91,17 +116,17 @@ export class ControllerGenerator {
       if (roleChecks.length === 0) {
         // Only owner (and maybe authenticated) - just require auth
         return `if (!context.request.user) {
-      throw new Error('${AUTH_ERRORS.REQUIRED}');
+      throw new UnauthorizedError('${AUTH_ERRORS.REQUIRED}');
     }`;
       }
       
       if (roleChecks.length === 1 && !hasOwner) {
         // Single role check
         return `if (!context.request.user) {
-      throw new Error('${AUTH_ERRORS.REQUIRED}');
+      throw new UnauthorizedError('${AUTH_ERRORS.REQUIRED}');
     }
     if (context.request.user.role !== '${roleChecks[0]}') {
-      throw new Error('${AUTH_ERRORS.INSUFFICIENT_PERMISSIONS}: ${roleChecks[0]} role required');
+      throw new ForbiddenError('${AUTH_ERRORS.INSUFFICIENT_PERMISSIONS}: ${roleChecks[0]} role required');
     }`;
       }
       
@@ -111,24 +136,24 @@ export class ControllerGenerator {
       if (hasOwner) {
         // With owner: require auth, role check will be combined with owner check post-fetch
         return `if (!context.request.user) {
-      throw new Error('${AUTH_ERRORS.REQUIRED}');
+      throw new UnauthorizedError('${AUTH_ERRORS.REQUIRED}');
     }`;
       }
       
       // Multiple roles without owner - check if user has ANY of the roles
       const roleConditions = roleChecks.map(r => `context.request.user.role === '${r}'`).join(' || ');
       return `if (!context.request.user) {
-      throw new Error('${AUTH_ERRORS.REQUIRED}');
+      throw new UnauthorizedError('${AUTH_ERRORS.REQUIRED}');
     }
     if (!(${roleConditions})) {
-      throw new Error('${AUTH_ERRORS.INSUFFICIENT_PERMISSIONS}: one of [${roleChecks.join(', ')}] role required');
+      throw new ForbiddenError('${AUTH_ERRORS.INSUFFICIENT_PERMISSIONS}: one of [${roleChecks.join(', ')}] role required');
     }`;
     }
 
     // Only 'authenticated' in the mix
     if (hasAuthenticated) {
       return `if (!context.request.user) {
-      throw new Error('${AUTH_ERRORS.REQUIRED}');
+      throw new UnauthorizedError('${AUTH_ERRORS.REQUIRED}');
     }`;
     }
 
@@ -162,10 +187,10 @@ export class ControllerGenerator {
     // Owner validation (post-fetch for reads, via parent)
     const resourceOwnerId = await this.${useCaseVar}.getResourceOwner(${resultVar}.id);
     if (resourceOwnerId === null) {
-      throw new Error('Resource not found');
+      throw new NotFoundError('Resource not found');
     }
     if (resourceOwnerId !== context.request.user?.id) {
-      throw new Error('${AUTH_ERRORS.ACCESS_DENIED}');
+      throw new ForbiddenError('${AUTH_ERRORS.ACCESS_DENIED}');
     }`;
       }
       const bypassConditions = bypassRoles.map(r => `context.request.user?.role === '${r}'`).join(' || ');
@@ -173,12 +198,12 @@ export class ControllerGenerator {
     // Owner validation (post-fetch for reads, via parent, bypassed for: ${bypassRoles.join(', ')})
     const resourceOwnerId = await this.${useCaseVar}.getResourceOwner(${resultVar}.id);
     if (resourceOwnerId === null) {
-      throw new Error('Resource not found');
+      throw new NotFoundError('Resource not found');
     }
     const isOwner = resourceOwnerId === context.request.user?.id;
     const hasPrivilegedRole = ${bypassConditions};
     if (!isOwner && !hasPrivilegedRole) {
-      throw new Error('${AUTH_ERRORS.ACCESS_DENIED}');
+      throw new ForbiddenError('${AUTH_ERRORS.ACCESS_DENIED}');
     }`;
     }
 
@@ -187,7 +212,7 @@ export class ControllerGenerator {
       return `
     // Owner validation (post-fetch for reads)
     if (${resultVar}.ownerId !== context.request.user?.id) {
-      throw new Error('${AUTH_ERRORS.ACCESS_DENIED}');
+      throw new ForbiddenError('${AUTH_ERRORS.ACCESS_DENIED}');
     }`;
     }
     const bypassConditions = bypassRoles.map(r => `context.request.user?.role === '${r}'`).join(' || ');
@@ -196,7 +221,7 @@ export class ControllerGenerator {
     const isOwner = ${resultVar}.ownerId === context.request.user?.id;
     const hasPrivilegedRole = ${bypassConditions};
     if (!isOwner && !hasPrivilegedRole) {
-      throw new Error('${AUTH_ERRORS.ACCESS_DENIED}');
+      throw new ForbiddenError('${AUTH_ERRORS.ACCESS_DENIED}');
     }`;
   }
 
@@ -224,10 +249,10 @@ export class ControllerGenerator {
     // Pre-mutation owner validation
     const resourceOwnerId = await this.${useCaseVar}.getResourceOwner(input.id);
     if (resourceOwnerId === null) {
-      throw new Error('Resource not found');
+      throw new NotFoundError('Resource not found');
     }
     if (resourceOwnerId !== context.request.user?.id) {
-      throw new Error('${AUTH_ERRORS.ACCESS_DENIED}');
+      throw new ForbiddenError('${AUTH_ERRORS.ACCESS_DENIED}');
     }
 `;
     }
@@ -238,12 +263,12 @@ export class ControllerGenerator {
     // Pre-mutation owner validation (bypassed for: ${bypassRoles.join(', ')})
     const resourceOwnerId = await this.${useCaseVar}.getResourceOwner(input.id);
     if (resourceOwnerId === null) {
-      throw new Error('Resource not found');
+      throw new NotFoundError('Resource not found');
     }
     const isOwner = resourceOwnerId === context.request.user?.id;
     const hasPrivilegedRole = ${bypassConditions};
     if (!isOwner && !hasPrivilegedRole) {
-      throw new Error('${AUTH_ERRORS.ACCESS_DENIED}');
+      throw new ForbiddenError('${AUTH_ERRORS.ACCESS_DENIED}');
     }
 `;
   }
@@ -615,7 +640,10 @@ export class ControllerGenerator {
       .map(model => `private ${model.toLowerCase()}UseCase: ${model}UseCase`)
       .join(',\n    ');
 
-    return `import { Controller, Get, Post, Put, Delete, type IContext } from '@currentjs/router';
+    const errorImports = this.getNeededHttpErrorImports(sortedEndpoints.map(e => e.auth));
+    const routerImports = ['Controller', 'Get', 'Post', 'Put', 'Delete', 'type IContext', ...errorImports].join(', ');
+
+    return `import { ${routerImports} } from '@currentjs/router';
 ${useCaseImports}
 ${dtoImportStatements}
 
@@ -698,7 +726,10 @@ ${methods.join('\n\n')}
   ) {}`
       : 'constructor() {}';
 
-    return `import { Controller, Get, Post, Render, type IContext } from '@currentjs/router';
+    const errorImports = this.getNeededHttpErrorImports(sortedPages.map(p => p.auth));
+    const routerImports = ['Controller', 'Get', 'Post', 'Render', 'type IContext', ...errorImports].join(', ');
+
+    return `import { ${routerImports} } from '@currentjs/router';
 ${useCaseImports}
 ${serviceImports.join('\n')}
 ${dtoImportStatements}
