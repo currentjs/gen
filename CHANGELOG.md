@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.8] - 2026-04-15
+
+- Stores: fix diff for non-numeric db id and change signature for update method
+
 ## [0.5.7] - 2026-04-08
 
 - HTTP errors in generated controllers
