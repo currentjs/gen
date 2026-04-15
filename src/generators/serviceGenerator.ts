@@ -312,7 +312,7 @@ export class ServiceGenerator {
     
 ${setterCalls}
     
-    return await this.${storeName}.update(id, existing${modelName});
+    return await this.${storeName}.update(existing${modelName});
   }`;
   }
 

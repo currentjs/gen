@@ -245,7 +245,7 @@ describe('StoreGenerator — uuid identifiers', () => {
   });
 
   it('update accepts string id', () => {
-    expect(store).toContain('async update(id: string,');
+    expect(store).toContain('async update(entity:');
   });
 
   it('softDelete accepts string id', () => {

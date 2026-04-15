@@ -13,9 +13,10 @@
 | ✅ Fix data access layer gen       | gen         | 0.5.5                  | S    |                                                                                 |
 | ✅ Configurable identifier types   | gen         | 0.5.6                  | M    | Support int/uuid/string in app config                                           |
 | ✅ HTTP error handling             | router, gen | gen: 0.5.7 router: 0.2 | M    | Add errors to router, use in generator                                          |
-| Support of tailwind in tpls       | gen         | 0.5.8                  | M    | setting in app.yaml                                                             |
-| Database migrations               | gen         | 0.5.9                  | L    |                                                                                 |
-| Remove "useCase" layer"           | gen         | 0.6                    | M    | or "service"?                                                                   |
+| ✅ Minor fixes                     | gen         | 0.5.8                  | M    | non-numeric ids (db) + change signature for store method "update"                                             |
+| Support of tailwind in tpls       | gen         | 0.5.9                  | M    | setting in app.yaml                                                             |
+| Database migrations               | gen         | 0.5.10                 | L    |                                                                                 |
+| Remove "useCase" layer" ❓        | gen         | 0.6                    | M    | or "service"?                                                                   |
 | ✅ Add logging                    | router      | ~~0.3~~ 0.2            | M    |                                                                                 |
 | scaffold (UI)                     | gen*        | xx                     | M    | new package is required. `gen` will just install/run it                         |
 | Postgres provider                 | provider    | 1.x                    | M    | New database provider                                                           |
