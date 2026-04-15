@@ -6,16 +6,16 @@ import { computeContentHash, getStoredHash, initGenerationRegistry, loadRegistry
 import { computeHunks, applyHunksToBase, type DiffHunk } from '../utils/commitUtils';
 import { colors } from '../utils/colors';
 import { isValidModuleConfig } from '../types/configTypes';
-import { loadAppConfig, getModuleList, shouldIncludeModule, createGenerators } from '../utils/commandUtils';
+import { loadAppConfig, getModuleEntries, shouldIncludeModule, createGenerators } from '../utils/commandUtils';
 
 export async function handleDiff(yamlPathArg?: string, moduleName?: string): Promise<void> {
   const appYamlPath = resolveYamlPath(yamlPathArg);
   initGenerationRegistry(process.cwd());
   const appConfig = loadAppConfig(appYamlPath);
-  const modulesList = getModuleList(appConfig);
+  const moduleEntries = getModuleEntries(appConfig);
 
-  const filteredModules = modulesList.filter(rel => shouldIncludeModule(rel, moduleName));
-  if (filteredModules.length === 0) {
+  const filteredEntries = moduleEntries.filter(entry => shouldIncludeModule(entry.path, moduleName) || (moduleName && entry.name === moduleName));
+  if (filteredEntries.length === 0) {
     // eslint-disable-next-line no-console
     console.warn(colors.yellow(`No modules matched: ${moduleName}`));
     return;
@@ -25,10 +25,10 @@ export async function handleDiff(yamlPathArg?: string, moduleName?: string): Pro
 
   const results: Array<{ file: string; status: 'clean' | 'modified' | 'missing'; hunks?: DiffHunk[]; note?: string }> = [];
 
-  for (const moduleYamlRel of filteredModules) {
-    const moduleYamlPath = path.isAbsolute(moduleYamlRel)
-      ? moduleYamlRel
-      : path.resolve(process.cwd(), moduleYamlRel);
+  for (const entry of filteredEntries) {
+    const moduleYamlPath = path.isAbsolute(entry.path)
+      ? entry.path
+      : path.resolve(process.cwd(), entry.path);
     if (!fs.existsSync(moduleYamlPath)) continue;
 
     const moduleYamlContent = fs.readFileSync(moduleYamlPath, 'utf8');
@@ -46,12 +46,13 @@ export async function handleDiff(yamlPathArg?: string, moduleName?: string): Pro
     const infraOut = path.join(moduleDir, 'infrastructure');
     const viewsOut = path.join(moduleDir, 'views');
 
-    const nextDomain = domainGen.generateFromYamlFile(moduleYamlPath);
-    const nextDtos = dtoGen.generateFromYamlFile(moduleYamlPath);
-    const nextUseCases = useCaseGen.generateFromYamlFile(moduleYamlPath);
-    const nextServices = svcGen.generateFromYamlFile(moduleYamlPath);
-    const nextControllers = ctrlGen.generateFromYamlFile(moduleYamlPath);
-    const nextStores = storeGen.generateFromYamlFile(moduleYamlPath);
+    const { identifiers } = entry;
+    const nextDomain = domainGen.generateFromYamlFile(moduleYamlPath, identifiers);
+    const nextDtos = dtoGen.generateFromYamlFile(moduleYamlPath, identifiers);
+    const nextUseCases = useCaseGen.generateFromYamlFile(moduleYamlPath, identifiers);
+    const nextServices = svcGen.generateFromYamlFile(moduleYamlPath, identifiers);
+    const nextControllers = ctrlGen.generateFromYamlFile(moduleYamlPath, identifiers);
+    const nextStores = storeGen.generateFromYamlFile(moduleYamlPath, identifiers);
     const nextTemplates = tplGen.generateFromYamlFile(moduleYamlPath);
 
     const consider = (target: string, generated: string) => {

@@ -71,7 +71,8 @@ export class {{ENTITY_NAME}}Store {
     throw new Error('Failed to insert {{ENTITY_NAME}}');
   }
 
-  async update(id: {{ID_TYPE}}, entity: {{ENTITY_NAME}}): Promise<{{ENTITY_NAME}}> {
+  async update(entity: {{ENTITY_NAME}}): Promise<{{ENTITY_NAME}}> {
+    const id = entity.id;
     const now = new Date();
     const rawData: Partial<{{ENTITY_NAME}}Row> = {
 {{UPDATE_DATA_MAPPING}},
