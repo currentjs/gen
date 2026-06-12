@@ -680,15 +680,15 @@ Handlers define the execution pipeline for a use case. They are processed in ord
 
 **Custom handlers:**
 
-Custom handlers reference methods on the service class. Use the format `service:methodName` or just `methodName`. The generator creates stub methods with TODO comments for custom handlers.
+Custom handlers reference methods on the service class. Use the format `serviceName:methodName` or just `methodName`. The generator creates stub methods with TODO comments for custom handlers.
 
 Multiple handlers can be chained. The controller orchestrates the chain directly — each handler's result is passed as the first argument to the next:
 
 ```yaml
 handlers:
   - default:get
-  - service:validateStatus
-  - service:performAction
+  - serviceName:validateStatus
+  - serviceName:performAction
 ```
 
 ---

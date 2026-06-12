@@ -121,7 +121,7 @@ Both paths converge at the same point: once files are generated, you can optiona
 When you need behavior beyond standard CRUD:
 
 1. Implement the custom method in the generated service class.
-2. Reference it in the module YAML as a handler (e.g., `service:myMethod`).
+2. Reference it in the module YAML as a handler (e.g., `serviceName:myMethod`).
 3. Optionally add API/web endpoints for the new action.
 4. Regenerate and commit.
 
