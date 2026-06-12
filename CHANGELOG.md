@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.0] - 2026-06-12
+
+- Get rid of useCase layer in the generated code
+
 ## [0.5.8] - 2026-04-15
 
 - Stores: fix diff for non-numeric db id and change signature for update method
