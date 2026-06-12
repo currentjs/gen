@@ -6,7 +6,6 @@ import * as path from 'path';
 import { parse as parseYaml } from 'yaml';
 import { DomainLayerGenerator } from '../generators/domainLayerGenerator';
 import { DtoGenerator } from '../generators/dtoGenerator';
-import { UseCaseGenerator } from '../generators/useCaseGenerator';
 import { ServiceGenerator } from '../generators/serviceGenerator';
 import { ControllerGenerator } from '../generators/controllerGenerator';
 import { StoreGenerator } from '../generators/storeGenerator';
@@ -99,7 +98,6 @@ export function shouldIncludeModule(moduleYamlRel: string, moduleName?: string):
 export function createGenerators(): {
   domainGen: DomainLayerGenerator;
   dtoGen: DtoGenerator;
-  useCaseGen: UseCaseGenerator;
   serviceGen: ServiceGenerator;
   controllerGen: ControllerGenerator;
   templateGen: TemplateGenerator;
@@ -108,7 +106,6 @@ export function createGenerators(): {
   return {
     domainGen: new DomainLayerGenerator(),
     dtoGen: new DtoGenerator(),
-    useCaseGen: new UseCaseGenerator(),
     serviceGen: new ServiceGenerator(),
     controllerGen: new ControllerGenerator(),
     templateGen: new TemplateGenerator(),

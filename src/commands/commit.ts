@@ -38,7 +38,7 @@ export function handleCommit(yamlPathArg?: string, files?: string[]): void {
     return new Set(files.map(norm));
   })();
 
-  const { domainGen, dtoGen, useCaseGen, serviceGen: svcGen, controllerGen: ctrlGen, storeGen, templateGen: tplGen } = createGenerators();
+  const { domainGen, dtoGen, serviceGen: svcGen, controllerGen: ctrlGen, storeGen, templateGen: tplGen } = createGenerators();
 
   const diffs: DiffRecord[] = [];
 
@@ -70,7 +70,6 @@ export function handleCommit(yamlPathArg?: string, files?: string[]): void {
     // Generate in-memory
     const nextDomain = domainGen.generateFromYamlFile(moduleYamlPath);
     const nextDtos = dtoGen.generateFromYamlFile(moduleYamlPath);
-    const nextUseCases = useCaseGen.generateFromYamlFile(moduleYamlPath);
     const nextServices = svcGen.generateFromYamlFile(moduleYamlPath);
     const nextControllers = ctrlGen.generateFromYamlFile(moduleYamlPath);
     const nextStores = storeGen.generateFromYamlFile(moduleYamlPath);
@@ -107,7 +106,6 @@ export function handleCommit(yamlPathArg?: string, files?: string[]): void {
       consider(path.join(outDir, `${name}.ts`), code);
     });
     Object.entries(nextDtos).forEach(([name, code]) => consider(path.join(appOut, 'dto', `${name}.ts`), code));
-    Object.entries(nextUseCases).forEach(([name, code]) => consider(path.join(appOut, 'useCases', `${name}UseCase.ts`), code));
     Object.entries(nextServices).forEach(([entity, code]) =>
       consider(path.join(appOut, 'services', `${entity}Service.ts`), code)
     );

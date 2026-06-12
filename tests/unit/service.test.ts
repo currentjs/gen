@@ -2,10 +2,8 @@ import { describe, it } from '../lib.js';
 import { expect } from '../lib.js';
 import { loadFixture, getCode } from '../helpers.js';
 import { ServiceGenerator } from '../../src/generators/serviceGenerator.js';
-import { UseCaseGenerator } from '../../src/generators/useCaseGenerator.js';
 
 const serviceGen = new ServiceGenerator();
-const useCaseGen = new UseCaseGenerator();
 
 describe('ServiceGenerator', () => {
   const config = loadFixture('invoice.yaml');
@@ -74,40 +72,6 @@ describe('ServiceGenerator - non-paginated list', () => {
     expect(code).toContain('async list(ownerId?: number)');
     expect(code).toContain('.getAll(ownerId)');
     expect(code).toNotContain('.getPaginated');
-  });
-});
-
-describe('UseCaseGenerator', () => {
-  const config = loadFixture('invoice.yaml');
-  const result = useCaseGen.generateFromConfig(config);
-  const invoiceUseCase = getCode(result as Record<string, unknown>, 'Invoice');
-
-  it('create chains handlers: validateInput -> create -> notifyAccounting', () => {
-    expect(invoiceUseCase).toContain('validateInput');
-    expect(invoiceUseCase).toContain('invoiceService.create(input)');
-    expect(invoiceUseCase).toContain('notifyAccounting');
-    expect(invoiceUseCase).toContain('result0');
-    expect(invoiceUseCase).toContain('result1');
-    expect(invoiceUseCase).toContain('return result;');
-  });
-
-  it('getResourceOwner delegated to service', () => {
-    expect(invoiceUseCase).toContain('getResourceOwner(id: number)');
-    expect(invoiceUseCase).toContain('invoiceService.getResourceOwner(id)');
-  });
-
-  it('list always has ownerId? as second param and passes it to service', () => {
-    expect(invoiceUseCase).toContain('async list(input: InvoiceListInput, ownerId?: number)');
-    expect(invoiceUseCase).toContain('invoiceService.list(input.page || 1, input.limit || 20, ownerId)');
-  });
-
-  it('non-paginated list passes ownerId only to service', () => {
-    const config = loadFixture('invoice.yaml');
-    delete (config.useCases.Invoice.list.input as any).pagination;
-    const result = useCaseGen.generateFromConfig(config);
-    const code = getCode(result as Record<string, unknown>, 'Invoice');
-    expect(code).toContain('async list(input: InvoiceListInput, ownerId?: number)');
-    expect(code).toContain('invoiceService.list(ownerId)');
   });
 });
 

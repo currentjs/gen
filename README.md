@@ -121,7 +121,7 @@ Both paths converge at the same point: once files are generated, you can optiona
 When you need behavior beyond standard CRUD:
 
 1. Implement the custom method in the generated service class.
-2. Reference it in the module YAML as a handler (e.g., `service:myMethod`).
+2. Reference it in the module YAML as a handler (e.g., `serviceName:myMethod`).
 3. Optionally add API/web endpoints for the new action.
 4. Regenerate and commit.
 
@@ -150,9 +150,9 @@ Each module is configured through a single YAML file located at `src/modules/<Na
 | YAML Section | Purpose | Generated Files |
 |---|---|---|
 | `domain` | Define your data models (aggregates, value objects) | Entity classes, value object classes |
-| `useCases` | Define business operations, input/output shapes, handler chains | Use case orchestrators, services, DTOs |
-| `api` | Define REST API endpoints | API controller |
-| `web` | Define server-rendered pages and forms | Web controller, HTML templates |
+| `useCases` | Define business operations, input/output shapes, handler chains | Services, DTOs |
+| `api` | Define REST API endpoints | API controller (orchestrates handler chain directly) |
+| `web` | Define server-rendered pages and forms | Web controller (orchestrates handler chain directly), HTML templates |
 
 A minimal module YAML needs at least `domain` and `useCases`. The `api` and `web` sections are optional.
 
@@ -301,7 +301,7 @@ useCases:
         - updatePublishStatus
 ```
 
-This generates three service methods called in sequence. Custom methods get a TODO comment for you to fill in.
+This generates three service methods called in sequence. The controller orchestrates the chain directly — each result is passed as the first argument to the next handler. Custom methods get a TODO comment for you to fill in.
 
 #### Input Configuration
 
@@ -422,11 +422,10 @@ src/modules/<ModuleName>/
   application/
     dto/<Action>InputDto.ts            — Input DTO with parse() and validation
     dto/<Action>OutputDto.ts           — Output DTO with from() mapper
-    useCases/<EntityName>UseCase.ts    — Use case orchestrator (calls service methods in sequence)
     services/<EntityName>Service.ts    — Service with handler implementations (CRUD + custom stubs)
   infrastructure/
-    controllers/<EntityName>ApiController.ts  — REST endpoints with auth checks
-    controllers/<EntityName>WebController.ts  — Page rendering with form handling
+    controllers/<EntityName>ApiController.ts  — REST endpoints; orchestrates handler chain, auth checks
+    controllers/<EntityName>WebController.ts  — Page rendering; orchestrates handler chain, form handling
     stores/<EntityName>Store.ts        — Database access (CRUD, row-to-model conversion, relationships)
   views/
     <viewName>.html                    — HTML templates (list, detail, create, edit forms)

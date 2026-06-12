@@ -73,15 +73,47 @@ describe('ControllerGenerator - API auth scenarios', () => {
   });
 });
 
+describe('ControllerGenerator - handler chain inlining (previously UseCase layer)', () => {
+  const config = loadFixture('invoice.yaml');
+  const result = controllerGen.generateFromConfig(config);
+  const invoiceApi = getCode(result as Record<string, unknown>, 'InvoiceApi');
+
+  it('create action inlines handler chain: validateInput -> create -> notifyAccounting', () => {
+    expect(invoiceApi).toContain('invoiceService.validateInput(null, input)');
+    expect(invoiceApi).toContain('invoiceService.create(input)');
+    expect(invoiceApi).toContain('invoiceService.notifyAccounting(');
+    expect(invoiceApi).toContain('result0');
+    expect(invoiceApi).toContain('result1');
+  });
+
+  it('controller imports InvoiceService not InvoiceUseCase', () => {
+    expect(invoiceApi).toContain("import { InvoiceService }");
+    expect(invoiceApi).toNotContain("import { InvoiceUseCase }");
+  });
+
+  it('list action calls invoiceService.list directly', () => {
+    expect(invoiceApi).toContain('invoiceService.list(');
+  });
+
+  it('non-paginated list calls service.list without pagination args', () => {
+    const cfg = loadFixture('invoice.yaml');
+    delete (cfg.useCases.Invoice.list.input as any).pagination;
+    const res = controllerGen.generateFromConfig(cfg);
+    const code = getCode(res as Record<string, unknown>, 'InvoiceApi');
+    expect(code).toNotContain('input.page || 1');
+    expect(code).toContain('invoiceService.list(');
+  });
+});
+
 describe('ControllerGenerator - structure', () => {
   const invoiceConfig = loadFixture('invoice.yaml');
   const invoiceResult = controllerGen.generateFromConfig(invoiceConfig);
   const invoiceApi = getCode(invoiceResult as Record<string, unknown>, 'InvoiceApi');
   const invoiceWeb = getCode(invoiceResult as Record<string, unknown>, 'InvoiceWeb');
 
-  it('API controller has HTTP decorators and UseCase in constructor', () => {
+  it('API controller has HTTP decorators and Service in constructor', () => {
     expect(invoiceApi).toContain('@Controller');
-    expect(invoiceApi).toContain('invoiceUseCase: InvoiceUseCase');
+    expect(invoiceApi).toContain('invoiceService: InvoiceService');
     expect(invoiceApi).toContain('IContext');
   });
 
@@ -100,38 +132,38 @@ describe('ControllerGenerator - structure', () => {
 });
 
 describe('ControllerGenerator - list with owner auth passes ownerId', () => {
-  it('API list endpoint passes user id as second arg to useCase when auth includes owner', () => {
+  it('API list endpoint passes user id as second arg to service when auth includes owner', () => {
     const config = loadFixture('invoice.yaml');
     config.api!.Invoice.endpoints[0].auth = 'owner';
     const result = controllerGen.generateFromConfig(config);
     const apiCode = getCode(result as Record<string, unknown>, 'InvoiceApi');
-    expect(apiCode).toContain('.list(input, context.request.user?.id as number)');
+    expect(apiCode).toContain('invoiceService.list(input.page || 1, input.limit || 20, context.request.user?.id as number)');
     expect(apiCode).toContain('InvoiceListInput.parse(context.request.parameters)');
   });
 
-  it('API list endpoint calls useCase.list(input) without ownerId when auth is all', () => {
+  it('API list endpoint calls service.list without ownerId when auth is all', () => {
     const config = loadFixture('invoice.yaml');
     const result = controllerGen.generateFromConfig(config);
     const apiCode = getCode(result as Record<string, unknown>, 'InvoiceApi');
-    expect(apiCode).toContain('.list(input)');
-    expect(apiCode).toNotContain('.list(input, context.request.user');
+    expect(apiCode).toContain('invoiceService.list(input.page || 1, input.limit || 20)');
+    expect(apiCode).toNotContain('invoiceService.list(input.page || 1, input.limit || 20, context.request.user');
   });
 
-  it('Web list page passes user id as second arg to useCase when auth includes owner', () => {
+  it('Web list page passes user id as second arg to service when auth includes owner', () => {
     const config = loadFixture('invoice.yaml');
     config.web!.Invoice.pages[0].auth = 'owner';
     const result = controllerGen.generateFromConfig(config);
     const webCode = getCode(result as Record<string, unknown>, 'InvoiceWeb');
-    expect(webCode).toContain('.list(input, context.request.user?.id as number)');
+    expect(webCode).toContain('invoiceService.list(input.page || 1, input.limit || 20, context.request.user?.id as number)');
     expect(webCode).toContain('InvoiceListInput.parse(context.request.parameters)');
   });
 
-  it('Web list page calls useCase.list(input) without ownerId when auth is all', () => {
+  it('Web list page calls service.list without ownerId when auth is all', () => {
     const config = loadFixture('invoice.yaml');
     const result = controllerGen.generateFromConfig(config);
     const webCode = getCode(result as Record<string, unknown>, 'InvoiceWeb');
-    expect(webCode).toContain('.list(input)');
-    expect(webCode).toNotContain('.list(input, context.request.user');
+    expect(webCode).toContain('invoiceService.list(input.page || 1, input.limit || 20)');
+    expect(webCode).toNotContain('invoiceService.list(input.page || 1, input.limit || 20, context.request.user');
   });
 });
 

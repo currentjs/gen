@@ -4,9 +4,9 @@
 
 2. Never edit the DI wiring block in src/app.ts. The block between // currentjs:controllers:start and // currentjs:controllers:end is fully auto-regenerated. Changes there will silently vanish. Don't touch app.yaml either.
 
-3. Custom logic belongs exclusively in Models and Service methods. Controllers, UseCases, and DTOs are fully generated. When CRUD isn't enough, add a method to the *Service.ts class, then reference it in the yaml as a handler — never implement business logic in controllers.
+3. Custom logic belongs exclusively in Models and Service methods. Controllers, Stores, and DTOs are fully generated. When CRUD isn't enough, add a method to the *Service.ts class, then reference it in the yaml as a handler — never implement business logic in controllers.
 
-4. Custom handlers must be declared in the yaml before (re)generating. After writing a service method, add it to useCases.Model.action.handlers in the yaml. If you skip this step, the use case won't call your method and the wiring won't be regenerated correctly.
+4. Custom handlers must be declared in the yaml before (re)generating. After writing a service method, add it to useCases.Model.action.handlers in the yaml. If you skip this step, the controller won't call your method and the wiring won't be regenerated correctly.
 
 5. Never include auto-managed fields in the domain definition. id, owner_id, created_at, updated_at, deleted_at are added automatically. Defining them manually causes schema conflicts and duplicate columns.
 
