@@ -38,7 +38,7 @@ export async function handleGenerateAll(
     return;
   }
 
-  const { domainGen, dtoGen, useCaseGen, serviceGen, controllerGen, templateGen, storeGen } = createGenerators();
+  const { domainGen, dtoGen, serviceGen, controllerGen, templateGen, storeGen } = createGenerators();
 
   const moduleScansBySrcDir = new Map<string, ModuleScanEntry[]>();
 
@@ -73,8 +73,6 @@ export async function handleGenerateAll(
     await domainGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers);
     // eslint-disable-next-line no-await-in-loop
     await dtoGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers);
-    // eslint-disable-next-line no-await-in-loop
-    await useCaseGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers);
     // eslint-disable-next-line no-await-in-loop
     await serviceGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers);
     // eslint-disable-next-line no-await-in-loop

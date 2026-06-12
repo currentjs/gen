@@ -214,7 +214,7 @@ currentjs generate [module]
 |----------|----------|-------------|
 | `module` | No | Module name or `*` for all modules. If omitted, generates all. |
 
-Generation order: domain entities, DTOs, use cases, services, stores, controllers, templates.
+Generation order: domain entities, DTOs, services, stores, controllers, templates.
 
 After generating module files, updates `src/app.ts` with dependency injection wiring (imports, provider initialization, controller registration) between the `// currentjs:controllers:start` and `// currentjs:controllers:end` markers.
 
@@ -682,7 +682,7 @@ Handlers define the execution pipeline for a use case. They are processed in ord
 
 Custom handlers reference methods on the service class. Use the format `service:methodName` or just `methodName`. The generator creates stub methods with TODO comments for custom handlers.
 
-Multiple handlers can be chained:
+Multiple handlers can be chained. The controller orchestrates the chain directly — each handler's result is passed as the first argument to the next:
 
 ```yaml
 handlers:
@@ -830,8 +830,6 @@ src/modules/<ModuleName>/
     dto/
       <ActionName>InputDto.ts       # Input DTO
       <ActionName>OutputDto.ts      # Output DTO
-    useCases/
-      <ActionName>UseCase.ts        # Use case orchestrator
     services/
       <EntityName>Service.ts        # Service with business logic
   infrastructure/

@@ -21,7 +21,7 @@ export async function handleDiff(yamlPathArg?: string, moduleName?: string): Pro
     return;
   }
 
-  const { domainGen, dtoGen, useCaseGen, serviceGen: svcGen, controllerGen: ctrlGen, storeGen, templateGen: tplGen } = createGenerators();
+  const { domainGen, dtoGen, serviceGen: svcGen, controllerGen: ctrlGen, storeGen, templateGen: tplGen } = createGenerators();
 
   const results: Array<{ file: string; status: 'clean' | 'modified' | 'missing'; hunks?: DiffHunk[]; note?: string }> = [];
 
@@ -49,7 +49,6 @@ export async function handleDiff(yamlPathArg?: string, moduleName?: string): Pro
     const { identifiers } = entry;
     const nextDomain = domainGen.generateFromYamlFile(moduleYamlPath, identifiers);
     const nextDtos = dtoGen.generateFromYamlFile(moduleYamlPath, identifiers);
-    const nextUseCases = useCaseGen.generateFromYamlFile(moduleYamlPath, identifiers);
     const nextServices = svcGen.generateFromYamlFile(moduleYamlPath, identifiers);
     const nextControllers = ctrlGen.generateFromYamlFile(moduleYamlPath, identifiers);
     const nextStores = storeGen.generateFromYamlFile(moduleYamlPath, identifiers);
@@ -101,7 +100,6 @@ export async function handleDiff(yamlPathArg?: string, moduleName?: string): Pro
       consider(path.join(outDir, `${name}.ts`), code);
     });
     Object.entries(nextDtos).forEach(([name, code]) => consider(path.join(appOut, 'dto', `${name}.ts`), code));
-    Object.entries(nextUseCases).forEach(([name, code]) => consider(path.join(appOut, 'useCases', `${name}UseCase.ts`), code));
     Object.entries(nextServices).forEach(([e, code]) => consider(path.join(appOut, 'services', `${e}Service.ts`), code));
     Object.entries(nextControllers).forEach(([name, code]) => consider(path.join(infraOut, 'controllers', `${name}Controller.ts`), code));
     Object.entries(nextStores).forEach(([e, code]) => consider(path.join(infraOut, 'stores', `${e}Store.ts`), code));

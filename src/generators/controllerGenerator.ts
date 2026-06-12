@@ -9,6 +9,7 @@ import {
   WebPageConfig,
   AuthConfig,
   UseCasesConfig,
+  UseCaseDefinition,
   isValidModuleConfig,
   IdentifierType,
   idTsType
@@ -36,27 +37,17 @@ export class ControllerGenerator {
     return { model, action };
   }
 
-  /**
-   * Normalize auth config to an array of roles
-   */
   private normalizeAuth(auth?: AuthConfig): string[] {
     if (!auth) return [];
     if (Array.isArray(auth)) return auth;
     return [auth];
   }
 
-  /**
-   * Check if auth config includes owner permission
-   */
   private hasOwnerAuth(auth?: AuthConfig): boolean {
     const roles = this.normalizeAuth(auth);
     return roles.includes(AUTH_ROLES.OWNER);
   }
 
-  /**
-   * Determine which HTTP error classes from @currentjs/router are needed
-   * based on the auth configs of all endpoints in a controller.
-   */
   private getNeededHttpErrorImports(auths: (AuthConfig | undefined)[]): string[] {
     const needed = new Set<string>();
     for (const auth of auths) {
@@ -78,50 +69,37 @@ export class ControllerGenerator {
     return Array.from(needed).sort();
   }
 
-  /**
-   * Generate pre-fetch authentication/authorization check code.
-   * This runs before fetching the entity and validates authentication and role-based access.
-   * @param auth - The auth requirement: 'all', 'authenticated', 'owner', role names, or array of roles
-   * @returns Code string for the auth check, or empty string if no check needed
-   */
   private generateAuthCheck(auth?: AuthConfig): string {
     const roles = this.normalizeAuth(auth);
     
     if (roles.length === 0 || (roles.length === 1 && roles[0] === AUTH_ROLES.ALL)) {
-      return ''; // No check needed - public access
+      return '';
     }
 
-    // If only 'authenticated' is specified
     if (roles.length === 1 && roles[0] === AUTH_ROLES.AUTHENTICATED) {
       return `if (!context.request.user) {
       throw new UnauthorizedError('${AUTH_ERRORS.REQUIRED}');
     }`;
     }
 
-    // If only 'owner' is specified - just require authentication here
-    // (owner check happens post-fetch)
     if (roles.length === 1 && roles[0] === AUTH_ROLES.OWNER) {
       return `if (!context.request.user) {
       throw new UnauthorizedError('${AUTH_ERRORS.REQUIRED}');
     }`;
     }
 
-    // Filter out 'owner' and 'all' for role checks (owner is checked post-fetch)
     const roleChecks = roles.filter(r => r !== AUTH_ROLES.OWNER && r !== AUTH_ROLES.ALL && r !== AUTH_ROLES.AUTHENTICATED);
     const hasOwner = roles.includes(AUTH_ROLES.OWNER);
     const hasAuthenticated = roles.includes(AUTH_ROLES.AUTHENTICATED);
     
-    // If we have role checks or owner, we need authentication
     if (roleChecks.length > 0 || hasOwner) {
       if (roleChecks.length === 0) {
-        // Only owner (and maybe authenticated) - just require auth
         return `if (!context.request.user) {
       throw new UnauthorizedError('${AUTH_ERRORS.REQUIRED}');
     }`;
       }
       
       if (roleChecks.length === 1 && !hasOwner) {
-        // Single role check
         return `if (!context.request.user) {
       throw new UnauthorizedError('${AUTH_ERRORS.REQUIRED}');
     }
@@ -130,17 +108,12 @@ export class ControllerGenerator {
     }`;
       }
       
-      // Multiple roles OR owner - use OR logic
-      // If owner is included, we can't fully check here (post-fetch), so we just require auth
-      // and mark that owner check should happen later
       if (hasOwner) {
-        // With owner: require auth, role check will be combined with owner check post-fetch
         return `if (!context.request.user) {
       throw new UnauthorizedError('${AUTH_ERRORS.REQUIRED}');
     }`;
       }
       
-      // Multiple roles without owner - check if user has ANY of the roles
       const roleConditions = roleChecks.map(r => `context.request.user.role === '${r}'`).join(' || ');
       return `if (!context.request.user) {
       throw new UnauthorizedError('${AUTH_ERRORS.REQUIRED}');
@@ -150,7 +123,6 @@ export class ControllerGenerator {
     }`;
     }
 
-    // Only 'authenticated' in the mix
     if (hasAuthenticated) {
       return `if (!context.request.user) {
       throw new UnauthorizedError('${AUTH_ERRORS.REQUIRED}');
@@ -160,32 +132,25 @@ export class ControllerGenerator {
     return '';
   }
 
-  /**
-   * Generate post-fetch authorization check for owner validation.
-   * This runs after fetching the entity and validates ownership.
-   * Used for READ operations (get, list) where we check after fetch.
-   * For child entities, uses getResourceOwner() since result has no ownerId.
-   */
   private generatePostFetchOwnerCheck(
     auth?: AuthConfig,
     resultVar: string = 'result',
-    useCaseVar?: string,
+    serviceVar?: string,
     childInfo?: ChildEntityInfo
   ): string {
     const roles = this.normalizeAuth(auth);
     
     if (!roles.includes(AUTH_ROLES.OWNER)) {
-      return ''; // No owner check needed
+      return '';
     }
 
     const bypassRoles = roles.filter(r => r !== AUTH_ROLES.OWNER && r !== AUTH_ROLES.ALL && r !== AUTH_ROLES.AUTHENTICATED);
 
-    // Child entities don't have ownerId on result; resolve via getResourceOwner
-    if (childInfo && useCaseVar) {
+    if (childInfo && serviceVar) {
       if (bypassRoles.length === 0) {
         return `
     // Owner validation (post-fetch for reads, via parent)
-    const resourceOwnerId = await this.${useCaseVar}.getResourceOwner(${resultVar}.id);
+    const resourceOwnerId = await this.${serviceVar}.getResourceOwner(${resultVar}.id);
     if (resourceOwnerId === null) {
       throw new NotFoundError('Resource not found');
     }
@@ -196,7 +161,7 @@ export class ControllerGenerator {
       const bypassConditions = bypassRoles.map(r => `context.request.user?.role === '${r}'`).join(' || ');
       return `
     // Owner validation (post-fetch for reads, via parent, bypassed for: ${bypassRoles.join(', ')})
-    const resourceOwnerId = await this.${useCaseVar}.getResourceOwner(${resultVar}.id);
+    const resourceOwnerId = await this.${serviceVar}.getResourceOwner(${resultVar}.id);
     if (resourceOwnerId === null) {
       throw new NotFoundError('Resource not found');
     }
@@ -207,7 +172,6 @@ export class ControllerGenerator {
     }`;
     }
 
-    // Root entity: result has ownerId
     if (bypassRoles.length === 0) {
       return `
     // Owner validation (post-fetch for reads)
@@ -225,29 +189,19 @@ export class ControllerGenerator {
     }`;
   }
 
-  /**
-   * Generate pre-mutation authorization check for owner validation.
-   * This runs BEFORE the mutation to prevent unauthorized changes.
-   * Used for WRITE operations (update, delete).
-   * @param auth - The auth requirement
-   * @param useCaseVar - The use case variable name
-   * @returns Code string for the pre-mutation owner check, or empty string if not needed
-   */
-  private generatePreMutationOwnerCheck(auth?: AuthConfig, useCaseVar: string = 'useCase'): string {
+  private generatePreMutationOwnerCheck(auth?: AuthConfig, serviceVar: string = 'service'): string {
     const roles = this.normalizeAuth(auth);
     
     if (!roles.includes(AUTH_ROLES.OWNER)) {
-      return ''; // No owner check needed
+      return '';
     }
 
-    // Get non-owner roles for the bypass check
     const bypassRoles = roles.filter(r => r !== AUTH_ROLES.OWNER && r !== AUTH_ROLES.ALL && r !== AUTH_ROLES.AUTHENTICATED);
     
     if (bypassRoles.length === 0) {
-      // Only owner - strict ownership check
       return `
     // Pre-mutation owner validation
-    const resourceOwnerId = await this.${useCaseVar}.getResourceOwner(input.id);
+    const resourceOwnerId = await this.${serviceVar}.getResourceOwner(input.id);
     if (resourceOwnerId === null) {
       throw new NotFoundError('Resource not found');
     }
@@ -257,11 +211,10 @@ export class ControllerGenerator {
 `;
     }
     
-    // Owner OR other roles - bypass if user has a privileged role
     const bypassConditions = bypassRoles.map(r => `context.request.user?.role === '${r}'`).join(' || ');
     return `
     // Pre-mutation owner validation (bypassed for: ${bypassRoles.join(', ')})
-    const resourceOwnerId = await this.${useCaseVar}.getResourceOwner(input.id);
+    const resourceOwnerId = await this.${serviceVar}.getResourceOwner(input.id);
     if (resourceOwnerId === null) {
       throw new NotFoundError('Resource not found');
     }
@@ -273,6 +226,56 @@ export class ControllerGenerator {
 `;
   }
 
+  /**
+   * Generate inlined handler chain code (previously in UseCase layer).
+   * Produces sequential service method calls from the handlers array.
+   * @param indent - indentation string for each generated line
+   */
+  private generateHandlerChain(
+    actionName: string,
+    useCaseDef: UseCaseDefinition,
+    serviceVar: string,
+    ownerIdArg?: string,
+    indent: string = '    '
+  ): string {
+    const handlers = useCaseDef.handlers;
+
+    const lines = handlers.map((handler, index) => {
+      const isLast = index === handlers.length - 1;
+      const resultVar = isLast ? 'result' : `result${index}`;
+
+      if (handler.startsWith('default:')) {
+        const defaultAction = handler.replace('default:', '');
+        let params = '';
+        if (defaultAction === 'list') {
+          if (useCaseDef.input?.pagination) {
+            params = ownerIdArg
+              ? `input.page || 1, input.limit || 20, ${ownerIdArg}`
+              : 'input.page || 1, input.limit || 20';
+          } else {
+            params = ownerIdArg ? ownerIdArg : '';
+          }
+        } else if (defaultAction === 'get') {
+          params = 'input.id';
+        } else if (defaultAction === 'create') {
+          params = 'input';
+        } else if (defaultAction === 'update') {
+          params = 'input.id, input';
+        } else if (defaultAction === 'delete') {
+          params = 'input.id';
+        } else {
+          params = 'input';
+        }
+        return `${indent}const ${resultVar} = await this.${serviceVar}.${defaultAction}(${params});`;
+      } else {
+        const prevResult = index === 0 ? 'null' : `result${index - 1}`;
+        return `${indent}const ${resultVar} = await this.${serviceVar}.${handler}(${prevResult}, input);`;
+      }
+    });
+
+    return lines.join('\n');
+  }
+
   private generateApiEndpointMethod(
     endpoint: ApiEndpointConfig,
     resourceName: string,
@@ -282,7 +285,7 @@ export class ControllerGenerator {
     const { model, action } = this.parseUseCase(endpoint.useCase);
     const methodName = action;
     const decorator = this.getHttpDecorator(endpoint.method);
-    const useCaseVar = `${model.toLowerCase()}UseCase`;
+    const serviceVar = `${model.toLowerCase()}Service`;
     const inputClass = `${model}${capitalize(action)}Input`;
     const outputClass = `${model}${capitalize(action)}Output`;
     const useCaseDef = useCasesConfig[model]?.[action];
@@ -295,14 +298,11 @@ export class ControllerGenerator {
       voidOutputDtos.add(`${model}${capitalize(action)}`);
     }
 
-    // Generate auth check (pre-fetch)
     const authCheck = this.generateAuthCheck(endpoint.auth);
     const authLine = authCheck ? `\n    ${authCheck}\n` : '';
 
     const hasOwner = this.hasOwnerAuth(endpoint.auth);
 
-    // Build parsing logic
-    // For create: root gets ownerId from user, child gets parentId from URL params
     let parseLogic: string;
     if (action === 'list') {
       parseLogic = `const input = ${inputClass}.parse(context.request.parameters);`;
@@ -321,40 +321,38 @@ export class ControllerGenerator {
       parseLogic = `const input = ${inputClass}.parse(context.request.body || {});`;
     }
 
-    // Generate owner checks:
-    // - For mutations (update, delete): PRE-mutation check (before operation)
-    // - For reads (get): POST-fetch check (after fetching)
     const isMutation = action === 'update' || action === 'delete';
     const isRead = action === 'get';
     
-    // Pre-mutation owner check for write operations
     const preMutationOwnerCheck = (hasOwner && isMutation) 
-      ? this.generatePreMutationOwnerCheck(endpoint.auth, useCaseVar) 
+      ? this.generatePreMutationOwnerCheck(endpoint.auth, serviceVar) 
       : '';
     
-    // Post-fetch owner check for read operations only
     const postFetchOwnerCheck = (hasOwner && isRead) 
-      ? this.generatePostFetchOwnerCheck(endpoint.auth, 'result', useCaseVar, childInfo) 
+      ? this.generatePostFetchOwnerCheck(endpoint.auth, 'result', serviceVar, childInfo) 
       : '';
 
-    // Generate output transformation based on action
     let outputTransform: string;
     if (isVoidOutput || action === 'delete') {
       outputTransform = `return result;`;
-    } else if (action === 'list') {
-      outputTransform = `return ${outputClass}.from(result);`;
     } else {
       outputTransform = `return ${outputClass}.from(result);`;
     }
 
-    const useCaseArgs = (hasOwner && action === 'list')
-      ? 'input, context.request.user?.id as number'
-      : 'input';
+    const ownerIdArg = (hasOwner && action === 'list') ? 'context.request.user?.id as number' : undefined;
+
+    let handlerChain: string;
+    if (useCaseDef) {
+      handlerChain = this.generateHandlerChain(action, useCaseDef, serviceVar, ownerIdArg, '    ');
+    } else {
+      const callArg = ownerIdArg ? `input, ${ownerIdArg}` : 'input';
+      handlerChain = `    const result = await this.${serviceVar}.${action}(${callArg});`;
+    }
 
     const method = `  @${decorator}('${endpoint.path}')
   async ${methodName}(context: IContext): Promise<any> {${authLine}
     ${parseLogic}${preMutationOwnerCheck}
-    const result = await this.${useCaseVar}.${action}(${useCaseArgs});${postFetchOwnerCheck}
+${handlerChain}${postFetchOwnerCheck}
     ${outputTransform}
   }`;
 
@@ -366,6 +364,7 @@ export class ControllerGenerator {
     resourceName: string,
     layout: string | undefined,
     methodIndex: number,
+    config: ModuleConfig,
     childInfo?: ChildEntityInfo,
     withChildChildren?: ParentChildInfo[]
   ): { method: string; dtoImports: Set<string> } {
@@ -373,7 +372,6 @@ export class ControllerGenerator {
     const decorator = this.getHttpDecorator(method);
     const dtoImports = new Set<string>();
     
-    // Generate unique method name by appending method type for POST routes
     const pathSegments = page.path.split('/').filter(Boolean);
     let baseMethodName = pathSegments.length === 0 
       ? 'index'
@@ -384,14 +382,11 @@ export class ControllerGenerator {
           return idx === 0 ? seg : capitalize(seg);
         }).join('');
     
-    // Append method suffix for POST to avoid duplicates
     const methodName = method === 'POST' ? `${baseMethodName}Submit` : baseMethodName;
 
-    // Generate auth check (pre-fetch)
     const authCheck = this.generateAuthCheck(page.auth);
     const authLine = authCheck ? `\n    ${authCheck}\n` : '';
 
-    // For GET requests with views (display pages)
     if (method === 'GET' && page.view) {
       const pageLayout = this.resolveLayout(page.layout, layout);
       const renderDecorator = pageLayout
@@ -400,8 +395,9 @@ export class ControllerGenerator {
       
       if (page.useCase) {
         const { model, action } = this.parseUseCase(page.useCase);
-        const useCaseVar = `${model.toLowerCase()}UseCase`;
+        const serviceVar = `${model.toLowerCase()}Service`;
         const inputClass = `${model}${capitalize(action)}Input`;
+        const useCaseDef = config.useCases[model]?.[action];
         
         dtoImports.add(`${model}${capitalize(action)}`);
 
@@ -415,12 +411,12 @@ export class ControllerGenerator {
         } else {
           parseLogic = `const input = ${inputClass}.parse({});`;
         }
+
         const isReadAction = action === 'get' || action === 'list';
         const postFetchOwnerCheck = (hasOwner && isReadAction) 
-          ? this.generatePostFetchOwnerCheck(page.auth, 'result', useCaseVar, childInfo) 
+          ? this.generatePostFetchOwnerCheck(page.auth, 'result', serviceVar, childInfo) 
           : '';
 
-        // For get + withChild: load child entities and merge into result for template
         const loadChildBlocks: string[] = [];
         let returnExpr: string;
         if (childInfo) {
@@ -438,23 +434,27 @@ export class ControllerGenerator {
           returnExpr = 'result';
         }
 
-        const useCaseArgs = (hasOwner && action === 'list')
-          ? 'input, context.request.user?.id as number'
-          : 'input';
-
+        const ownerIdArg = (hasOwner && action === 'list') ? 'context.request.user?.id as number' : undefined;
         const loadChildCode = loadChildBlocks.length ? '\n    ' + loadChildBlocks.join('\n    ') + '\n    ' : '';
+
+        let handlerChain: string;
+        if (useCaseDef) {
+          handlerChain = this.generateHandlerChain(action, useCaseDef, serviceVar, ownerIdArg, '    ');
+        } else {
+          const callArg = ownerIdArg ? `input, ${ownerIdArg}` : 'input';
+          handlerChain = `    const result = await this.${serviceVar}.${action}(${callArg});`;
+        }
+
         const methodCode = `${renderDecorator}
   @${decorator}('${page.path}')
   async ${methodName}(context: IContext): Promise<any> {${authLine}
     ${parseLogic}
-    const result = await this.${useCaseVar}.${action}(${useCaseArgs});${postFetchOwnerCheck}${loadChildCode}
+${handlerChain}${postFetchOwnerCheck}${loadChildCode}
     return ${returnExpr};
   }`;
 
         return { method: methodCode, dtoImports };
       } else {
-        // No use case - just render view (e.g. create form)
-        // Child entities need the parent ID from URL params for link rendering
         const emptyFormData = childInfo
           ? `{ formData: {}, ${childInfo.parentIdField}: context.request.parameters.${childInfo.parentIdField} }`
           : '{ formData: {} }';
@@ -467,10 +467,10 @@ export class ControllerGenerator {
         return { method: methodCode, dtoImports };
       }
     } else if (method === 'POST' && page.useCase) {
-      // POST request - form submission
       const { model, action } = this.parseUseCase(page.useCase);
-      const useCaseVar = `${model.toLowerCase()}UseCase`;
+      const serviceVar = `${model.toLowerCase()}Service`;
       const inputClass = `${model}${capitalize(action)}Input`;
+      const useCaseDef = config.useCases[model]?.[action];
 
       dtoImports.add(`${model}${capitalize(action)}`);
 
@@ -488,22 +488,28 @@ export class ControllerGenerator {
         parseLogic = `const input = ${inputClass}.parse(context.request.body);`;
       }
 
-      // Generate PRE-mutation owner check for update/delete actions (POST requests)
       const hasOwner = this.hasOwnerAuth(page.auth);
       const isMutation = action === 'update' || action === 'delete';
       const preMutationOwnerCheck = (hasOwner && isMutation) 
-        ? this.generatePreMutationOwnerCheck(page.auth, useCaseVar) 
+        ? this.generatePreMutationOwnerCheck(page.auth, serviceVar) 
         : '';
 
-      // Handle onSuccess and onError strategies
       const onSuccessHandler = this.generateOnSuccessHandler(page);
       const onErrorHandler = this.generateOnErrorHandler(page);
+
+      let handlerChain: string;
+      if (useCaseDef) {
+        // Inside try block: use 6-space indent
+        handlerChain = this.generateHandlerChain(action, useCaseDef, serviceVar, undefined, '      ');
+      } else {
+        handlerChain = `      const result = await this.${serviceVar}.${action}(input);`;
+      }
 
       const methodCode = `  @${decorator}('${page.path}')
   async ${methodName}(context: IContext): Promise<any> {${authLine}
     try {
       ${parseLogic}${preMutationOwnerCheck}
-      const result = await this.${useCaseVar}.${action}(input);
+${handlerChain}
       ${onSuccessHandler}
       return { success: true, data: result };
     } catch (error) {
@@ -561,11 +567,6 @@ export class ControllerGenerator {
     return handlers.join('\n      ') || '// Error occurred';
   }
 
-  /**
-   * Sort routes so static paths are registered before parameterized ones.
-   * This prevents parameterized routes (e.g. /:id) from catching requests
-   * meant for static routes (e.g. /create).
-   */
   private sortRoutesBySpecificity<T extends { path: string }>(routes: T[]): T[] {
     return [...routes].sort((a, b) => {
       const aSegments = a.path.split('/').filter(Boolean);
@@ -576,12 +577,6 @@ export class ControllerGenerator {
     });
   }
 
-  /**
-   * Resolve layout from YAML value.
-   * - undefined => use fallback (if provided)
-   * - "none" or "" => no layout
-   * - other values => use explicit layout name
-   */
   private resolveLayout(layout: string | undefined, fallback?: string): string | undefined {
     if (layout === undefined) {
       return fallback;
@@ -604,8 +599,7 @@ export class ControllerGenerator {
   ): string {
     const controllerName = `${resourceName}ApiController`;
     
-    // Determine which use cases and DTOs are referenced
-    const useCaseModels = new Set<string>();
+    const serviceModels = new Set<string>();
     const allDtoImports = new Set<string>();
     const allVoidOutputDtos = new Set<string>();
     const methods: string[] = [];
@@ -613,7 +607,7 @@ export class ControllerGenerator {
     const sortedEndpoints = this.sortRoutesBySpecificity(endpoints);
     sortedEndpoints.forEach(endpoint => {
       const { model } = this.parseUseCase(endpoint.useCase);
-      useCaseModels.add(model);
+      serviceModels.add(model);
       
       const { method, dtoImports, voidOutputDtos } = this.generateApiEndpointMethod(endpoint, resourceName, useCasesConfig, childInfo);
       methods.push(method);
@@ -621,9 +615,8 @@ export class ControllerGenerator {
       voidOutputDtos.forEach(d => allVoidOutputDtos.add(d));
     });
 
-    // Generate imports
-    const useCaseImports = Array.from(useCaseModels)
-      .map(model => `import { ${model}UseCase } from '../../application/useCases/${model}UseCase';`)
+    const serviceImports = Array.from(serviceModels)
+      .map(model => `import { ${model}Service } from '../../application/services/${model}Service';`)
       .join('\n');
 
     const dtoImportStatements = Array.from(allDtoImports)
@@ -635,16 +628,15 @@ export class ControllerGenerator {
       })
       .join('\n');
 
-    // Generate constructor parameters
-    const constructorParams = Array.from(useCaseModels)
-      .map(model => `private ${model.toLowerCase()}UseCase: ${model}UseCase`)
+    const constructorParams = Array.from(serviceModels)
+      .map(model => `private ${model.toLowerCase()}Service: ${model}Service`)
       .join(',\n    ');
 
     const errorImports = this.getNeededHttpErrorImports(sortedEndpoints.map(e => e.auth));
     const routerImports = ['Controller', 'Get', 'Post', 'Put', 'Delete', 'type IContext', ...errorImports].join(', ');
 
     return `import { ${routerImports} } from '@currentjs/router';
-${useCaseImports}
+${serviceImports}
 ${dtoImportStatements}
 
 @Controller('${prefix}')
@@ -667,11 +659,9 @@ ${methods.join('\n\n')}
   ): string {
     const controllerName = `${resourceName}WebController`;
     
-    // Child entities of this resource (for withChild). Only root entities can have withChild.
     const withChildChildren = childInfo ? [] : getChildrenOfParent(config, resourceName);
 
-    // Determine which use cases and DTOs are referenced
-    const useCaseModels = new Set<string>();
+    const serviceModels = new Set<string>();
     const allDtoImports = new Set<string>();
     const methods: string[] = [];
 
@@ -679,41 +669,39 @@ ${methods.join('\n\n')}
     sortedPages.forEach((page, index) => {
       if (page.useCase) {
         const { model } = this.parseUseCase(page.useCase);
-        useCaseModels.add(model);
+        serviceModels.add(model);
       }
 
       const { model, action } = page.useCase ? this.parseUseCase(page.useCase) : { model: '', action: '' };
       const useCaseWithChild = model && action && (config.useCases[model] as Record<string, { withChild?: boolean }>)?.[action]?.withChild === true;
       const withChildForThisPage = useCaseWithChild && action === 'get' && withChildChildren.length > 0 ? withChildChildren : undefined;
       
-      const { method, dtoImports } = this.generateWebPageMethod(page, resourceName, layout, index, childInfo, withChildForThisPage);
+      const { method, dtoImports } = this.generateWebPageMethod(page, resourceName, layout, index, config, childInfo, withChildForThisPage);
       methods.push(method);
       dtoImports.forEach(d => allDtoImports.add(d));
     });
 
-    // Determine if any page actually uses withChild (only then inject child services)
     const needsChildServices = withChildChildren.length > 0 && sortedPages.some(page => {
       if (!page.useCase) return false;
       const { model: m, action: a } = this.parseUseCase(page.useCase);
       return a === 'get' && (config.useCases[m] as Record<string, { withChild?: boolean }>)?.[a]?.withChild === true;
     });
 
-    // Constructor: use cases + child entity services when withChild is actually used
-    const serviceImports: string[] = [];
+    const extraServiceImports: string[] = [];
     const constructorParams: string[] = [];
-    Array.from(useCaseModels).forEach(model => {
-      constructorParams.push(`private ${model.toLowerCase()}UseCase: ${model}UseCase`);
+    Array.from(serviceModels).forEach(model => {
+      constructorParams.push(`private ${model.toLowerCase()}Service: ${model}Service`);
     });
     if (needsChildServices) {
       withChildChildren.forEach(child => {
         const childVar = child.childEntityName.charAt(0).toLowerCase() + child.childEntityName.slice(1);
-        serviceImports.push(`import { ${child.childEntityName}Service } from '../../application/services/${child.childEntityName}Service';`);
+        extraServiceImports.push(`import { ${child.childEntityName}Service } from '../../application/services/${child.childEntityName}Service';`);
         constructorParams.push(`private ${childVar}Service: ${child.childEntityName}Service`);
       });
     }
 
-    const useCaseImports = Array.from(useCaseModels)
-      .map(model => `import { ${model}UseCase } from '../../application/useCases/${model}UseCase';`)
+    const serviceImports = Array.from(serviceModels)
+      .map(model => `import { ${model}Service } from '../../application/services/${model}Service';`)
       .join('\n');
 
     const dtoImportStatements = Array.from(allDtoImports)
@@ -730,8 +718,8 @@ ${methods.join('\n\n')}
     const routerImports = ['Controller', 'Get', 'Post', 'Render', 'type IContext', ...errorImports].join(', ');
 
     return `import { ${routerImports} } from '@currentjs/router';
-${useCaseImports}
-${serviceImports.join('\n')}
+${serviceImports}
+${extraServiceImports.join('\n')}
 ${dtoImportStatements}
 
 @Controller('${prefix}')
@@ -747,7 +735,6 @@ ${methods.join('\n\n')}
     this.identifiers = identifiers;
     const childEntityMap = buildChildEntityMap(config);
 
-    // Generate API controllers
     if (config.api) {
       Object.entries(config.api).forEach(([resourceName, resourceConfig]) => {
         const childInfo = childEntityMap.get(resourceName);
@@ -762,7 +749,6 @@ ${methods.join('\n\n')}
       });
     }
 
-    // Generate Web controllers
     if (config.web) {
       Object.entries(config.web).forEach(([resourceName, resourceConfig]) => {
         const childInfo = childEntityMap.get(resourceName);
