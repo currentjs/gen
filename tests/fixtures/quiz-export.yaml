@@ -1,0 +1,91 @@
+domain:
+  aggregates:
+    Quiz:
+      root: true
+      fields:
+        title:
+          type: string
+          required: true
+        totalQuestions:
+          type: number
+          required: true
+        averageScore:
+          type: number
+          required: true
+        passRate:
+          type: number
+          required: false
+
+useCases:
+  Quiz:
+    list:
+      input:
+        pagination:
+          type: offset
+          defaults:
+            limit: 10
+            maxLimit: 50
+      output:
+        from: Quiz
+        pagination: true
+    get:
+      input:
+        identifier: id
+      output:
+        from: Quiz
+    create:
+      input:
+        from: Quiz
+      output:
+        from: Quiz
+    update:
+      input:
+        from: Quiz
+        identifier: id
+        partial: true
+      output:
+        from: Quiz
+    delete:
+      input:
+        identifier: id
+      output: void
+
+api:
+  Quiz:
+    prefix: /api/quiz
+    endpoints:
+      - method: GET
+        path: /
+        useCase: Quiz:list
+      - method: GET
+        path: /:id
+        useCase: Quiz:get
+      - method: POST
+        path: /
+        useCase: Quiz:create
+      - method: PUT
+        path: /:id
+        useCase: Quiz:update
+      - method: DELETE
+        path: /:id
+        useCase: Quiz:delete
+
+exports:
+  queries:
+    getQuizStats:
+      input:
+        identifier: id
+      output:
+        from: Quiz
+        pick: [title, totalQuestions, averageScore, passRate]
+    listActiveQuizzes:
+      input:
+        pagination:
+          type: offset
+          defaults:
+            limit: 5
+      output:
+        from: Quiz
+        pagination: true
+
+dependencies: {}

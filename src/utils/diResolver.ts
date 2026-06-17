@@ -116,12 +116,25 @@ export function buildInstantiationOrder(
     }
   }
 
+  // Build interface -> implementing class name mapping from `implements` clauses
+  const interfaceToClass = new Map<string, string>();
+  for (const cls of classMap.values()) {
+    for (const iface of cls.implementedInterfaces) {
+      if (!interfaceToClass.has(iface)) {
+        interfaceToClass.set(iface, cls.className);
+      }
+    }
+  }
+
   const graph = new Map<string, string[]>();
   for (const cls of classMap.values()) {
     const deps: string[] = [];
     for (const param of cls.constructorParams) {
       if (classMap.has(param.type)) {
         deps.push(param.type);
+      } else if (interfaceToClass.has(param.type)) {
+        // Interface param: depend on the implementing class
+        deps.push(interfaceToClass.get(param.type)!);
       }
     }
     graph.set(cls.className, deps);
@@ -145,6 +158,12 @@ export function buildInstantiationOrder(
         constructorArgs.push(providerVarByType.get(param.type)!);
       } else if (varNames.has(param.type)) {
         constructorArgs.push(varNames.get(param.type)!);
+      } else if (interfaceToClass.has(param.type)) {
+        // Resolve interface to its implementing class variable
+        const implClass = interfaceToClass.get(param.type)!;
+        if (varNames.has(implClass)) {
+          constructorArgs.push(varNames.get(implClass)!);
+        }
       }
     }
 

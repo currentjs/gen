@@ -1,0 +1,41 @@
+domain:
+  aggregates:
+    Dashboard:
+      root: true
+      fields:
+        name:
+          type: string
+          required: true
+
+useCases:
+  Dashboard:
+    get:
+      input:
+        identifier: id
+      output:
+        from: Dashboard
+      handlers:
+        - default:get
+  Quiz:
+    getStats:
+      input:
+        identifier: id
+      output:
+        from: Quiz
+      handlers:
+        - getQuizStats
+
+api:
+  Dashboard:
+    prefix: /api/dashboard
+    endpoints:
+      - method: GET
+        path: /
+        useCase: Dashboard:get
+      - method: GET
+        path: /quiz/:id/stats
+        useCase: Quiz:getStats
+
+dependencies:
+  Quiz:
+    queries: [getQuizStats]

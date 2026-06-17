@@ -187,6 +187,21 @@ export interface WebResourceConfig {
 
 export type WebConfig = Record<string, WebResourceConfig>;
 
+// ============= CROSS-MODULE COMMUNICATION =============
+
+export interface ExportedQueryConfig {
+  input?: UseCaseInputConfig;
+  output?: UseCaseOutputConfig | 'void';
+}
+
+export interface ExportsConfig {
+  queries?: Record<string, ExportedQueryConfig>;
+}
+
+export interface DependencyConfig {
+  queries?: string[];
+}
+
 // ============= MODULE CONFIG =============
 
 export interface ModuleConfig {
@@ -194,10 +209,13 @@ export interface ModuleConfig {
   useCases: UseCasesConfig;
   api?: ApiConfig;
   web?: WebConfig;
+  exports?: ExportsConfig;
+  dependencies?: Record<string, DependencyConfig>;
 }
 
-// Type guard to validate module config (domain + useCases)
+// Type guard to validate module config (domain + useCases, or domain + exports for export-only modules)
 export function isValidModuleConfig(config: any): config is ModuleConfig {
-  return config && typeof config === 'object' && 'domain' in config && 'useCases' in config;
+  return config && typeof config === 'object' && 'domain' in config &&
+    ('useCases' in config || 'exports' in config);
 }
 

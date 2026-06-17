@@ -10,6 +10,8 @@ import { ServiceGenerator } from '../generators/serviceGenerator';
 import { ControllerGenerator } from '../generators/controllerGenerator';
 import { StoreGenerator } from '../generators/storeGenerator';
 import { TemplateGenerator } from '../generators/templateGenerator';
+import { PortGenerator } from '../generators/portGenerator';
+import { QueryGenerator } from '../generators/queryGenerator';
 import { normalizeIdentifierType } from '../types/configTypes';
 
 export interface ModuleEntry {
@@ -98,6 +100,8 @@ export function shouldIncludeModule(moduleYamlRel: string, moduleName?: string):
 export function createGenerators(): {
   domainGen: DomainLayerGenerator;
   dtoGen: DtoGenerator;
+  portGen: PortGenerator;
+  queryGen: QueryGenerator;
   serviceGen: ServiceGenerator;
   controllerGen: ControllerGenerator;
   templateGen: TemplateGenerator;
@@ -106,6 +110,8 @@ export function createGenerators(): {
   return {
     domainGen: new DomainLayerGenerator(),
     dtoGen: new DtoGenerator(),
+    portGen: new PortGenerator(),
+    queryGen: new QueryGenerator(),
     serviceGen: new ServiceGenerator(),
     controllerGen: new ControllerGenerator(),
     templateGen: new TemplateGenerator(),

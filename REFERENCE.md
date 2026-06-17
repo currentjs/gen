@@ -409,6 +409,14 @@ api:                        # optional
 
 web:                        # optional
   <ResourceName>: { ... }
+
+exports:                    # optional — cross-module query exports
+  queries:
+    <queryName>: { ... }
+
+dependencies:               # optional — cross-module query dependencies
+  <ModuleName>:
+    queries: [<queryName>, ...]
 ```
 
 ---
@@ -789,6 +797,119 @@ Authorization can be configured on both API endpoints and web pages. The `auth` 
 
 ---
 
+### exports
+
+Declares named queries this module makes available to other modules. Each exported query has a typed input and output, and is backed by a generated query class in `application/queries/`.
+
+```yaml
+exports:
+  queries:
+    <queryName>:
+      input: <UseCaseInputConfig>     # same schema as useCases input
+      output: <UseCaseOutputConfig>   # same schema as useCases output
+```
+
+**Example:**
+
+```yaml
+exports:
+  queries:
+    getQuizStats:
+      input:
+        identifier: id
+      output:
+        from: Quiz
+        pick: [totalQuestions, averageScore, passRate]
+```
+
+**Generated files (exporting module):**
+
+```
+application/
+  ports/
+    GetQuizStatsInterface.ts    # GetQuizStatsInput, GetQuizStatsOutput, IGetQuizStatsQuery
+  queries/
+    GetQuizStatsQuery.ts        # @Injectable, implements IGetQuizStatsQuery
+```
+
+The generated `GetQuizStatsQuery` class has a smart-generated `execute()` body based on the input config shape:
+
+- `identifier` present → `store.getById(input.id)` pattern
+- `pagination` present → `store.getPaginated(input.page, input.limit)` pattern
+- `from` only → `store.getAll()` and return first result
+
+**`IGetQuizStatsQuery` interface:**
+
+```typescript
+export interface IGetQuizStatsQuery {
+  execute(input: GetQuizStatsInput): Promise<GetQuizStatsOutput>;
+}
+```
+
+---
+
+### dependencies
+
+Declares which exported queries from other modules this module depends on. Each dependency introduces a **pseudo-model** that can be referenced in `useCases` handlers.
+
+```yaml
+dependencies:
+  <ModuleName>:                  # module name (matches app.yaml key)
+    queries: [<queryName>, ...]  # exported query names from that module
+```
+
+**Example:**
+
+```yaml
+dependencies:
+  Quiz:
+    queries: [getQuizStats]
+
+useCases:
+  Quiz:                          # pseudo-model (no aggregate required)
+    getStats:
+      input:
+        identifier: id
+      output:
+        from: Quiz
+      handlers:
+        - getQuizStats           # imported query handler (chainable with other handlers)
+```
+
+**Rules:**
+
+- `<ModuleName>` must match a key in `app.yaml modules`.
+- A pseudo-model in `useCases` (model name matches a dependency key, no local aggregate) generates no service or store — only controller wiring.
+- Imported query handlers can be mixed with `default:*` and `service:*` handlers in the same chain.
+- No `{ModelName}Service` is generated for pure pseudo-models.
+
+**Generated files (consuming module):**
+
+```
+application/
+  ports/
+    GetQuizStatsInterface.ts    # re-exports from Quiz module (only allowed cross-module import)
+```
+
+The re-export file:
+```typescript
+export { IGetQuizStatsQuery, GetQuizStatsInput, GetQuizStatsOutput }
+  from '../../../Quiz/application/ports/GetQuizStatsInterface';
+```
+
+**DI wiring in `app.ts`:**
+
+```typescript
+// Query class is instantiated (from the exporting module's queries dir)
+const getQuizStatsQuery = new GetQuizStatsQuery(quizStore);
+// Passed to the consuming controller via the interface type
+const controllers = [
+  new DashboardApiController(dashboardService, getQuizStatsQuery),
+];
+```
+
+---
+
 ## Field Types
 
 | YAML Type | TypeScript (Domain) | TypeScript (Store Row) | Description |
@@ -828,8 +949,11 @@ src/modules/<ModuleName>/
       <ValueObjectName>.ts          # Value object class (if defined)
   application/
     dto/
-      <ActionName>InputDto.ts       # Input DTO
-      <ActionName>OutputDto.ts      # Output DTO
+      <ModelName><ActionName>.ts    # Input + Output DTOs (one file per use case)
+    ports/
+      <QueryName>Interface.ts       # Port interface + DTOs (exports), or re-export (dependencies)
+    queries/
+      <QueryName>Query.ts           # Concrete query class (for exported queries only)
     services/
       <EntityName>Service.ts        # Service with business logic
   infrastructure/
