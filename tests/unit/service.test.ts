@@ -202,3 +202,39 @@ describe('ServiceGenerator — identifier types', () => {
     });
   });
 });
+
+describe('ServiceGenerator — pseudo-models (cross-module dependencies)', () => {
+  it('skips service generation for models that are dependency keys with no local aggregate', () => {
+    const gen = new ServiceGenerator();
+    const config = loadFixture('dashboard-consumer.yaml');
+    const result = gen.generateFromConfig(config);
+    // Dashboard has a local aggregate → service generated
+    expect(Object.keys(result).join(',')).toContain('Dashboard');
+    // Quiz is a pseudo-model (dependency, no aggregate) → no service
+    expect(Object.keys(result).join(',')).toNotContain('Quiz');
+  });
+
+  it('generates normal service for the real local model alongside pseudo-models', () => {
+    const gen = new ServiceGenerator();
+    const config = loadFixture('dashboard-consumer.yaml');
+    const result = gen.generateFromConfig(config);
+    const dashboardService = result['Dashboard'] ?? '';
+    expect(dashboardService).toContain('class DashboardService');
+    expect(dashboardService).toContain('async get(');
+  });
+});
+
+describe('ServiceGenerator — imported query handlers excluded from service', () => {
+  it('does not generate a service method for handlers that are imported queries', () => {
+    const gen = new ServiceGenerator();
+    const config = loadFixture('dashboard-consumer.yaml');
+    // Add a mixed handler chain to Dashboard: default:get + imported query
+    config.useCases!.Dashboard!.get.handlers = ['default:get', 'getQuizStats'] as any;
+    const result = gen.generateFromConfig(config);
+    const dashboardService = result['Dashboard'] ?? '';
+    // getQuizStats is an imported query — should NOT appear as a service method stub
+    expect(dashboardService).toNotContain('async getQuizStats(');
+    // default:get should still produce the get method
+    expect(dashboardService).toContain('async get(');
+  });
+});

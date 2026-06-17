@@ -21,6 +21,24 @@ import { AUTH_ROLES, AUTH_ERRORS } from '../utils/constants';
 export class ControllerGenerator {
   private identifiers: IdentifierType = 'numeric';
 
+  /** Returns the set of all imported query names declared in dependencies */
+  private getImportedQueryNames(config: ModuleConfig): Set<string> {
+    const names = new Set<string>();
+    if (config.dependencies) {
+      for (const depConfig of Object.values(config.dependencies)) {
+        (depConfig.queries || []).forEach(q => names.add(q));
+      }
+    }
+    return names;
+  }
+
+  /** Returns true when a model exists in dependencies but not in domain.aggregates (pseudo-model) */
+  private isPseudoModel(model: string, config: ModuleConfig): boolean {
+    const inDeps = !!config.dependencies && model in config.dependencies;
+    const hasAggregate = !!config.domain?.aggregates && model in config.domain.aggregates;
+    return inDeps && !hasAggregate;
+  }
+
   private getHttpDecorator(method: string): string {
     switch (method.toUpperCase()) {
       case 'GET': return 'Get';
@@ -229,12 +247,14 @@ export class ControllerGenerator {
   /**
    * Generate inlined handler chain code (previously in UseCase layer).
    * Produces sequential service method calls from the handlers array.
+   * Imported query handlers (names in importedQueryNames) are called via their query interface.
    * @param indent - indentation string for each generated line
    */
   private generateHandlerChain(
     actionName: string,
     useCaseDef: UseCaseDefinition,
     serviceVar: string,
+    importedQueryNames: Set<string>,
     ownerIdArg?: string,
     indent: string = '    '
   ): string {
@@ -267,6 +287,11 @@ export class ControllerGenerator {
           params = 'input';
         }
         return `${indent}const ${resultVar} = await this.${serviceVar}.${defaultAction}(${params});`;
+      } else if (importedQueryNames.has(handler)) {
+        // Imported cross-module query: call via the query interface instance
+        const pascalQuery = capitalize(handler);
+        const queryVar = `${handler}Query`;
+        return `${indent}const ${resultVar} = await this.${queryVar}.execute(${pascalQuery}Input.parse({ ...context.request.body, ...context.request.parameters }));`;
       } else {
         const prevResult = index === 0 ? 'null' : `result${index - 1}`;
         return `${indent}const ${resultVar} = await this.${serviceVar}.${handler}(${prevResult}, input);`;
@@ -276,16 +301,31 @@ export class ControllerGenerator {
     return lines.join('\n');
   }
 
+  /** Collect all imported query names actually used across a set of handler lists */
+  private collectUsedImportedQueries(
+    handlers: string[],
+    importedQueryNames: Set<string>
+  ): Set<string> {
+    const used = new Set<string>();
+    for (const h of handlers) {
+      if (importedQueryNames.has(h)) used.add(h);
+    }
+    return used;
+  }
+
   private generateApiEndpointMethod(
     endpoint: ApiEndpointConfig,
     resourceName: string,
     useCasesConfig: UseCasesConfig,
+    config: ModuleConfig,
+    importedQueryNames: Set<string>,
     childInfo?: ChildEntityInfo
-  ): { method: string; dtoImports: Set<string>; voidOutputDtos: Set<string> } {
+  ): { method: string; dtoImports: Set<string>; voidOutputDtos: Set<string>; usedQueries: Set<string> } {
     const { model, action } = this.parseUseCase(endpoint.useCase);
     const methodName = action;
     const decorator = this.getHttpDecorator(endpoint.method);
     const serviceVar = `${model.toLowerCase()}Service`;
+    const isPseudo = this.isPseudoModel(model, config);
     const inputClass = `${model}${capitalize(action)}Input`;
     const outputClass = `${model}${capitalize(action)}Output`;
     const useCaseDef = useCasesConfig[model]?.[action];
@@ -293,9 +333,21 @@ export class ControllerGenerator {
 
     const dtoImports = new Set<string>();
     const voidOutputDtos = new Set<string>();
-    dtoImports.add(`${model}${capitalize(action)}`);
-    if (isVoidOutput) {
-      voidOutputDtos.add(`${model}${capitalize(action)}`);
+    const usedQueries = new Set<string>();
+
+    // Pseudo-models have no aggregate DTOs — skip adding to dtoImports
+    if (!isPseudo) {
+      dtoImports.add(`${model}${capitalize(action)}`);
+      if (isVoidOutput) {
+        voidOutputDtos.add(`${model}${capitalize(action)}`);
+      }
+    }
+
+    // Collect imported queries used by this endpoint
+    if (useCaseDef) {
+      useCaseDef.handlers.forEach(h => {
+        if (importedQueryNames.has(h)) usedQueries.add(h);
+      });
     }
 
     const authCheck = this.generateAuthCheck(endpoint.auth);
@@ -304,7 +356,10 @@ export class ControllerGenerator {
     const hasOwner = this.hasOwnerAuth(endpoint.auth);
 
     let parseLogic: string;
-    if (action === 'list') {
+    if (isPseudo) {
+      // Pseudo-models: no aggregate DTO, input parsed by each imported query handler individually
+      parseLogic = '';
+    } else if (action === 'list') {
       parseLogic = `const input = ${inputClass}.parse(context.request.parameters);`;
     } else if (action === 'get' || action === 'delete') {
       parseLogic = `const input = ${inputClass}.parse({ id: context.request.parameters.id });`;
@@ -324,39 +379,44 @@ export class ControllerGenerator {
     const isMutation = action === 'update' || action === 'delete';
     const isRead = action === 'get';
     
-    const preMutationOwnerCheck = (hasOwner && isMutation) 
+    const preMutationOwnerCheck = (!isPseudo && hasOwner && isMutation) 
       ? this.generatePreMutationOwnerCheck(endpoint.auth, serviceVar) 
       : '';
     
-    const postFetchOwnerCheck = (hasOwner && isRead) 
+    const postFetchOwnerCheck = (!isPseudo && hasOwner && isRead) 
       ? this.generatePostFetchOwnerCheck(endpoint.auth, 'result', serviceVar, childInfo) 
       : '';
 
+    // Pseudo-models: return result directly (already typed as query output)
     let outputTransform: string;
-    if (isVoidOutput || action === 'delete') {
+    if (isPseudo) {
+      outputTransform = `return result;`;
+    } else if (isVoidOutput || action === 'delete') {
       outputTransform = `return result;`;
     } else {
       outputTransform = `return ${outputClass}.from(result);`;
     }
 
-    const ownerIdArg = (hasOwner && action === 'list') ? 'context.request.user?.id as number' : undefined;
+    const ownerIdArg = (!isPseudo && hasOwner && action === 'list') ? 'context.request.user?.id as number' : undefined;
 
     let handlerChain: string;
     if (useCaseDef) {
-      handlerChain = this.generateHandlerChain(action, useCaseDef, serviceVar, ownerIdArg, '    ');
-    } else {
+      handlerChain = this.generateHandlerChain(action, useCaseDef, serviceVar, importedQueryNames, ownerIdArg, '    ');
+    } else if (!isPseudo) {
       const callArg = ownerIdArg ? `input, ${ownerIdArg}` : 'input';
       handlerChain = `    const result = await this.${serviceVar}.${action}(${callArg});`;
+    } else {
+      handlerChain = `    // TODO: implement ${action} handler for ${model}`;
     }
 
+    const parseLine = parseLogic ? `    ${parseLogic}` : '';
     const method = `  @${decorator}('${endpoint.path}')
-  async ${methodName}(context: IContext): Promise<any> {${authLine}
-    ${parseLogic}${preMutationOwnerCheck}
+  async ${methodName}(context: IContext): Promise<any> {${authLine}${parseLine ? `\n${parseLine}` : ''}${preMutationOwnerCheck}
 ${handlerChain}${postFetchOwnerCheck}
     ${outputTransform}
   }`;
 
-    return { method, dtoImports, voidOutputDtos };
+    return { method, dtoImports, voidOutputDtos, usedQueries };
   }
 
   private generateWebPageMethod(
@@ -365,12 +425,14 @@ ${handlerChain}${postFetchOwnerCheck}
     layout: string | undefined,
     methodIndex: number,
     config: ModuleConfig,
+    importedQueryNames: Set<string>,
     childInfo?: ChildEntityInfo,
     withChildChildren?: ParentChildInfo[]
-  ): { method: string; dtoImports: Set<string> } {
+  ): { method: string; dtoImports: Set<string>; usedQueries: Set<string> } {
     const method = page.method || 'GET';
     const decorator = this.getHttpDecorator(method);
     const dtoImports = new Set<string>();
+    const usedQueries = new Set<string>();
     
     const pathSegments = page.path.split('/').filter(Boolean);
     let baseMethodName = pathSegments.length === 0 
@@ -439,7 +501,8 @@ ${handlerChain}${postFetchOwnerCheck}
 
         let handlerChain: string;
         if (useCaseDef) {
-          handlerChain = this.generateHandlerChain(action, useCaseDef, serviceVar, ownerIdArg, '    ');
+          handlerChain = this.generateHandlerChain(action, useCaseDef, serviceVar, importedQueryNames, ownerIdArg, '    ');
+          useCaseDef.handlers.forEach(h => { if (importedQueryNames.has(h)) usedQueries.add(h); });
         } else {
           const callArg = ownerIdArg ? `input, ${ownerIdArg}` : 'input';
           handlerChain = `    const result = await this.${serviceVar}.${action}(${callArg});`;
@@ -453,7 +516,7 @@ ${handlerChain}${postFetchOwnerCheck}${loadChildCode}
     return ${returnExpr};
   }`;
 
-        return { method: methodCode, dtoImports };
+        return { method: methodCode, dtoImports, usedQueries };
       } else {
         const emptyFormData = childInfo
           ? `{ formData: {}, ${childInfo.parentIdField}: context.request.parameters.${childInfo.parentIdField} }`
@@ -464,7 +527,7 @@ ${handlerChain}${postFetchOwnerCheck}${loadChildCode}
     return ${emptyFormData};
   }`;
 
-        return { method: methodCode, dtoImports };
+        return { method: methodCode, dtoImports, usedQueries };
       }
     } else if (method === 'POST' && page.useCase) {
       const { model, action } = this.parseUseCase(page.useCase);
@@ -500,7 +563,8 @@ ${handlerChain}${postFetchOwnerCheck}${loadChildCode}
       let handlerChain: string;
       if (useCaseDef) {
         // Inside try block: use 6-space indent
-        handlerChain = this.generateHandlerChain(action, useCaseDef, serviceVar, undefined, '      ');
+        handlerChain = this.generateHandlerChain(action, useCaseDef, serviceVar, importedQueryNames, undefined, '      ');
+        useCaseDef.handlers.forEach(h => { if (importedQueryNames.has(h)) usedQueries.add(h); });
       } else {
         handlerChain = `      const result = await this.${serviceVar}.${action}(input);`;
       }
@@ -518,7 +582,7 @@ ${handlerChain}
     }
   }`;
 
-      return { method: methodCode, dtoImports };
+      return { method: methodCode, dtoImports, usedQueries };
     }
 
     const methodCode = `  @${decorator}('${page.path}')
@@ -527,7 +591,7 @@ ${handlerChain}
     return {};
   }`;
 
-    return { method: methodCode, dtoImports };
+    return { method: methodCode, dtoImports, usedQueries };
   }
 
   private generateOnSuccessHandler(page: WebPageConfig): string {
@@ -595,6 +659,8 @@ ${handlerChain}
     prefix: string,
     endpoints: ApiEndpointConfig[],
     useCasesConfig: UseCasesConfig,
+    config: ModuleConfig,
+    importedQueryNames: Set<string>,
     childInfo?: ChildEntityInfo
   ): string {
     const controllerName = `${resourceName}ApiController`;
@@ -602,17 +668,24 @@ ${handlerChain}
     const serviceModels = new Set<string>();
     const allDtoImports = new Set<string>();
     const allVoidOutputDtos = new Set<string>();
+    const allUsedQueries = new Set<string>();
     const methods: string[] = [];
 
     const sortedEndpoints = this.sortRoutesBySpecificity(endpoints);
     sortedEndpoints.forEach(endpoint => {
       const { model } = this.parseUseCase(endpoint.useCase);
-      serviceModels.add(model);
+      // Only add real models (not pseudo-models) to service deps
+      if (!this.isPseudoModel(model, config)) {
+        serviceModels.add(model);
+      }
       
-      const { method, dtoImports, voidOutputDtos } = this.generateApiEndpointMethod(endpoint, resourceName, useCasesConfig, childInfo);
+      const { method, dtoImports, voidOutputDtos, usedQueries } = this.generateApiEndpointMethod(
+        endpoint, resourceName, useCasesConfig, config, importedQueryNames, childInfo
+      );
       methods.push(method);
       dtoImports.forEach(d => allDtoImports.add(d));
       voidOutputDtos.forEach(d => allVoidOutputDtos.add(d));
+      usedQueries.forEach(q => allUsedQueries.add(q));
     });
 
     const serviceImports = Array.from(serviceModels)
@@ -628,21 +701,36 @@ ${handlerChain}
       })
       .join('\n');
 
-    const constructorParams = Array.from(serviceModels)
-      .map(model => `private ${model.toLowerCase()}Service: ${model}Service`)
-      .join(',\n    ');
+    // Imported query interface and input imports
+    const queryImportStatements = Array.from(allUsedQueries)
+      .map(q => {
+        const pascal = capitalize(q);
+        return `import { I${pascal}Query, ${pascal}Input } from '../../application/ports/${pascal}Interface';`;
+      })
+      .join('\n');
+
+    const serviceConstructorParams = Array.from(serviceModels)
+      .map(model => `private ${model.toLowerCase()}Service: ${model}Service`);
+    const queryConstructorParams = Array.from(allUsedQueries)
+      .map(q => `private ${q}Query: I${capitalize(q)}Query`);
+    const allConstructorParams = [...serviceConstructorParams, ...queryConstructorParams].join(',\n    ');
 
     const errorImports = this.getNeededHttpErrorImports(sortedEndpoints.map(e => e.auth));
     const routerImports = ['Controller', 'Get', 'Post', 'Put', 'Delete', 'type IContext', ...errorImports].join(', ');
 
-    return `import { ${routerImports} } from '@currentjs/router';
-${serviceImports}
-${dtoImportStatements}
+    const importLines = [
+      `import { ${routerImports} } from '@currentjs/router';`,
+      serviceImports,
+      dtoImportStatements,
+      queryImportStatements
+    ].filter(Boolean).join('\n');
+
+    return `${importLines}
 
 @Controller('${prefix}')
 export class ${controllerName} {
   constructor(
-    ${constructorParams}
+    ${allConstructorParams}
   ) {}
 
 ${methods.join('\n\n')}
@@ -655,6 +743,7 @@ ${methods.join('\n\n')}
     layout: string | undefined,
     pages: WebPageConfig[],
     config: ModuleConfig,
+    importedQueryNames: Set<string>,
     childInfo?: ChildEntityInfo
   ): string {
     const controllerName = `${resourceName}WebController`;
@@ -663,22 +752,28 @@ ${methods.join('\n\n')}
 
     const serviceModels = new Set<string>();
     const allDtoImports = new Set<string>();
+    const allUsedQueries = new Set<string>();
     const methods: string[] = [];
 
     const sortedPages = this.sortRoutesBySpecificity(pages);
     sortedPages.forEach((page, index) => {
       if (page.useCase) {
         const { model } = this.parseUseCase(page.useCase);
-        serviceModels.add(model);
+        if (!this.isPseudoModel(model, config)) {
+          serviceModels.add(model);
+        }
       }
 
       const { model, action } = page.useCase ? this.parseUseCase(page.useCase) : { model: '', action: '' };
       const useCaseWithChild = model && action && (config.useCases[model] as Record<string, { withChild?: boolean }>)?.[action]?.withChild === true;
       const withChildForThisPage = useCaseWithChild && action === 'get' && withChildChildren.length > 0 ? withChildChildren : undefined;
       
-      const { method, dtoImports } = this.generateWebPageMethod(page, resourceName, layout, index, config, childInfo, withChildForThisPage);
+      const { method, dtoImports, usedQueries } = this.generateWebPageMethod(
+        page, resourceName, layout, index, config, importedQueryNames, childInfo, withChildForThisPage
+      );
       methods.push(method);
       dtoImports.forEach(d => allDtoImports.add(d));
+      usedQueries.forEach(q => allUsedQueries.add(q));
     });
 
     const needsChildServices = withChildChildren.length > 0 && sortedPages.some(page => {
@@ -699,6 +794,10 @@ ${methods.join('\n\n')}
         constructorParams.push(`private ${childVar}Service: ${child.childEntityName}Service`);
       });
     }
+    // Imported query constructor params
+    Array.from(allUsedQueries).forEach(q => {
+      constructorParams.push(`private ${q}Query: I${capitalize(q)}Query`);
+    });
 
     const serviceImports = Array.from(serviceModels)
       .map(model => `import { ${model}Service } from '../../application/services/${model}Service';`)
@@ -706,6 +805,13 @@ ${methods.join('\n\n')}
 
     const dtoImportStatements = Array.from(allDtoImports)
       .map(dto => `import { ${dto}Input } from '../../application/dto/${dto}';`)
+      .join('\n');
+
+    const queryImportStatements = Array.from(allUsedQueries)
+      .map(q => {
+        const pascal = capitalize(q);
+        return `import { I${pascal}Query } from '../../application/ports/${pascal}Interface';`;
+      })
       .join('\n');
 
     const constructorBlock = constructorParams.length > 0
@@ -717,10 +823,15 @@ ${methods.join('\n\n')}
     const errorImports = this.getNeededHttpErrorImports(sortedPages.map(p => p.auth));
     const routerImports = ['Controller', 'Get', 'Post', 'Render', 'type IContext', ...errorImports].join(', ');
 
-    return `import { ${routerImports} } from '@currentjs/router';
-${serviceImports}
-${extraServiceImports.join('\n')}
-${dtoImportStatements}
+    const importLines = [
+      `import { ${routerImports} } from '@currentjs/router';`,
+      serviceImports,
+      extraServiceImports.join('\n'),
+      dtoImportStatements,
+      queryImportStatements
+    ].filter(Boolean).join('\n');
+
+    return `${importLines}
 
 @Controller('${prefix}')
 export class ${controllerName} {
@@ -734,6 +845,7 @@ ${methods.join('\n\n')}
     const result: Record<string, string> = {};
     this.identifiers = identifiers;
     const childEntityMap = buildChildEntityMap(config);
+    const importedQueryNames = this.getImportedQueryNames(config);
 
     if (config.api) {
       Object.entries(config.api).forEach(([resourceName, resourceConfig]) => {
@@ -743,6 +855,8 @@ ${methods.join('\n\n')}
           resourceConfig.prefix,
           resourceConfig.endpoints,
           config.useCases,
+          config,
+          importedQueryNames,
           childInfo
         );
         result[`${resourceName}Api`] = code;
@@ -759,6 +873,7 @@ ${methods.join('\n\n')}
           moduleLayout,
           resourceConfig.pages,
           config,
+          importedQueryNames,
           childInfo
         );
         result[`${resourceName}Web`] = code;

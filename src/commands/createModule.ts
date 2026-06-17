@@ -145,7 +145,11 @@ function moduleYamlTemplate(moduleName: string): string {
           }
         ]
       }
-    }
+    },
+    exports: {
+      queries: {}
+    },
+    dependencies: {}
   };
   
   return stringifyYaml(config);
@@ -165,6 +169,8 @@ export function handleCreateModule(name?: string): void {
   ensureDir(path.join(moduleRoot, 'application', 'useCases'));
   ensureDir(path.join(moduleRoot, 'application', 'services'));
   ensureDir(path.join(moduleRoot, 'application', 'dto'));
+  ensureDir(path.join(moduleRoot, 'application', 'ports'));
+  ensureDir(path.join(moduleRoot, 'application', 'queries'));
   ensureDir(path.join(moduleRoot, 'infrastructure', 'controllers'));
   ensureDir(path.join(moduleRoot, 'infrastructure', 'stores'));
   ensureDir(path.join(moduleRoot, 'views'));

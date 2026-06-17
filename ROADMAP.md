@@ -16,9 +16,10 @@
 | ✅ Minor fixes                     | gen         | 0.5.8                  | M    | non-numeric ids (db) + change signature for store method "update"               |
 | ✅ Add logging                     | router      | ~~0.3~~ 0.2            | M    |                                                                                 |
 | ✅ Remove "useCase" layer"         | gen         | 0.6                    | M    |                                                                                 |
-| Support of tailwind in tpls       | gen         | 0.6.1                  | M    | setting in app.yaml                                                             |
-| Database migrations               | gen         | 0.6.2                  | L    |                                                                                 |
-| `current ai`                      | gen         | 0.7                    | L    | Something really cool is coming                                                 |
+| ✅ cross-module com: queries       | gen         | 0.6.1                  | M    |                                                                                 |
+| Support of tailwind in tpls       | gen         | 0.6.2                  | M    | setting in app.yaml                                                             |
+| Database migrations               | gen         | 0.6.3                  | L    |                                                                                 |
+| current ai                        | skill       | -                      | L    | Something really cool is coming                                                 |
 | scaffold (UI)                     | gen*        | xx                     | M    | new package is required. `gen` will just install/run it                         |
 | Postgres provider                 | provider    | 1.x                    | M    | New database provider                                                           |
 | Postgres support in generator     | gen         | later                  | M    | Generate code for postgres                                                      |

@@ -524,18 +524,36 @@ ${methods.join('\n\n')}
     }
 
     const childEntityMap = buildChildEntityMap(config);
+    const dependencyKeys = new Set(Object.keys(config.dependencies || {}));
 
     // Generate a Service file for each model
     Object.entries(config.useCases).forEach(([modelName, useCases]) => {
       const aggregateConfig = this.availableAggregates.get(modelName);
       
       if (!aggregateConfig) {
+        // Pseudo-models (dependency keys with no local aggregate) — no service generated
+        if (dependencyKeys.has(modelName)) return;
         console.warn(`Warning: No aggregate found for model ${modelName}`);
         return;
       }
 
+      // For models that reference dependencies, filter out pure imported-query handlers
+      // so the service only generates methods for local/default handlers
+      const importedQueryNames = new Set<string>();
+      for (const depConfig of Object.values(config.dependencies || {})) {
+        (depConfig.queries || []).forEach(q => importedQueryNames.add(q));
+      }
+      const localUseCases: typeof useCases = {};
+      for (const [actionName, ucDef] of Object.entries(useCases)) {
+        const localHandlers = ucDef.handlers.filter(h => !importedQueryNames.has(h));
+        if (localHandlers.length > 0) {
+          localUseCases[actionName] = { ...ucDef, handlers: localHandlers };
+        }
+      }
+      if (Object.keys(localUseCases).length === 0) return;
+
       const childInfo = childEntityMap.get(modelName);
-      result[modelName] = this.generateService(modelName, useCases, aggregateConfig, childInfo);
+      result[modelName] = this.generateService(modelName, localUseCases, aggregateConfig, childInfo);
     });
 
     return result;

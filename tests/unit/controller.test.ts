@@ -206,6 +206,65 @@ describe('ControllerGenerator - web layout rendering', () => {
   });
 });
 
+describe('ControllerGenerator — cross-module imported queries', () => {
+  const config = loadFixture('dashboard-consumer.yaml');
+  const result = controllerGen.generateFromConfig(config);
+  const apiCode = getCode(result as Record<string, unknown>, 'DashboardApi');
+
+  it('generates DashboardApiController', () => {
+    expect(apiCode).toContain('class DashboardApiController');
+  });
+
+  it('imports IGetQuizStatsQuery from ports', () => {
+    expect(apiCode).toContain('IGetQuizStatsQuery');
+    expect(apiCode).toContain("application/ports/GetQuizStatsInterface'");
+  });
+
+  it('imports GetQuizStatsInput for parsing inside the handler', () => {
+    expect(apiCode).toContain('GetQuizStatsInput');
+  });
+
+  it('constructor has getQuizStatsQuery typed as IGetQuizStatsQuery', () => {
+    expect(apiCode).toContain('private getQuizStatsQuery: IGetQuizStatsQuery');
+  });
+
+  it('pseudo-model endpoint calls imported query execute()', () => {
+    expect(apiCode).toContain('getQuizStatsQuery.execute(');
+    expect(apiCode).toContain('GetQuizStatsInput.parse(');
+  });
+
+  it('pseudo-model endpoint passes merged body+params to query Input.parse', () => {
+    expect(apiCode).toContain('context.request.body');
+    expect(apiCode).toContain('context.request.parameters');
+  });
+
+  it('pseudo-model endpoint does NOT add QuizService to constructor', () => {
+    expect(apiCode).toNotContain('quizService: QuizService');
+    expect(apiCode).toNotContain("import { QuizService }");
+  });
+
+  it('real model (Dashboard) still adds dashboardService to constructor', () => {
+    expect(apiCode).toContain('dashboardService: DashboardService');
+  });
+
+  it('pseudo-model endpoint returns result directly (no Output.from wrapping)', () => {
+    expect(apiCode).toContain('return result;');
+  });
+});
+
+describe('ControllerGenerator — handler chain with imported query mixed with default handler', () => {
+  it('imported query handler is called via queryVar.execute(), not serviceVar.handlerName()', () => {
+    const config = loadFixture('dashboard-consumer.yaml');
+    // Add a mixed handler chain: default:get then imported query
+    config.useCases!.Quiz!.getStats.handlers = ['default:get', 'getQuizStats'] as any;
+    const result = controllerGen.generateFromConfig(config);
+    const apiCode = getCode(result as Record<string, unknown>, 'DashboardApi');
+
+    expect(apiCode).toContain('getQuizStatsQuery.execute(');
+    expect(apiCode).toNotContain('quizService.getQuizStats(');
+  });
+});
+
 describe('ControllerGenerator — identifier types', () => {
   describe('uuid identifiers', () => {
     const gen = new ControllerGenerator();
