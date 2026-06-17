@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.1] - 2026-06-17
+
+- cross-module communication (ports & queries)
+
 ## [0.6.0] - 2026-06-12
 
 - Get rid of useCase layer in the generated code
