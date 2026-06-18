@@ -336,13 +336,26 @@ modules:
 |-------|-------------------------------|------------------------------------------|-------------|
 | `providers` | `Record<string, string>`      | `{ mysql: "@currentjs/provider-mysql" }` | Map of provider key to npm package or local path. |
 | `config.database` | `string`                      | `"mysql"`                                | Default database provider key (must match a key in `providers`). |
-| `config.styling` | `string`                      | `"bootstrap"`                            | Default styling framework. |
+| `config.styling` | `"bootstrap"` \| `"tailwind"` | `"bootstrap"`                            | Default styling framework for generated HTML templates. `"bootstrap"` uses Bootstrap 5 CDN and utility classes; `"tailwind"` uses the Tailwind CSS CDN play script and utility classes. |
 | `config.identifiers` | `string`                      | `numeric`                                 | Primary key and FK column type. See [Identifier Types](#identifier-types). |
 | `modules` | `Record<string, ModuleEntry>` | `{}`                                     | Map of module name to module entry. |
 | `modules.<Name>.path` | `string`                      | --                                       | Relative path from project root to the module's YAML file. Required. |
 | `modules.<Name>.database` | `string`                      | Inherits from `config.database`          | Database provider override for this module. |
-| `modules.<Name>.styling` | `string`                      | Inherits from `config.styling`           | Styling override for this module. |
+| `modules.<Name>.styling` | `"bootstrap"` \| `"tailwind"` | Inherits from `config.styling`           | Styling framework override for this specific module's generated HTML templates. |
 | `modules.<Name>.identifiers` | `numeric` \                   | `uuid` \                                 | `nanoid` | Inherits from `config.identifiers` | Identifier type override for this specific module. |
+
+### Styling Frameworks
+
+The `config.styling` setting controls which CSS framework is used in generated HTML templates (module views and the app-level layout/error templates).
+
+| Value | CSS Framework | How it is loaded |
+|-------|---------------|-----------------|
+| `bootstrap` | Bootstrap 5.3.2 | CDN `<link>` tag (integrity-hashed) |
+| `tailwind` | Tailwind CSS (CDN play script) | `<script src="https://cdn.tailwindcss.com">` |
+
+Both values produce fully functional HTML. Bootstrap uses traditional class names (`btn`, `form-control`, `table`, etc.); Tailwind uses utility classes (`px-4`, `bg-blue-600`, `w-full`, etc.).
+
+For production Tailwind projects it is recommended to replace the CDN play script with a proper build step after initial scaffolding.
 
 ### Provider Import Resolution
 

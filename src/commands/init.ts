@@ -6,7 +6,9 @@ import {
   appYamlTemplate,
   appTsTemplate,
   mainViewTemplate,
+  mainViewTemplateTailwind,
   errorTemplate,
+  errorTemplateTailwind,
   frontendScriptTemplate,
   translationsTemplate,
   cursorRulesTemplate,
@@ -40,8 +42,16 @@ export function handleInit(rawName?: string): void {
   writeFileIfMissing(path.join(targetRoot, DEFAULT_FILES.CURSOR_RULES), cursorRulesTemplate);
   writeFileIfMissing(path.join(srcDir, DEFAULT_FILES.APP_TS), appTsTemplate);
   writeFileIfMissing(path.join(srcDir, DEFAULT_FILES.SYSTEM_TS), systemTsTemplate);
-  writeFileIfMissing(path.join(templatesDir, DEFAULT_FILES.MAIN_VIEW), mainViewTemplate);
-  writeFileIfMissing(path.join(templatesDir, DEFAULT_FILES.ERROR_TEMPLATE), errorTemplate);
+
+  // Both styling variants are always written.
+  // Bootstrap is the default active styling so its template has name="main_view" / name="error".
+  // Tailwind templates have name="main_view_tailwind" / name="error_tailwind" (inactive).
+  // The `generate` command swaps the internal names based on config.styling.
+  writeFileIfMissing(path.join(templatesDir, DEFAULT_FILES.MAIN_VIEW_BOOTSTRAP), mainViewTemplate);
+  writeFileIfMissing(path.join(templatesDir, DEFAULT_FILES.MAIN_VIEW_TAILWIND), mainViewTemplateTailwind);
+  writeFileIfMissing(path.join(templatesDir, DEFAULT_FILES.ERROR_BOOTSTRAP), errorTemplate);
+  writeFileIfMissing(path.join(templatesDir, DEFAULT_FILES.ERROR_TAILWIND), errorTemplateTailwind);
+
   writeFileIfMissing(path.join(webDir, DEFAULT_FILES.FRONTEND_SCRIPT), frontendScriptTemplate);
   writeFileIfMissing(path.join(webDir, DEFAULT_FILES.TRANSLATIONS), translationsTemplate);
 

@@ -39,7 +39,9 @@ export const tsconfigTemplate = loadTemplate('tsConfigTemplate');
 export const appYamlTemplate = loadTemplate('appYamlTemplate');
 export const appTsTemplate = loadTemplate('appTsTemplate');
 export const mainViewTemplate = loadTemplate('mainViewTemplate');
+export const mainViewTemplateTailwind = loadTemplate('mainViewTemplateTailwind');
 export const errorTemplate = loadTemplate('errorTemplate');
+export const errorTemplateTailwind = loadTemplate('errorTemplateTailwind');
 export const frontendScriptTemplate = loadTemplate('frontendScriptTemplate');
 export const translationsTemplate = loadTemplate('translationsTemplate');
 export const cursorRulesTemplate = loadTemplate('cursorRulesTemplate');
@@ -61,8 +63,10 @@ export const DEFAULT_FILES = {
   TSCONFIG: 'tsconfig.json',
   APP_YAML: 'app.yaml',
   APP_TS: 'app.ts',
-  MAIN_VIEW: 'main_view.html',
-  ERROR_TEMPLATE: 'error.html',
+  MAIN_VIEW_BOOTSTRAP: 'main_view_bootstrap.html',
+  MAIN_VIEW_TAILWIND: 'main_view_tailwind.html',
+  ERROR_BOOTSTRAP: 'error_bootstrap.html',
+  ERROR_TAILWIND: 'error_tailwind.html',
   FRONTEND_SCRIPT: 'app.js',
   TRANSLATIONS: 'translations.json',
   CURSOR_RULES: 'AGENTS.md',

@@ -564,6 +564,22 @@ Generated forms include `data-strategy` attributes for the frontend JavaScript t
 
 The `data-field-types` attribute tells the frontend how to convert form values before sending (e.g., string to number, checkbox to boolean).
 
+### Styling Frameworks
+
+The CSS framework used in generated templates is controlled by `config.styling` in `app.yaml`:
+
+```yaml
+config:
+  styling: bootstrap   # or: tailwind
+```
+
+| Value | Framework |
+|-------|-----------|
+| `bootstrap` (default) | Bootstrap 5 via CDN |
+| `tailwind` | Tailwind CSS via CDN play script |
+
+→ Reference: [Styling Frameworks](REFERENCE.md#styling-frameworks)
+
 ### Template regeneration behavior
 
 By default, `currentjs generate` does not overwrite existing HTML templates. Only missing templates are created. Use `--with-templates` to force regeneration of all templates.

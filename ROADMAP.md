@@ -17,7 +17,7 @@
 | ✅ Add logging                     | router      | ~~0.3~~ 0.2            | M    |                                                                                 |
 | ✅ Remove "useCase" layer"         | gen         | 0.6                    | M    |                                                                                 |
 | ✅ cross-module com: queries       | gen         | 0.6.1                  | M    |                                                                                 |
-| Support of tailwind in tpls       | gen         | 0.6.2                  | M    | setting in app.yaml                                                             |
+| ✅ Support of tailwind in tpls     | gen         | 0.6.2                  | M    | setting in app.yaml                                                             |
 | Database migrations               | gen         | 0.6.3                  | L    |                                                                                 |
 | current ai                        | skill       | -                      | L    | Something really cool is coming                                                 |
 | scaffold (UI)                     | gen*        | xx                     | M    | new package is required. `gen` will just install/run it                         |
