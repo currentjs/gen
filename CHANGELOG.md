@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.2] - 2026-07-02
+
+- Tailwind CSS support
+
 ## [0.6.1] - 2026-06-17
 
 - cross-module communication (ports & queries)
