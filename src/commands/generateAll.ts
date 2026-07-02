@@ -8,11 +8,55 @@ import { GENERATOR_MARKERS, COMMON_FILES } from '../utils/constants';
 import { isValidModuleConfig } from '../types/configTypes';
 import { loadAppConfig, getModuleEntries, shouldIncludeModule, createGenerators } from '../utils/commandUtils';
 import { scanModuleClasses, buildInstantiationOrder, resolveProviderImport, ClassInfo } from '../utils/diResolver';
-import { systemTsTemplate } from '../generators/templates/appTemplates';
+import { systemTsTemplate, DEFAULT_FILES } from '../generators/templates/appTemplates';
 
 interface ModuleScanEntry {
   moduleDir: string;
   databaseKey: string;
+}
+
+const LAYOUT_TEMPLATE_PAIRS: { baseName: string; bootstrapFile: string; tailwindFile: string }[] = [
+  { baseName: 'main_view', bootstrapFile: DEFAULT_FILES.MAIN_VIEW_BOOTSTRAP, tailwindFile: DEFAULT_FILES.MAIN_VIEW_TAILWIND },
+  { baseName: 'error', bootstrapFile: DEFAULT_FILES.ERROR_BOOTSTRAP, tailwindFile: DEFAULT_FILES.ERROR_TAILWIND },
+];
+
+/**
+ * Swap layout template internal names so the active styling variant gets the
+ * canonical name (e.g. "main_view") and the inactive one keeps its suffixed
+ * name (e.g. "main_view_tailwind").
+ */
+function activateLayoutTemplates(templatesDir: string, styling: string): void {
+  for (const pair of LAYOUT_TEMPLATE_PAIRS) {
+    const activeFile = styling === 'tailwind' ? pair.tailwindFile : pair.bootstrapFile;
+    const inactiveFile = styling === 'tailwind' ? pair.bootstrapFile : pair.tailwindFile;
+    const activeSuffix = styling === 'tailwind' ? '_tailwind' : '_bootstrap';
+    const inactiveSuffix = styling === 'tailwind' ? '_bootstrap' : '_tailwind';
+
+    const nameRegex = /<!-- @template name="([^"]*)" -->/;
+
+    // Active template: ensure its internal name is the canonical baseName
+    const activePath = path.join(templatesDir, activeFile);
+    if (fs.existsSync(activePath)) {
+      let content = fs.readFileSync(activePath, 'utf8');
+      const m = content.match(nameRegex);
+      if (m && m[1] !== pair.baseName) {
+        content = content.replace(nameRegex, `<!-- @template name="${pair.baseName}" -->`);
+        fs.writeFileSync(activePath, content, 'utf8');
+      }
+    }
+
+    // Inactive template: ensure its internal name is the suffixed name
+    const inactivePath = path.join(templatesDir, inactiveFile);
+    const suffixedName = pair.baseName + inactiveSuffix;
+    if (fs.existsSync(inactivePath)) {
+      let content = fs.readFileSync(inactivePath, 'utf8');
+      const m = content.match(nameRegex);
+      if (m && m[1] !== suffixedName) {
+        content = content.replace(nameRegex, `<!-- @template name="${suffixedName}" -->`);
+        fs.writeFileSync(inactivePath, content, 'utf8');
+      }
+    }
+  }
 }
 
 export async function handleGenerateAll(
@@ -84,7 +128,7 @@ export async function handleGenerateAll(
     // eslint-disable-next-line no-await-in-loop
     await controllerGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers);
     // eslint-disable-next-line no-await-in-loop
-    await templateGen.generateAndSaveFiles(moduleYamlPath, moduleDir, { force: opts?.force, skipOnConflict: opts?.skip, onlyIfMissing: !opts?.withTemplates });
+    await templateGen.generateAndSaveFiles(moduleYamlPath, moduleDir, { force: opts?.force, skipOnConflict: opts?.skip, onlyIfMissing: !opts?.withTemplates }, entry.styling);
 
     // Find srcDir by probing upward for app.ts
     let probeDir = moduleDir;
@@ -310,6 +354,15 @@ export async function handleGenerateAll(
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn(colors.yellow(`Could not update app.ts: ${e instanceof Error ? e.message : String(e)}`));
+    }
+  }
+
+  // Activate the correct layout template based on config.styling
+  const globalStyling = appConfig.config?.styling ?? 'bootstrap';
+  for (const srcDir of moduleScansBySrcDir.keys()) {
+    const templatesDir = path.join(srcDir, 'common', 'ui', 'templates');
+    if (fs.existsSync(templatesDir)) {
+      activateLayoutTemplates(templatesDir, globalStyling);
     }
   }
 

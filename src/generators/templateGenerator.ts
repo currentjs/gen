@@ -6,6 +6,7 @@ import { colors } from '../utils/colors';
 import { ModuleConfig, WebPageConfig, AggregateConfig, AggregateFieldConfig, ValueObjectConfig, isValidModuleConfig } from '../types/configTypes';
 import { getChildrenOfParent, ParentChildInfo } from '../utils/childEntityUtils';
 import { capitalize, parseFieldType } from '../utils/typeUtils';
+import { getClasses, StylingClasses } from './templates/stylingClasses';
 
 export class TemplateGenerator {
   private valueObjects: Record<string, ValueObjectConfig> = {};
@@ -30,6 +31,7 @@ export class TemplateGenerator {
     viewName: string,
     fields: [string, any][],
     basePath: string,
+    cls: StylingClasses,
     withChildChildren?: ParentChildInfo[]
   ): string {
     const fieldHeaders = fields
@@ -66,7 +68,7 @@ export class TemplateGenerator {
         const childPath = child.childWebPrefix
           ? this.prefixWithParam(child.childWebPrefix, child.parentIdField, '{{ item.id }}')
           : '#';
-        return `        <td><a href="${childPath}" class="btn btn-sm btn-outline-secondary">Items</a></td>`;
+        return `        <td><a href="${childPath}" class="${cls.btnSmOutlineSecondary}">Items</a></td>`;
       })
       .join('\n');
 
@@ -74,14 +76,14 @@ export class TemplateGenerator {
     const childCellBlock = childLinkCells ? '\n' + childLinkCells : '';
 
     return `<!-- @template name="${viewName}" -->
-<div class="container mt-4">
+<div class="${cls.pageContainer}">
   <h1>${modelName} List</h1>
   
-  <div class="mb-3">
-    <a href="${basePath}/create" class="btn btn-primary">Create New ${modelName}</a>
+  <div class="${cls.mb3}">
+    <a href="${basePath}/create" class="${cls.btnPrimary}">Create New ${modelName}</a>
   </div>
 
-  <table class="table table-striped">
+  <table class="${cls.table}">
     <thead>
       <tr>
 ${fieldHeaders}
@@ -92,8 +94,8 @@ ${fieldHeaders}
       <tr>
 ${fieldCells}
         <td>
-          <a href="${basePath}/{{ item.id }}" class="btn btn-sm btn-info">View</a>
-          <a href="${basePath}/{{ item.id }}/edit" class="btn btn-sm btn-warning">Edit</a>
+          <a href="${basePath}/{{ item.id }}" class="${cls.btnSmInfo}">View</a>
+          <a href="${basePath}/{{ item.id }}/edit" class="${cls.btnSmWarning}">Edit</a>
         </td>${childCellBlock}
       </tr>
     </tbody>
@@ -101,7 +103,7 @@ ${fieldCells}
 
   <div x-if="total > limit">
     <nav>
-      <ul class="pagination">
+      <ul class="${cls.pagination}">
         <!-- Pagination controls -->
       </ul>
     </nav>
@@ -109,7 +111,7 @@ ${fieldCells}
 </div>`;
   }
 
-  private renderChildTableSection(child: ParentChildInfo, parentIdTemplateExpr: string): string {
+  private renderChildTableSection(child: ParentChildInfo, parentIdTemplateExpr: string, cls: StylingClasses): string {
     const childVar = child.childEntityName.charAt(0).toLowerCase() + child.childEntityName.slice(1);
     const childItemsKey = `${childVar}Items`;
     const childBasePath = child.childWebPrefix
@@ -132,20 +134,20 @@ ${fieldCells}
       return `      <td>{{ childItem.${name} }}</td>`;
     }).join('\n');
     const addLink = childBasePath
-      ? `  <div class="mb-3">
-    <a href="${childBasePath}/create" class="btn btn-primary btn-sm">Add ${child.childEntityName}</a>
+      ? `  <div class="${cls.mb3}">
+    <a href="${childBasePath}/create" class="${cls.btnSmPrimary}">Add ${child.childEntityName}</a>
   </div>`
       : '';
     const actionLinks = childBasePath
       ? `        <td>
-          <a href="${childBasePath}/{{ childItem.id }}" class="btn btn-sm btn-info">View</a>
-          <a href="${childBasePath}/{{ childItem.id }}/edit" class="btn btn-sm btn-warning">Edit</a>
+          <a href="${childBasePath}/{{ childItem.id }}" class="${cls.btnSmInfo}">View</a>
+          <a href="${childBasePath}/{{ childItem.id }}/edit" class="${cls.btnSmWarning}">Edit</a>
         </td>`
       : '        <td></td>';
     return `
-  <h2 class="mt-4">${child.childEntityName} List</h2>
+  <h2 class="${cls.mt4}">${child.childEntityName} List</h2>
 ${addLink}
-  <table class="table table-striped">
+  <table class="${cls.table}">
     <thead>
       <tr>
 ${headers}
@@ -166,6 +168,7 @@ ${actionLinks}
     viewName: string,
     fields: [string, any][],
     basePath: string,
+    cls: StylingClasses,
     withChildChildren?: ParentChildInfo[]
   ): string {
     const fieldRows = fields
@@ -173,9 +176,9 @@ ${actionLinks}
         const typeStr = (config.type || 'string') as string;
         const parsed = parseFieldType(typeStr);
         if (parsed.isArray || parsed.isUnion) {
-          return `  <div class="row mb-2">
-    <div class="col-4"><strong>${capitalize(name)}:</strong></div>
-    <div class="col-8">{{ ${name} }}</div>
+          return `  <div class="${cls.detailFieldRow}">
+    <div class="${cls.detailFieldLabel}"><strong>${capitalize(name)}:</strong></div>
+    <div class="${cls.detailFieldValue}">{{ ${name} }}</div>
   </div>`;
         }
         const voConfig = this.valueObjects[capitalize(typeStr)];
@@ -183,35 +186,35 @@ ${actionLinks}
           const parts = Object.keys(voConfig.fields)
             .map(sub => `{{ ${name}.${sub} }}`)
             .join(' ');
-          return `  <div class="row mb-2">
-    <div class="col-4"><strong>${capitalize(name)}:</strong></div>
-    <div class="col-8">${parts}</div>
+          return `  <div class="${cls.detailFieldRow}">
+    <div class="${cls.detailFieldLabel}"><strong>${capitalize(name)}:</strong></div>
+    <div class="${cls.detailFieldValue}">${parts}</div>
   </div>`;
         }
-        return `  <div class="row mb-2">
-    <div class="col-4"><strong>${capitalize(name)}:</strong></div>
-    <div class="col-8">{{ ${name} }}</div>
+        return `  <div class="${cls.detailFieldRow}">
+    <div class="${cls.detailFieldLabel}"><strong>${capitalize(name)}:</strong></div>
+    <div class="${cls.detailFieldValue}">{{ ${name} }}</div>
   </div>`;
       })
       .join('\n');
 
     const childSections = (withChildChildren || [])
-      .map(child => this.renderChildTableSection(child, '{{ id }}'))
+      .map(child => this.renderChildTableSection(child, '{{ id }}', cls))
       .join('');
 
     return `<!-- @template name="${viewName}" -->
-<div class="container mt-4">
+<div class="${cls.pageContainer}">
   <h1>${modelName} Details</h1>
   
-  <div class="card">
-    <div class="card-body">
+  <div class="${cls.card}">
+    <div class="${cls.cardBody}">
 ${fieldRows}
     </div>
   </div>
 
-  <div class="mt-3">
-    <a href="${basePath}/{{ id }}/edit" class="btn btn-warning">Edit</a>
-    <a href="${basePath}" class="btn btn-secondary">Back to List</a>
+  <div class="${cls.mt3}">
+    <a href="${basePath}/{{ id }}/edit" class="${cls.btnWarning}">Edit</a>
+    <a href="${basePath}" class="${cls.btnSecondary}">Back to List</a>
   </div>${childSections}
 </div>`;
   }
@@ -255,6 +258,7 @@ ${fieldRows}
     viewName: string,
     fields: [string, any][],
     basePath: string,
+    cls: StylingClasses,
     onSuccess?: WebPageConfig['onSuccess'],
     onError?: WebPageConfig['onError'],
     enumValuesMap: Record<string, string[]> = {}
@@ -262,7 +266,7 @@ ${fieldRows}
     const safeFields = fields.filter(([name, config]) => name !== 'id' && !config.auto);
     const isEdit = mode === 'edit';
     const formFields = safeFields
-      .map(([name, config]) => this.renderFormField(name, config, enumValuesMap[name] || [], isEdit))
+      .map(([name, config]) => this.renderFormField(name, config, enumValuesMap[name] || [], isEdit, cls))
       .join('\n');
 
     const fieldTypesJson = this.buildFieldTypesJson(safeFields);
@@ -282,15 +286,15 @@ ${fieldRows}
     const cancelHref = mode === 'create' ? basePath : `${basePath}/{{ id }}`;
 
     return `<!-- @template name="${viewName}" -->
-<div class="container mt-4">
+<div class="${cls.pageContainer}">
   <h1>${title}</h1>
   
   <form method="POST" action="${formAction}" ${strategyAttr} ${redirectAttr} data-entity-name="${modelName}" data-field-types='${fieldTypesJson}'>
 ${formFields}
     
-    <div class="d-flex gap-2">
-      <button type="submit" class="btn btn-primary">${submitLabel}</button>
-      <a href="${cancelHref}" class="btn btn-secondary">Cancel</a>
+    <div class="${cls.formSubmitRow}">
+      <button type="submit" class="${cls.btnPrimary}">${submitLabel}</button>
+      <a href="${cancelHref}" class="${cls.btnSecondary}">Cancel</a>
     </div>
   </form>
 </div>`;
@@ -301,11 +305,12 @@ ${formFields}
     viewName: string,
     fields: [string, any][],
     basePath: string,
+    cls: StylingClasses,
     onSuccess?: WebPageConfig['onSuccess'],
     onError?: WebPageConfig['onError'],
     enumValuesMap: Record<string, string[]> = {}
   ): string {
-    return this.renderFormTemplate('create', modelName, viewName, fields, basePath, onSuccess, onError, enumValuesMap);
+    return this.renderFormTemplate('create', modelName, viewName, fields, basePath, cls, onSuccess, onError, enumValuesMap);
   }
 
   private renderEditTemplate(
@@ -313,11 +318,12 @@ ${formFields}
     viewName: string,
     fields: [string, any][],
     basePath: string,
+    cls: StylingClasses,
     onSuccess?: WebPageConfig['onSuccess'],
     onError?: WebPageConfig['onError'],
     enumValuesMap: Record<string, string[]> = {}
   ): string {
-    return this.renderFormTemplate('edit', modelName, viewName, fields, basePath, onSuccess, onError, enumValuesMap);
+    return this.renderFormTemplate('edit', modelName, viewName, fields, basePath, cls, onSuccess, onError, enumValuesMap);
   }
 
   private getInputType(fieldType: string): string {
@@ -334,7 +340,7 @@ ${formFields}
     }
   }
 
-  private renderValueObjectField(name: string, label: string, voConfig: ValueObjectConfig, required: string, isEdit: boolean): string {
+  private renderValueObjectField(name: string, label: string, voConfig: ValueObjectConfig, required: string, isEdit: boolean, cls: StylingClasses): string {
     const subFields = Object.entries(voConfig.fields);
 
     const columns = subFields.map(([subName, subConfig]) => {
@@ -348,8 +354,8 @@ ${formFields}
           return `          <option value="${v}"${sel}>${v}</option>`;
         }).join('\n');
 
-        return `      <div class="col-auto">
-        <select class="form-select" id="${fullName}" name="${fullName}" ${required}>
+        return `      <div class="${cls.colAuto}">
+        <select class="${cls.formSelect}" id="${fullName}" name="${fullName}" ${required}>
           <option value="">-- ${subLabel} --</option>
 ${options}
         </select>
@@ -357,15 +363,15 @@ ${options}
       } else {
         const type = this.getInputType(subConfig.type);
         const value = isEdit ? ` value="{{ ${name}.${subName} || '' }}"` : '';
-        return `      <div class="col">
-        <input type="${type}" class="form-control" id="${fullName}" name="${fullName}" placeholder="${subLabel}"${value} ${required}>
+        return `      <div class="${cls.col}">
+        <input type="${type}" class="${cls.formControl}" id="${fullName}" name="${fullName}" placeholder="${subLabel}"${value} ${required}>
       </div>`;
       }
     }).join('\n');
 
-    return `  <div class="mb-3">
-    <label class="form-label">${label}</label>
-    <div class="row g-2">
+    return `  <div class="${cls.mb3}">
+    <label class="${cls.formLabel}">${label}</label>
+    <div class="${cls.rowG2}">
 ${columns}
     </div>
   </div>`;
@@ -376,7 +382,7 @@ ${columns}
    * If the VO has a single enum field: one checkbox per enum value.
    * If the VO has multiple / non-enum fields: one labeled checkbox group per VO subfield.
    */
-  private renderArrayVoField(name: string, label: string, voName: string, voConfig: ValueObjectConfig, isEdit: boolean): string {
+  private renderArrayVoField(name: string, label: string, voName: string, voConfig: ValueObjectConfig, isEdit: boolean, cls: StylingClasses): string {
     const subFields = Object.entries(voConfig.fields);
 
     // Single enum field: render one checkbox per enum value
@@ -386,13 +392,13 @@ ${columns}
         const uniqueValues = [...new Set(subConfig.values)];
         const checkboxes = uniqueValues.map(v => {
           const checkedExpr = isEdit ? ` {{ (${name} || []).some(function(item){ return item.${subName} === '${v}'; }) ? 'checked' : '' }}` : '';
-          return `      <div class="form-check form-check-inline">
-        <input type="checkbox" class="form-check-input" name="${name}[]" value="${v}"${checkedExpr}>
-        <label class="form-check-label">${v}</label>
+          return `      <div class="${cls.formCheckInline}">
+        <input type="checkbox" class="${cls.formCheckInput}" name="${name}[]" value="${v}"${checkedExpr}>
+        <label class="${cls.formCheckLabel}">${v}</label>
       </div>`;
         }).join('\n');
-        return `  <div class="mb-3">
-    <label class="form-label">${label}</label>
+        return `  <div class="${cls.mb3}">
+    <label class="${cls.formLabel}">${label}</label>
     <div>
 ${checkboxes}
     </div>
@@ -406,25 +412,25 @@ ${checkboxes}
       if (typeof subConfig === 'object' && 'values' in subConfig) {
         const uniqueValues = [...new Set(subConfig.values)];
         const options = uniqueValues.map(v => `<option value="${v}">${v}</option>`).join('');
-        return `        <div class="col-auto">
-          <label class="form-label">${subLabel}</label>
-          <select class="form-select form-select-sm" name="${name}[0].${subName}"><option value="">--</option>${options}</select>
+        return `        <div class="${cls.colAuto}">
+          <label class="${cls.formLabel}">${subLabel}</label>
+          <select class="${cls.formSelectSm}" name="${name}[0].${subName}"><option value="">--</option>${options}</select>
         </div>`;
       }
       const inputType = this.getInputType((subConfig as { type: string }).type);
-      return `        <div class="col">
-          <label class="form-label">${subLabel}</label>
-          <input type="${inputType}" class="form-control form-control-sm" name="${name}[0].${subName}" placeholder="${subLabel}">
+      return `        <div class="${cls.col}">
+          <label class="${cls.formLabel}">${subLabel}</label>
+          <input type="${inputType}" class="${cls.formControlSm}" name="${name}[0].${subName}" placeholder="${subLabel}">
         </div>`;
     }).join('\n');
 
-    return `  <div class="mb-3">
-    <label class="form-label">${label}</label>
-    <div class="border rounded p-2">
-      <div class="row g-2 align-items-end">
+    return `  <div class="${cls.mb3}">
+    <label class="${cls.formLabel}">${label}</label>
+    <div class="${cls.borderGroup}">
+      <div class="${cls.rowG2AlignEnd}">
 ${subInputs}
       </div>
-      <small class="text-muted">Add multiple ${voName} entries as needed.</small>
+      <small class="${cls.textMuted}">Add multiple ${voName} entries as needed.</small>
     </div>
   </div>`;
   }
@@ -432,7 +438,7 @@ ${subInputs}
   /**
    * Render a union-of-VOs field as a type selector with sub-fields for each VO type.
    */
-  private renderUnionVoField(name: string, label: string, unionVoNames: string[], isEdit: boolean): string {
+  private renderUnionVoField(name: string, label: string, unionVoNames: string[], isEdit: boolean, cls: StylingClasses): string {
     const typeOptions = unionVoNames.map(voName => {
       const sel = isEdit ? ` {{ ${name}._type === '${voName}' ? 'selected' : '' }}` : '';
       return `      <option value="${voName}"${sel}>${voName}</option>`;
@@ -450,9 +456,9 @@ ${subInputs}
             const sel = isEdit ? ` {{ ${name}.${subName} === '${v}' ? 'selected' : '' }}` : '';
             return `            <option value="${v}"${sel}>${v}</option>`;
           }).join('\n');
-          return `        <div class="col-auto">
-          <label class="form-label">${subLabel}</label>
-          <select class="form-select" id="${fullName}" name="${fullName}">
+          return `        <div class="${cls.colAuto}">
+          <label class="${cls.formLabel}">${subLabel}</label>
+          <select class="${cls.formSelect}" id="${fullName}" name="${fullName}">
             <option value="">-- ${subLabel} --</option>
 ${options}
           </select>
@@ -460,22 +466,22 @@ ${options}
         }
         const inputType = this.getInputType((subConfig as { type: string }).type);
         const value = isEdit ? ` value="{{ ${name}.${subName} || '' }}"` : '';
-        return `        <div class="col">
-          <label class="form-label">${subLabel}</label>
-          <input type="${inputType}" class="form-control" id="${fullName}" name="${fullName}" placeholder="${subLabel}"${value}>
+        return `        <div class="${cls.col}">
+          <label class="${cls.formLabel}">${subLabel}</label>
+          <input type="${inputType}" class="${cls.formControl}" id="${fullName}" name="${fullName}" placeholder="${subLabel}"${value}>
         </div>`;
       }).join('\n');
 
       return `      <div class="${name}-fields-${voName}">
-        <div class="row g-2">
+        <div class="${cls.rowG2}">
 ${subInputs}
         </div>
       </div>`;
     }).join('\n');
 
-    return `  <div class="mb-3">
-    <label for="${name}_type" class="form-label">${label} Type</label>
-    <select class="form-select mb-2" id="${name}_type" name="${name}._type">
+    return `  <div class="${cls.mb3}">
+    <label for="${name}_type" class="${cls.formLabel}">${label} Type</label>
+    <select class="${cls.formSelect} ${cls.mb3}" id="${name}_type" name="${name}._type">
       <option value="">-- Select type --</option>
 ${typeOptions}
     </select>
@@ -487,7 +493,7 @@ ${subFieldGroups}
    * Render an array-of-union-VOs field as a repeatable group where each item
    * has a type selector and conditionally-shown sub-fields per VO type.
    */
-  private renderArrayUnionVoField(name: string, label: string, unionVoNames: string[], isEdit: boolean): string {
+  private renderArrayUnionVoField(name: string, label: string, unionVoNames: string[], isEdit: boolean, cls: StylingClasses): string {
     const typeOptions = unionVoNames.map(voName => {
       return `          <option value="${voName}">${voName}</option>`;
     }).join('\n');
@@ -501,42 +507,42 @@ ${subFieldGroups}
         if (typeof subConfig === 'object' && 'values' in subConfig) {
           const uniqueValues = [...new Set(subConfig.values)];
           const options = uniqueValues.map(v => `<option value="${v}">${v}</option>`).join('');
-          return `          <div class="col-auto">
-            <label class="form-label">${subLabel}</label>
-            <select class="form-select form-select-sm" name="${fullName}"><option value="">--</option>${options}</select>
+          return `          <div class="${cls.colAuto}">
+            <label class="${cls.formLabel}">${subLabel}</label>
+            <select class="${cls.formSelectSm}" name="${fullName}"><option value="">--</option>${options}</select>
           </div>`;
         }
         const inputType = this.getInputType((subConfig as { type: string }).type);
-        return `          <div class="col">
-            <label class="form-label">${subLabel}</label>
-            <input type="${inputType}" class="form-control form-control-sm" name="${fullName}" placeholder="${subLabel}">
+        return `          <div class="${cls.col}">
+            <label class="${cls.formLabel}">${subLabel}</label>
+            <input type="${inputType}" class="${cls.formControlSm}" name="${fullName}" placeholder="${subLabel}">
           </div>`;
       }).join('\n');
 
       return `        <div class="${name}-fields-${voName}">
-          <div class="row g-2">
+          <div class="${cls.rowG2}">
 ${subInputs}
           </div>
         </div>`;
     }).join('\n');
 
     const editHint = isEdit ? ` <!-- existing items rendered server-side -->` : '';
-    return `  <div class="mb-3">
-    <label class="form-label">${label}</label>
-    <div class="border rounded p-2" id="${name}-container">${editHint}
-      <div class="${name}-entry mb-2">
-        <select class="form-select form-select-sm mb-1" name="${name}[0]._type">
+    return `  <div class="${cls.mb3}">
+    <label class="${cls.formLabel}">${label}</label>
+    <div class="${cls.borderGroup}" id="${name}-container">${editHint}
+      <div class="${name}-entry ${cls.mb3}">
+        <select class="${cls.formSelectSm} ${cls.mb3}" name="${name}[0]._type">
           <option value="">-- Select type --</option>
 ${typeOptions}
         </select>
 ${subFieldGroups}
       </div>
     </div>
-    <small class="text-muted">Add multiple ${label} entries as needed.</small>
+    <small class="${cls.textMuted}">Add multiple ${label} entries as needed.</small>
   </div>`;
   }
 
-  private renderFormField(name: string, config: any, enumValues: string[] = [], isEdit = false): string {
+  private renderFormField(name: string, config: any, enumValues: string[] = [], isEdit = false, cls: StylingClasses): string {
     const required = config.required ? 'required' : '';
     const label = capitalize(name);
     const fieldType = (config.type || 'string') as string;
@@ -547,7 +553,7 @@ ${subFieldGroups}
     if (parsed.isArray && parsed.isUnion) {
       const unionVoNames = parsed.baseTypes.map(bt => capitalize(bt)).filter(n => this.valueObjects[n]);
       if (unionVoNames.length > 0) {
-        return this.renderArrayUnionVoField(name, label, unionVoNames, isEdit);
+        return this.renderArrayUnionVoField(name, label, unionVoNames, isEdit, cls);
       }
     }
 
@@ -556,7 +562,7 @@ ${subFieldGroups}
       const voName = capitalize(parsed.baseTypes[0]);
       const voConfig = this.valueObjects[voName];
       if (voConfig) {
-        return this.renderArrayVoField(name, label, voName, voConfig, isEdit);
+        return this.renderArrayVoField(name, label, voName, voConfig, isEdit, cls);
       }
     }
 
@@ -564,7 +570,7 @@ ${subFieldGroups}
     if (parsed.isUnion) {
       const unionVoNames = parsed.baseTypes.map(bt => capitalize(bt)).filter(n => this.valueObjects[n]);
       if (unionVoNames.length > 0) {
-        return this.renderUnionVoField(name, label, unionVoNames, isEdit);
+        return this.renderUnionVoField(name, label, unionVoNames, isEdit, cls);
       }
     }
 
@@ -572,17 +578,17 @@ ${subFieldGroups}
     const capitalizedType = capitalize(fieldType.toLowerCase());
     const voConfig = this.valueObjects[capitalizedType];
     if (voConfig) {
-      return this.renderValueObjectField(name, label, voConfig, required, isEdit);
+      return this.renderValueObjectField(name, label, voConfig, required, isEdit, cls);
     }
 
     switch (fieldType) {
       case 'boolean':
       case 'bool': {
         const checked = isEdit ? ` {{ ${name} ? 'checked' : '' }}` : '';
-        return `  <div class="mb-3">
-    <div class="form-check">
-      <input type="checkbox" class="form-check-input" id="${name}" name="${name}" value="true"${checked} ${required}>
-      <label for="${name}" class="form-check-label">${label}</label>
+        return `  <div class="${cls.mb3}">
+    <div class="${cls.formCheck}">
+      <input type="checkbox" class="${cls.formCheckInput}" id="${name}" name="${name}" value="true"${checked} ${required}>
+      <label for="${name}" class="${cls.formCheckLabel}">${label}</label>
     </div>
   </div>`;
       }
@@ -593,27 +599,27 @@ ${subFieldGroups}
             const sel = isEdit ? ` {{ ${name} === '${v}' ? 'selected' : '' }}` : '';
             return `      <option value="${v}"${sel}>${capitalize(v)}</option>`;
           }).join('\n');
-          return `  <div class="mb-3">
-    <label for="${name}" class="form-label">${label}</label>
-    <select class="form-select" id="${name}" name="${name}" ${required}>
+          return `  <div class="${cls.mb3}">
+    <label for="${name}" class="${cls.formLabel}">${label}</label>
+    <select class="${cls.formSelect}" id="${name}" name="${name}" ${required}>
       <option value="">-- Select ${label} --</option>
 ${options}
     </select>
   </div>`;
         }
         const value = isEdit ? ` value="{{ ${name} || '' }}"` : '';
-        return `  <div class="mb-3">
-    <label for="${name}" class="form-label">${label}</label>
-    <input type="text" class="form-control" id="${name}" name="${name}"${value} ${required}>
+        return `  <div class="${cls.mb3}">
+    <label for="${name}" class="${cls.formLabel}">${label}</label>
+    <input type="text" class="${cls.formControl}" id="${name}" name="${name}"${value} ${required}>
   </div>`;
       }
 
       default: {
         const type = this.getInputType(config.type);
         const value = isEdit ? ` value="{{ ${name} || '' }}"` : '';
-        return `  <div class="mb-3">
-    <label for="${name}" class="form-label">${label}</label>
-    <input type="${type}" class="form-control" id="${name}" name="${name}"${value} ${required}>
+        return `  <div class="${cls.mb3}">
+    <label for="${name}" class="${cls.formLabel}">${label}</label>
+    <input type="${type}" class="${cls.formControl}" id="${name}" name="${name}"${value} ${required}>
   </div>`;
       }
     }
@@ -647,9 +653,10 @@ ${options}
     return enumMap;
   }
 
-  public generateFromConfig(config: ModuleConfig): Record<string, string> {
+  public generateFromConfig(config: ModuleConfig, styling = 'bootstrap'): Record<string, string> {
     const result: Record<string, string> = {};
     this.valueObjects = config.domain.valueObjects || {};
+    const cls = getClasses(styling);
 
     if (!config.web) {
       return result;
@@ -685,9 +692,9 @@ ${options}
         const childrenForTemplate = useCaseWithChild && withChildChildren.length > 0 ? withChildChildren : undefined;
 
         if (page.path === '/' && page.useCase?.endsWith(':list')) {
-          result[page.view] = this.renderListTemplate(resourceName, page.view, fields, basePath, childrenForTemplate);
+          result[page.view] = this.renderListTemplate(resourceName, page.view, fields, basePath, cls, childrenForTemplate);
         } else if (page.path.includes(':id') && !page.path.includes('edit')) {
-          result[page.view] = this.renderDetailTemplate(resourceName, page.view, fields, basePath, childrenForTemplate);
+          result[page.view] = this.renderDetailTemplate(resourceName, page.view, fields, basePath, cls, childrenForTemplate);
         } else if (page.path.includes('/create')) {
           // Find corresponding POST endpoint for onSuccess/onError
           const postEndpoint = resourceConfig.pages.find(p => 
@@ -698,6 +705,7 @@ ${options}
             page.view, 
             fields,
             basePath,
+            cls,
             postEndpoint?.onSuccess,
             postEndpoint?.onError,
             enumValuesMap
@@ -712,6 +720,7 @@ ${options}
             page.view, 
             fields,
             basePath,
+            cls,
             postEndpoint?.onSuccess,
             postEndpoint?.onError,
             enumValuesMap
@@ -723,7 +732,7 @@ ${options}
     return result;
   }
 
-  public generateFromYamlFile(yamlFilePath: string): Record<string, string> {
+  public generateFromYamlFile(yamlFilePath: string, styling = 'bootstrap'): Record<string, string> {
     const yamlContent = fs.readFileSync(yamlFilePath, 'utf8');
     const config = parseYaml(yamlContent);
 
@@ -731,16 +740,17 @@ ${options}
       throw new Error('Configuration does not match new module format. Expected domain/useCases/web structure.');
     }
 
-    return this.generateFromConfig(config);
+    return this.generateFromConfig(config, styling);
   }
 
   public async generateAndSaveFiles(
     yamlFilePath: string,
     moduleDir: string,
-    opts?: { force?: boolean; skipOnConflict?: boolean; onlyIfMissing?: boolean }
+    opts?: { force?: boolean; skipOnConflict?: boolean; onlyIfMissing?: boolean },
+    styling = 'bootstrap'
   ): Promise<void> {
     let isGenerated = false;
-    const templatesByName = this.generateFromYamlFile(yamlFilePath);
+    const templatesByName = this.generateFromYamlFile(yamlFilePath, styling);
     
     const viewsDir = path.join(moduleDir, 'views');
     fs.mkdirSync(viewsDir, { recursive: true });
@@ -759,4 +769,3 @@ ${options}
     }
   }
 }
-
