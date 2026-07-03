@@ -9,6 +9,10 @@ import {
   mapYamlTypeToSql,
   getIdColumnDefinition,
   getFkColumnType,
+  sortMigrationFiles,
+  sqlTypeToYamlType,
+  getCreateMigrationsTableSQL,
+  extractSqlStatements,
 } from '../../src/utils/migrationUtils.js';
 import { AggregateConfig } from '../../src/types/configTypes.js';
 
@@ -489,5 +493,172 @@ describe('compareSchemas — nanoid identifiers initial migration', () => {
 
   it('generates VARCHAR(21) ownerId for nanoid', () => {
     expect(joined).toContain('ownerId VARCHAR(21) NOT NULL');
+  });
+});
+
+// ─── New helpers ──────────────────────────────────────────────────────────────
+
+describe('sortMigrationFiles', () => {
+  it('returns files in ascending lexicographic (timestamp) order', () => {
+    const files = [
+      '2026-07-03_14-00-00.sql',
+      '2026-07-01_10-00-00.sql',
+      '2026-07-02_09-30-00.sql',
+    ];
+    const sorted = sortMigrationFiles(files);
+    assert.deepStrictEqual(sorted, [
+      '2026-07-01_10-00-00.sql',
+      '2026-07-02_09-30-00.sql',
+      '2026-07-03_14-00-00.sql',
+    ]);
+  });
+
+  it('does not mutate the original array', () => {
+    const files = ['b.sql', 'a.sql'];
+    sortMigrationFiles(files);
+    assert.deepStrictEqual(files, ['b.sql', 'a.sql']);
+  });
+
+  it('handles an empty array', () => {
+    assert.deepStrictEqual(sortMigrationFiles([]), []);
+  });
+
+  it('handles a single-element array', () => {
+    assert.deepStrictEqual(sortMigrationFiles(['only.sql']), ['only.sql']);
+  });
+});
+
+describe('sqlTypeToYamlType', () => {
+  it('maps MySQL VARCHAR(255) to string', () => {
+    assert.strictEqual(sqlTypeToYamlType('varchar(255)'), 'string');
+  });
+
+  it('maps MySQL TEXT to string', () => {
+    assert.strictEqual(sqlTypeToYamlType('text'), 'string');
+  });
+
+  it('maps MySQL INT to number', () => {
+    assert.strictEqual(sqlTypeToYamlType('int'), 'number');
+  });
+
+  it('maps MySQL INT(11) to number', () => {
+    assert.strictEqual(sqlTypeToYamlType('int(11)'), 'number');
+  });
+
+  it('maps MySQL BIGINT to number', () => {
+    assert.strictEqual(sqlTypeToYamlType('bigint'), 'number');
+  });
+
+  it('maps MySQL TINYINT(1) to boolean', () => {
+    assert.strictEqual(sqlTypeToYamlType('tinyint(1)'), 'boolean');
+  });
+
+  it('maps MySQL DATETIME to datetime', () => {
+    assert.strictEqual(sqlTypeToYamlType('datetime'), 'datetime');
+  });
+
+  it('maps MySQL TIMESTAMP to datetime', () => {
+    assert.strictEqual(sqlTypeToYamlType('timestamp'), 'datetime');
+  });
+
+  it('maps MySQL JSON to json', () => {
+    assert.strictEqual(sqlTypeToYamlType('json'), 'json');
+  });
+
+  it('maps MySQL DECIMAL(10,2) to decimal', () => {
+    assert.strictEqual(sqlTypeToYamlType('decimal(10,2)'), 'decimal');
+  });
+
+  it('maps Postgres character varying to string', () => {
+    assert.strictEqual(sqlTypeToYamlType('character varying'), 'string');
+  });
+
+  it('maps Postgres integer to number', () => {
+    assert.strictEqual(sqlTypeToYamlType('integer'), 'number');
+  });
+
+  it('maps Postgres boolean to boolean', () => {
+    assert.strictEqual(sqlTypeToYamlType('boolean'), 'boolean');
+  });
+
+  it('maps Postgres timestamp without time zone to datetime', () => {
+    assert.strictEqual(sqlTypeToYamlType('timestamp without time zone'), 'datetime');
+  });
+
+  it('maps Postgres jsonb to json', () => {
+    assert.strictEqual(sqlTypeToYamlType('jsonb'), 'json');
+  });
+
+  it('maps Postgres numeric to decimal', () => {
+    assert.strictEqual(sqlTypeToYamlType('numeric'), 'decimal');
+  });
+
+  it('defaults unknown types to string', () => {
+    assert.strictEqual(sqlTypeToYamlType('someUnknownType'), 'string');
+  });
+});
+
+describe('getCreateMigrationsTableSQL', () => {
+  it('returns MySQL DDL with backtick-quoted table and InnoDB engine', () => {
+    const sql = getCreateMigrationsTableSQL('mysql');
+    expect(sql).toContain('`_migrations`');
+    expect(sql).toContain('INT AUTO_INCREMENT PRIMARY KEY');
+    expect(sql).toContain('ENGINE=InnoDB');
+  });
+
+  it('returns Postgres DDL with SERIAL and TIMESTAMP', () => {
+    const sql = getCreateMigrationsTableSQL('postgres');
+    expect(sql).toContain('_migrations');
+    expect(sql).toContain('SERIAL PRIMARY KEY');
+    expect(sql).toContain('TIMESTAMP');
+    expect(sql).toNotContain('ENGINE=InnoDB');
+    expect(sql).toNotContain('`');
+  });
+
+  it('both variants include a UNIQUE constraint on filename', () => {
+    expect(getCreateMigrationsTableSQL('mysql')).toContain('UNIQUE');
+    expect(getCreateMigrationsTableSQL('postgres')).toContain('UNIQUE');
+  });
+});
+
+describe('extractSqlStatements', () => {
+  it('splits on semicolons and returns non-empty statements', () => {
+    const sql = `CREATE TABLE a (id INT);
+CREATE TABLE b (id INT);`;
+    const stmts = extractSqlStatements(sql);
+    assert.strictEqual(stmts.length, 2);
+    expect(stmts[0]).toContain('CREATE TABLE a');
+    expect(stmts[1]).toContain('CREATE TABLE b');
+  });
+
+  it('strips comment-only segments', () => {
+    const sql = `-- header comment
+-- second comment
+
+CREATE TABLE a (id INT);
+
+-- another comment
+CREATE TABLE b (id INT);`;
+    const stmts = extractSqlStatements(sql);
+    assert.strictEqual(stmts.length, 2);
+  });
+
+  it('strips inline comment lines from multi-line statements', () => {
+    const sql = `-- Create foo table
+CREATE TABLE foo (
+  id INT PRIMARY KEY
+);`;
+    const stmts = extractSqlStatements(sql);
+    assert.strictEqual(stmts.length, 1);
+    expect(stmts[0]).toContain('CREATE TABLE foo');
+    expect(stmts[0]).toNotContain('-- Create foo');
+  });
+
+  it('returns empty array for a file with only comments', () => {
+    const sql = `-- migration header
+-- nothing here
+`;
+    const stmts = extractSqlStatements(sql);
+    assert.strictEqual(stmts.length, 0);
   });
 });

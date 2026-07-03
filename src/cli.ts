@@ -8,8 +8,8 @@ import { handleDiff } from './commands/diff';
 import { colors } from './utils/colors';
 import { handleInfer } from './commands/infer';
 import { handleMigrateCommit } from './commands/migrateCommit';
-// import { handleMigratePush } from './commands/migratePush';
-// import { handleMigrateUpdate } from './commands/migrateUpdate';
+import { handleMigratePush } from './commands/migratePush';
+import { handleMigratePull } from './commands/migratePull';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { version: pkgVersion } = require('../package.json') as { version: string };
@@ -33,6 +33,8 @@ ${usage}
   ${cmd('currentjs diff')} ${colors.gray('<module|*>')} ${flag('--yaml')} ${colors.gray('app.yaml')}
   ${cmd('currentjs infer')} ${flag('--file')} ${colors.gray('src/modules/<Module>/domain/entities/<Entity>.ts')} ${colors.gray('[')}${flag('--write')}${colors.gray(']')}
   ${cmd('currentjs migrate commit')} ${flag('--yaml')} ${colors.gray('app.yaml')}
+  ${cmd('currentjs migrate push')}   ${flag('--yaml')} ${colors.gray('app.yaml')}
+  ${cmd('currentjs migrate pull')}   ${flag('--yaml')} ${colors.gray('app.yaml')}
 
 ${options}
   ${flag('--yaml')} <path>   ${colors.gray('Path to app.yaml (default: ./app.yaml)')}
@@ -157,13 +159,11 @@ async function run() {
           return;
         }
         if (args.sub === 'push') {
-          console.log(colors.yellow('⚠️  Not implemented yet'));
-          // await handleMigratePush(args.yaml);
+          await handleMigratePush(args.yaml);
           return;
         }
-        if (args.sub === 'update') {
-          console.log(colors.yellow('⚠️  Not implemented yet'));
-          // await handleMigrateUpdate(args.yaml);
+        if (args.sub === 'pull') {
+          await handleMigratePull(args.yaml);
           return;
         }
         printHelp();

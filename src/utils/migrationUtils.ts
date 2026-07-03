@@ -360,3 +360,65 @@ export function generateTimestamp(): string {
 export function getMigrationFileName(timestamp: string): string {
   return `${timestamp}.sql`;
 }
+
+/**
+ * Sort migration filenames (e.g. "2026-07-03_12-30-00.sql") in ascending
+ * chronological order based on their timestamp prefix.
+ */
+export function sortMigrationFiles(files: string[]): string[] {
+  return [...files].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Map a SQL column type string (from INFORMATION_SCHEMA or DESCRIBE) back to
+ * the YAML field type used by the generator.  Works for both MySQL and
+ * PostgreSQL type strings.
+ */
+export function sqlTypeToYamlType(sqlType: string): string {
+  const t = sqlType.toUpperCase();
+  if (t.includes('TINYINT(1)') || t === 'BOOLEAN' || t === 'BOOL') return 'boolean';
+  if (t.includes('INT') || t === 'INTEGER' || t === 'SMALLINT' || t === 'BIGINT' || t === 'SERIAL' || t === 'BIGSERIAL') return 'number';
+  if (t.includes('DECIMAL') || t.includes('NUMERIC') || t.includes('FLOAT') || t.includes('DOUBLE') || t === 'REAL') return 'decimal';
+  if (t.includes('VARCHAR') || t.includes('TEXT') || t.includes('CHAR') || t === 'CHARACTER VARYING') return 'string';
+  if (t.includes('DATETIME') || t.includes('TIMESTAMP') || t === 'DATE' || t === 'TIME') return 'datetime';
+  if (t === 'JSON' || t === 'JSONB') return 'json';
+  if (t.includes('BINARY') || t.includes('VARBINARY') || t.includes('BLOB') || t.includes('BYTEA')) return 'string';
+  return 'string';
+}
+
+/**
+ * Return the DDL statement to create the _migrations tracking table.
+ * Called by `migrate push` before applying any migration files.
+ */
+export function getCreateMigrationsTableSQL(dbType: string): string {
+  if (dbType === 'postgres') {
+    return `CREATE TABLE IF NOT EXISTS _migrations (
+  id SERIAL PRIMARY KEY,
+  filename VARCHAR(255) NOT NULL UNIQUE,
+  applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);`;
+  }
+  // MySQL (default)
+  return `CREATE TABLE IF NOT EXISTS \`_migrations\` (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  filename VARCHAR(255) NOT NULL UNIQUE,
+  applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`;
+}
+
+/**
+ * Split the raw SQL text of a migration file into individual executable
+ * statements, stripping comment-only segments and blank segments.
+ */
+export function extractSqlStatements(sql: string): string[] {
+  return sql
+    .split(';')
+    .map(segment =>
+      segment
+        .split('\n')
+        .filter(line => !line.trim().startsWith('--'))
+        .join('\n')
+        .trim()
+    )
+    .filter(segment => segment.length > 0);
+}

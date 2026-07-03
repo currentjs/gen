@@ -157,7 +157,7 @@ export function handleMigrateCommit(yamlPath?: string): void {
     // eslint-disable-next-line no-console
     console.log(colors.gray(`   Location: Application-level migrations directory`));
     // eslint-disable-next-line no-console
-    console.log(colors.cyan('\n💡 Next step: Run "currentjs migrate push" to apply this migration to the database (not implemented yet).'));
+    console.log(colors.cyan('\n💡 Next step: Run "currentjs migrate push" to apply this migration to the database.'));
 
   } catch (error) {
     // eslint-disable-next-line no-console

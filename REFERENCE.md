@@ -17,6 +17,8 @@ Version: 0.5.6
   - [diff](#diff)
   - [infer](#infer)
   - [migrate commit](#migrate-commit)
+  - [migrate push](#migrate-push)
+  - [migrate pull](#migrate-pull)
 - [Global Options](#global-options)
 - [Application Configuration (app.yaml)](#application-configuration-appyaml)
 - [Module Configuration (module YAML)](#module-configuration-module-yaml)
@@ -291,7 +293,39 @@ currentjs migrate commit
 
 Collects model definitions from all module YAMLs and the `app.yaml`, compares them against the stored schema state (`migrations/schema_state.yaml`), and generates a SQL migration file in the `migrations/` directory.
 
-Note: `migrate push` and `migrate update` are not yet implemented.
+After generating the file, the schema state is updated so the next `migrate commit` only produces a diff of subsequent changes.
+
+---
+
+### migrate push
+
+Apply all pending migration files to the database.
+
+```
+currentjs migrate push
+```
+
+Reads the connection configuration from the environment (see [Database Connection for Migrations](#database-connection-for-migrations)), connects to the database, and applies any `.sql` files in the `migrations/` directory that have not yet been executed.
+
+Applied migrations are tracked in the `_migrations` table, which is created automatically on the first run.
+
+Migration files are applied in ascending filename order (timestamp-based).
+
+---
+
+### migrate pull
+
+Introspect the live database schema and update the local schema state.
+
+```
+currentjs migrate pull
+```
+
+Connects to the database, reads its current table structure (via `information_schema`), and updates `migrations/schema_state.yaml` to reflect the live schema. This is the reverse of `migrate push`.
+
+Use this command when the database has been modified outside of the migration workflow (e.g. manual SQL changes, another developer's migration) and you want to re-sync the local state without generating a new migration file. After running `migrate pull`, the next `migrate commit` will see no diff.
+
+Known aggregate names from module YAMLs are used to produce accurate keys in `schema_state.yaml`; tables without a matching aggregate fall back to a capitalised version of the table name.
 
 ---
 
@@ -428,6 +462,36 @@ The behavior differs between databases for `uuid` identifiers:
 | `uuid` | `BINARY(16) PRIMARY KEY DEFAULT (UUID_TO_BIN(UUID(), 1))` | `UUID PRIMARY KEY` | `string` | `crypto.randomUUID()` pre-generated before insert (no binary conversion for PostgreSQL) |
 | `nanoid` | `VARCHAR(21) PRIMARY KEY` | `VARCHAR(21) PRIMARY KEY` | `string` | Custom `generateNanoId()` using `crypto.randomBytes` |
 
+
+### Database Connection for Migrations
+
+The `migrate push` and `migrate pull` commands connect to the database at runtime. The connection configuration is read from the environment variable named after the **uppercase provider key** defined in `app.yaml`.
+
+| `config.database` | Environment variable | Example |
+|-------------------|---------------------|---------|
+| `mysql` | `MYSQL` | `MYSQL='{"host":"localhost","port":3306,"user":"root","password":"secret","database":"myapp"}'` |
+| `postgres` | `POSTGRES` | `POSTGRES='{"host":"localhost","port":5432,"user":"postgres","password":"secret","database":"myapp"}'` |
+
+The variable value must be a JSON object. It is resolved in this priority order:
+
+1. `process.env` (shell environment / CI secrets)
+2. `.env` file in the project root (next to `app.yaml`)
+
+**.env file example:**
+
+```
+MYSQL={"host":"localhost","port":3306,"user":"root","password":"secret","database":"myapp"}
+```
+
+Or with quotes for shell safety:
+
+```
+MYSQL='{"host":"localhost","port":3306,"user":"root","password":"secret","database":"myapp"}'
+```
+
+The provider package (e.g. `@currentjs/provider-mysql`) must be installed in the project — `migrate push` and `migrate pull` load it dynamically from the project's own `node_modules`.
+
+---
 
 ### Changing the identifier type
 
