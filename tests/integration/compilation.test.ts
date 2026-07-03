@@ -79,6 +79,14 @@ describe('Integration: full app generation and compilation', () => {
     assert.ok(fs.existsSync(path.join(templatesDir, 'error_tailwind.html')), 'error_tailwind.html exists');
   });
 
+  it('init writes .env file with PORT and MYSQL placeholder', () => {
+    const envPath = path.join(tempDir, '.env');
+    assert.ok(fs.existsSync(envPath), '.env exists');
+    const contents = fs.readFileSync(envPath, 'utf8');
+    assert.ok(contents.includes('PORT=3000'), '.env contains PORT=3000');
+    assert.ok(contents.includes('MYSQL'), '.env contains MYSQL placeholder');
+  });
+
   it('default bootstrap styling: bootstrap template has canonical name, tailwind has suffixed name', () => {
     const templatesDir = path.join(tempDir, 'src', 'common', 'ui', 'templates');
     const bsMain = fs.readFileSync(path.join(templatesDir, 'main_view_bootstrap.html'), 'utf8');
