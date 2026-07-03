@@ -8,10 +8,39 @@ import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils'
 import { storeTemplates, storeFileTemplate } from './templates/storeTemplates';
 import { capitalize, mapRowType, isAggregateReference, parseFieldType, getReferencedValueObjects } from '../utils/typeUtils';
 
+export type DatabaseType = 'mysql' | 'postgres';
+
 export class StoreGenerator {
   private availableValueObjects: Map<string, ValueObjectConfig> = new Map();
   private availableAggregates: Set<string> = new Set();
   private identifiers: IdentifierType = 'numeric';
+  private database: DatabaseType = 'mysql';
+
+  private isPostgres(): boolean {
+    return this.database === 'postgres';
+  }
+
+  /**
+   * Returns a quoted SQL identifier (column or table) as it should appear
+   * in the SQL string written to the generated .ts file.
+   * MySQL uses backtick quoting; Postgres uses double-quote quoting.
+   */
+  private quoteCol(name: string): string {
+    if (this.isPostgres()) {
+      return `"${name}"`;
+    }
+    return '\\`' + name + '\\`';
+  }
+
+  /**
+   * Returns the template-level quote placeholder value.
+   * Used as the {{Q}} substitution in storeTemplates:
+   *   MySQL  → \` (backslash + backtick, correct inside a TS template literal)
+   *   Postgres → " (double-quote)
+   */
+  private quoteChar(): string {
+    return this.isPostgres() ? '"' : '\\`';
+  }
 
   private isAggregateField(fieldConfig: AggregateFieldConfig): boolean {
     return isAggregateReference(fieldConfig.type, this.availableAggregates);
@@ -186,12 +215,25 @@ export class StoreGenerator {
     return `      row.${fieldName} ? (this.ensureParsed(row.${fieldName}) as any[]).map((item: any) => { ${cases} return undefined; }) : []`;
   }
 
-  /** Single line for datetime conversion: toDate (row->model) or toMySQL (entity->row). */
+  /** Single line for datetime conversion: toDate (row->model) or toDatetime (entity->row). */
   private generateDatetimeConversion(fieldName: string, direction: 'toDate' | 'toMySQL'): string {
     if (direction === 'toDate') {
       return `      row.${fieldName} ? new Date(row.${fieldName}) : undefined`;
     }
-    return `      ${fieldName}: entity.${fieldName} ? this.toMySQLDatetime(entity.${fieldName}) : undefined`;
+    return `      ${fieldName}: entity.${fieldName} ? this.${this.generateDatetimeHelperName()}(entity.${fieldName}) : undefined`;
+  }
+
+  /** The private method name for datetime formatting in the generated store. */
+  private generateDatetimeHelperName(): string {
+    return this.isPostgres() ? 'toPostgresTimestamp' : 'toMySQLDatetime';
+  }
+
+  /** The body of the private datetime helper method in the generated store. */
+  private generateDatetimeHelperBody(): string {
+    if (this.isPostgres()) {
+      return 'return date.toISOString();';
+    }
+    return "return date.toISOString().slice(0, 19).replace('T', ' ');";
   }
 
   private replaceTemplateVars(template: string, variables: Record<string, string>): string {
@@ -232,19 +274,20 @@ export class StoreGenerator {
       ...fields.map(([name, config]) => this.isAggregateField(config) ? `${name}Id` : name)
     ];
 
-    if (!isUuid) {
-      return allFields.map(f => `\\\`${f}\\\``).join(', ');
+    // Postgres uses native UUID — no binary conversion needed
+    if (!isUuid || this.isPostgres()) {
+      return allFields.map(f => this.quoteCol(f)).join(', ');
     }
 
-    // For UUID: id-type columns need BIN_TO_UUID wrapping in SELECT
+    // MySQL + UUID: id-type columns need BIN_TO_UUID wrapping in SELECT
     const idFields = new Set(['id', ownerOrParentField]);
     fields.forEach(([name, config]) => {
       if (this.isAggregateField(config)) idFields.add(`${name}Id`);
     });
 
     return allFields.map(f => {
-      if (idFields.has(f)) return `BIN_TO_UUID(\\\`${f}\\\`, 1) as \\\`${f}\\\``;
-      return `\\\`${f}\\\``;
+      if (idFields.has(f)) return `BIN_TO_UUID(${this.quoteCol(f)}, 1) as ${this.quoteCol(f)}`;
+      return this.quoteCol(f);
     }).join(', ');
   }
 
@@ -346,7 +389,7 @@ export class StoreGenerator {
         return;
       }
       
-      // Handle datetime/date - convert Date to MySQL DATETIME format
+      // Handle datetime/date - convert Date to DB datetime format
       if (fieldType === 'datetime' || fieldType === 'date') {
         result.push(this.generateDatetimeConversion(fieldName, 'toMySQL'));
         return;
@@ -477,10 +520,13 @@ export class StoreGenerator {
     const isUuid = this.identifiers === 'uuid';
     const idTs = idTsType(this.identifiers);
     const ownerParam = isRoot ? `, ownerId?: ${idTs}` : '';
-    // UUID_TO_BIN(:ownerId, 1) — the ", 1" is a SQL literal inside the query string, not a JS param key
-    const ownerFilterExpr = isUuid
-      ? `' AND \\\`ownerId\\\` = UUID_TO_BIN(:ownerId, 1)'`
-      : `' AND \\\`ownerId\\\` = :ownerId'`;
+
+    // For Postgres, UUID is stored natively — no binary conversion; ownerId column needs quoting
+    const ownerColRef = this.quoteCol('ownerId');
+    const ownerFilterExpr = (isUuid && !this.isPostgres())
+      ? `' AND ${ownerColRef} = UUID_TO_BIN(:ownerId, 1)'`
+      : `' AND ${ownerColRef} = :ownerId'`;
+
     const ownerFilter = isRoot
       ? `\n    const ownerFilter = ownerId != null ? ${ownerFilterExpr} : '';`
       : '';
@@ -489,11 +535,18 @@ export class StoreGenerator {
       ? `\n    if (ownerId != null) params.ownerId = ownerId;`
       : '';
 
+    // Table reference for SQL inside template literals in the generated code
+    const tableRef = this.isPostgres()
+      ? '"${this.tableName}"'
+      : '\\`${this.tableName}\\`';
+
+    const deletedAtRef = this.quoteCol('deletedAt');
+
     const getPaginated = `  async getPaginated(page: number = 1, limit: number = 20${ownerParam}): Promise<${modelName}[]> {
     const offset = (page - 1) * limit;${ownerFilter}
     const params: Record<string, any> = { limit: String(limit), offset: String(offset) };${ownerParamsSetup}
     const result = await this.db.query(
-      \`SELECT ${fieldNamesStr} FROM \\\`\${this.tableName}\\\` WHERE deletedAt IS NULL${ownerFilterRef} LIMIT :limit OFFSET :offset\`,
+      \`SELECT ${fieldNamesStr} FROM ${tableRef} WHERE ${deletedAtRef} IS NULL${ownerFilterRef} LIMIT :limit OFFSET :offset\`,
       params
     );
 
@@ -506,7 +559,7 @@ export class StoreGenerator {
     const getAll = `  async getAll(${isRoot ? `ownerId?: ${idTs}` : ''}): Promise<${modelName}[]> {${ownerFilter}
     const params: Record<string, any> = {};${ownerParamsSetup}
     const result = await this.db.query(
-      \`SELECT ${fieldNamesStr} FROM \\\`\${this.tableName}\\\` WHERE deletedAt IS NULL${ownerFilterRef}\`,
+      \`SELECT ${fieldNamesStr} FROM ${tableRef} WHERE ${deletedAtRef} IS NULL${ownerFilterRef}\`,
       params
     );
 
@@ -519,7 +572,7 @@ export class StoreGenerator {
     const count = `  async count(${isRoot ? `ownerId?: ${idTs}` : ''}): Promise<number> {${ownerFilter}
     const params: Record<string, any> = {};${ownerParamsSetup}
     const result = await this.db.query(
-      \`SELECT COUNT(*) as count FROM \\\`\${this.tableName}\\\` WHERE deletedAt IS NULL${ownerFilterRef}\`,
+      \`SELECT COUNT(*) as count FROM ${tableRef} WHERE ${deletedAtRef} IS NULL${ownerFilterRef}\`,
       params
     );
 
@@ -544,18 +597,27 @@ export class StoreGenerator {
       if (this.isAggregateField(config)) idFields.add(`${name}Id`);
     });
     const rawFields = ['id', parentIdField, ...fields.map(([name, config]) => this.isAggregateField(config) ? `${name}Id` : name)];
-    const bt = '\\`';
-    const fieldList = isUuid
-      ? rawFields.map(f => idFields.has(f) ? `BIN_TO_UUID(${bt}${f}${bt}, 1) as ${bt}${f}${bt}` : `${bt}${f}${bt}`).join(', ')
-      : rawFields.map(f => `${bt}${f}${bt}`).join(', ');
 
-    const whereExpr = isUuid ? `\\\`${parentIdField}\\\` = UUID_TO_BIN(:parentId, 1)` : `\\\`${parentIdField}\\\` = :parentId`;
+    // Postgres uses native UUID, no binary wrapping
+    const fieldList = (isUuid && !this.isPostgres())
+      ? rawFields.map(f => idFields.has(f) ? `BIN_TO_UUID(${this.quoteCol(f)}, 1) as ${this.quoteCol(f)}` : this.quoteCol(f)).join(', ')
+      : rawFields.map(f => this.quoteCol(f)).join(', ');
+
+    const whereExpr = (isUuid && !this.isPostgres())
+      ? `${this.quoteCol(parentIdField)} = UUID_TO_BIN(:parentId, 1)`
+      : `${this.quoteCol(parentIdField)} = :parentId`;
+
+    const tableRef = this.isPostgres()
+      ? '"${this.tableName}"'
+      : '\\`${this.tableName}\\`';
+
+    const deletedAtRef = this.quoteCol('deletedAt');
 
     return `
 
   async getByParentId(parentId: ${idTs}): Promise<${modelName}[]> {
     const result = await this.db.query(
-      \`SELECT ${fieldList} FROM \\\`\${this.tableName}\\\` WHERE ${whereExpr} AND deletedAt IS NULL\`,
+      \`SELECT ${fieldList} FROM ${tableRef} WHERE ${whereExpr} AND ${deletedAtRef} IS NULL\`,
       { parentId }
     );
 
@@ -569,17 +631,31 @@ export class StoreGenerator {
   private generateGetResourceOwnerMethod(childInfo?: ChildEntityInfo): string {
     const isUuid = this.identifiers === 'uuid';
     const idTs = idTsType(this.identifiers);
-    const whereExpr = isUuid ? 'id = UUID_TO_BIN(:id, 1)' : 'id = :id';
-    const ownerSelect = isUuid ? 'BIN_TO_UUID(p.ownerId, 1) as ownerId' : 'p.ownerId';
-    const ownerSelectSimple = isUuid ? 'BIN_TO_UUID(ownerId, 1) as ownerId' : 'ownerId';
+
+    // Postgres: native UUID, no binary conversion; ownerId column is camelCase → needs quoting
+    const whereExpr = (isUuid && !this.isPostgres()) ? 'id = UUID_TO_BIN(:id, 1)' : 'id = :id';
+    const ownerColRef = this.quoteCol('ownerId');
+    const ownerSelect = (isUuid && !this.isPostgres())
+      ? `BIN_TO_UUID(p.${ownerColRef}, 1) as ownerId`
+      : `p.${ownerColRef}`;
+    const ownerSelectSimple = (isUuid && !this.isPostgres())
+      ? `BIN_TO_UUID(${ownerColRef}, 1) as ownerId`
+      : ownerColRef;
+
+    const tableRef = this.isPostgres()
+      ? '"${this.tableName}"'
+      : '\\`${this.tableName}\\`';
+
+    const deletedAtRef = this.quoteCol('deletedAt');
 
     if (childInfo) {
       const parentTable = childInfo.parentTableName;
       const parentIdField = childInfo.parentIdField;
-      const joinExpr = isUuid
-        ? `p.id = UUID_TO_BIN(c.\\\`${parentIdField}\\\`, 1)`
-        : `p.id = c.\\\`${parentIdField}\\\``;
-      const cWhereExpr = isUuid ? 'c.id = UUID_TO_BIN(:id, 1)' : 'c.id = :id';
+      const parentTableRef = this.isPostgres() ? `"${parentTable}"` : '\\`' + parentTable + '\\`';
+      const joinExpr = (isUuid && !this.isPostgres())
+        ? `p.id = UUID_TO_BIN(c.${this.quoteCol(parentIdField)}, 1)`
+        : `p.id = c.${this.quoteCol(parentIdField)}`;
+      const cWhereExpr = (isUuid && !this.isPostgres()) ? 'c.id = UUID_TO_BIN(:id, 1)' : 'c.id = :id';
       return `
 
   /**
@@ -588,7 +664,7 @@ export class StoreGenerator {
    */
   async getResourceOwner(id: ${idTs}): Promise<${idTs} | null> {
     const result = await this.db.query(
-      \`SELECT ${ownerSelect} FROM \\\`\${this.tableName}\\\` c INNER JOIN \\\`${parentTable}\\\` p ON ${joinExpr} WHERE ${cWhereExpr} AND c.deletedAt IS NULL\`,
+      \`SELECT ${ownerSelect} FROM ${tableRef} c INNER JOIN ${parentTableRef} p ON ${joinExpr} WHERE ${cWhereExpr} AND c.${deletedAtRef} IS NULL\`,
       { id }
     );
 
@@ -606,7 +682,7 @@ export class StoreGenerator {
    */
   async getResourceOwner(id: ${idTs}): Promise<${idTs} | null> {
     const result = await this.db.query(
-      \`SELECT ${ownerSelectSimple} FROM \\\`\${this.tableName}\\\` WHERE ${whereExpr} AND deletedAt IS NULL\`,
+      \`SELECT ${ownerSelectSimple} FROM ${tableRef} WHERE ${whereExpr} AND ${deletedAtRef} IS NULL\`,
       { id }
     );
 
@@ -638,34 +714,51 @@ export class StoreGenerator {
     return '';
   }
 
-  private generateInsertIdVariables(): { preLine: string; dataLine: string; successCond: string; getId: string } {
+  private generateInsertIdVariables(): { preLine: string; dataLine: string; successCond: string; getId: string; returningClause: string } {
     switch (this.identifiers) {
       case 'uuid':
         return {
           preLine: '    const newId = randomUUID();',
           dataLine: '      id: newId,\n',
           successCond: '',
-          getId: ''
+          getId: '',
+          returningClause: ''
         };
       case 'nanoid':
         return {
           preLine: '    const newId = this.generateNanoId();',
           dataLine: '      id: newId,\n',
           successCond: '',
-          getId: ''
+          getId: '',
+          returningClause: ''
         };
       default:
+        // numeric
+        if (this.isPostgres()) {
+          return {
+            preLine: '',
+            dataLine: '',
+            successCond: ' && result.data && result.data.length > 0',
+            getId: 'const newId = result.data[0].id;',
+            returningClause: ' RETURNING id'
+          };
+        }
         return {
           preLine: '',
           dataLine: '',
           successCond: ' && result.insertId',
-          getId: 'const newId = typeof result.insertId === \'string\' ? parseInt(result.insertId, 10) : result.insertId;'
+          getId: "const newId = typeof result.insertId === 'string' ? parseInt(result.insertId, 10) : result.insertId;",
+          returningClause: ''
         };
     }
   }
 
   private generateWhereIdExpr(): string {
-    return this.identifiers === 'uuid' ? 'id = UUID_TO_BIN(:id, 1)' : 'id = :id';
+    // Postgres uses native UUID — no binary conversion
+    if (this.identifiers === 'uuid' && !this.isPostgres()) {
+      return 'id = UUID_TO_BIN(:id, 1)';
+    }
+    return 'id = :id';
   }
 
   private generateIdParamExpr(): string {
@@ -675,13 +768,19 @@ export class StoreGenerator {
   }
 
   private generateRowIdExpr(): string {
-    return this.identifiers === 'uuid' ? 'row.id' : 'row.id';
+    return 'row.id';
   }
 
   private generateCryptoImport(): string {
     if (this.identifiers === 'uuid') return `\nimport { randomUUID } from 'crypto';`;
     if (this.identifiers === 'nanoid') return `\nimport { randomBytes } from 'crypto';`;
     return '';
+  }
+
+  private generateProviderImport(): string {
+    return this.isPostgres()
+      ? '@currentjs/provider-postgres'
+      : '@currentjs/provider-mysql';
   }
 
   private generateStore(modelName: string, aggregateConfig: AggregateConfig, childInfo?: ChildEntityInfo): string {
@@ -699,6 +798,10 @@ export class StoreGenerator {
       ENTITY_NAME: modelName,
       TABLE_NAME: tableName,
       ID_TYPE: idTs,
+      Q: this.quoteChar(),
+      PROVIDER_IMPORT: this.generateProviderImport(),
+      DATETIME_HELPER_NAME: this.generateDatetimeHelperName(),
+      DATETIME_HELPER_BODY: this.generateDatetimeHelperBody(),
       ROW_FIELDS: this.generateRowFields(fields, childInfo),
       FIELD_NAMES: fieldNamesStr,
       ROW_ID_EXPR: this.generateRowIdExpr(),
@@ -710,6 +813,7 @@ export class StoreGenerator {
       INSERT_DATA_MAPPING: this.generateInsertDataMapping(fields, childInfo),
       INSERT_SUCCESS_COND: idVars.successCond,
       INSERT_GET_ID: idVars.getId,
+      INSERT_RETURNING_CLAUSE: idVars.returningClause,
       UPDATE_DATA_MAPPING: this.generateUpdateDataMapping(fields),
       UPDATE_FIELDS_ARRAY: this.generateUpdateFieldsArray(fields),
       VALUE_OBJECT_IMPORTS: this.generateValueObjectImports(fields),
@@ -736,15 +840,17 @@ export class StoreGenerator {
       ENTITY_IMPORT_ITEMS: entityImportItems.join(', '),
       ROW_INTERFACE: rowInterface,
       STORE_CLASS: storeClass,
+      PROVIDER_IMPORT: this.generateProviderImport(),
       CRYPTO_IMPORT: this.generateCryptoImport(),
       VALUE_OBJECT_IMPORTS: variables.VALUE_OBJECT_IMPORTS,
       AGGREGATE_REF_IMPORTS: variables.AGGREGATE_REF_IMPORTS
     });
   }
 
-  public generateFromConfig(config: ModuleConfig, identifiers: IdentifierType = 'numeric'): Record<string, string> {
+  public generateFromConfig(config: ModuleConfig, identifiers: IdentifierType = 'numeric', database: DatabaseType = 'mysql'): Record<string, string> {
     const result: Record<string, string> = {};
     this.identifiers = identifiers;
+    this.database = database;
 
     // First, collect all value object names and configs
     this.availableValueObjects.clear();
@@ -774,7 +880,7 @@ export class StoreGenerator {
     return result;
   }
 
-  public generateFromYamlFile(yamlFilePath: string, identifiers: IdentifierType = 'numeric'): Record<string, string> {
+  public generateFromYamlFile(yamlFilePath: string, identifiers: IdentifierType = 'numeric', database: DatabaseType = 'mysql'): Record<string, string> {
     const yamlContent = fs.readFileSync(yamlFilePath, 'utf8');
     const config = parseYaml(yamlContent);
 
@@ -782,16 +888,17 @@ export class StoreGenerator {
       throw new Error('Configuration does not match new module format. Expected domain.aggregates structure.');
     }
 
-    return this.generateFromConfig(config, identifiers);
+    return this.generateFromConfig(config, identifiers, database);
   }
 
   public async generateAndSaveFiles(
     yamlFilePath: string,
     moduleDir: string,
     opts?: { force?: boolean; skipOnConflict?: boolean },
-    identifiers: IdentifierType = 'numeric'
+    identifiers: IdentifierType = 'numeric',
+    database: DatabaseType = 'mysql'
   ): Promise<void> {
-    const storesByModel = this.generateFromYamlFile(yamlFilePath, identifiers);
+    const storesByModel = this.generateFromYamlFile(yamlFilePath, identifiers, database);
     
     const storesDir = path.join(moduleDir, 'infrastructure', 'stores');
     fs.mkdirSync(storesDir, { recursive: true });

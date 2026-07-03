@@ -18,11 +18,11 @@
 | ✅ Remove "useCase" layer"         | gen         | 0.6                    | M    |                                                                                 |
 | ✅ cross-module com: queries       | gen         | 0.6.1                  | M    |                                                                                 |
 | ✅ Support of tailwind in tpls     | gen         | 0.6.2                  | M    | setting in app.yaml                                                             |
+| ✅ Postgres support in generator   | gen         | 0.6.3                  | M    | Generate code for postgres                                                      |
 | Database migrations               | gen         | 0.6.3                  | L    |                                                                                 |
 | current ai                        | skill       | -                      | L    | Something really cool is coming                                                 |
 | scaffold (UI)                     | gen*        | xx                     | M    | new package is required. `gen` will just install/run it                         |
-| Postgres provider                 | provider    | 1.x                    | M    | New database provider                                                           |
-| Postgres support in generator     | gen         | later                  | M    | Generate code for postgres                                                      |
+| ✅ Postgres provider               | provider    | 1.x                    | M    | New database provider                                                           |
 | WebSocket support                 | router      | later                  | L    | Router-level only for now                                                       |
 | Queue handling                    | gen         | later                  | XL   | Extend beyond api/web to support message queues (* may require a new package)   |
 | Installing modules/providers      | gen         | later                  | ?    | `current install module/provider` – after several apps created, extract modules |

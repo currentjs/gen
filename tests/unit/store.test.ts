@@ -72,8 +72,8 @@ describe('StoreGenerator', () => {
       expect(invoiceStore).toContain('updatedAt: this.toMySQLDatetime');
     });
 
-    it('SQL uses deletedAt IS NULL (camelCase)', () => {
-      expect(invoiceStore).toContain('deletedAt IS NULL');
+    it('SQL uses deletedAt IS NULL (camelCase, backtick-quoted for MySQL)', () => {
+      expect(invoiceStore).toContain('\\`deletedAt\\` IS NULL');
     });
 
     it('value object VO uses ensureParsed instead of JSON.parse for deserialization', () => {
@@ -335,5 +335,193 @@ describe('StoreGenerator — numeric identifiers (default, backward compat)', ()
 
   it('does not import crypto', () => {
     expect(store).toNotContain("from 'crypto'");
+  });
+});
+
+// ─── Postgres database tests ──────────────────────────────────────────────────
+
+describe('StoreGenerator — postgres database, numeric identifiers', () => {
+  const pgGen = new StoreGenerator();
+  const config = loadFixture('product.yaml');
+  const result = pgGen.generateFromConfig(config, 'numeric', 'postgres');
+  const store = getCode(result as Record<string, unknown>, 'Product');
+
+  it('imports ISqlProvider from @currentjs/provider-postgres', () => {
+    expect(store).toContain("from '@currentjs/provider-postgres'");
+    expect(store).toNotContain("from '@currentjs/provider-mysql'");
+  });
+
+  it('uses double-quote identifier quoting instead of backticks', () => {
+    expect(store).toContain('"${this.tableName}"');
+    expect(store).toContain('"id"');
+    expect(store).toNotContain('\\`${this.tableName}\\`');
+  });
+
+  it('uses toPostgresTimestamp helper (not toMySQLDatetime)', () => {
+    expect(store).toContain('toPostgresTimestamp');
+    expect(store).toNotContain('toMySQLDatetime');
+  });
+
+  it('toPostgresTimestamp returns full ISO string', () => {
+    expect(store).toContain('return date.toISOString();');
+    expect(store).toNotContain("replace('T', ' ')");
+  });
+
+  it('INSERT uses RETURNING id clause for numeric Postgres', () => {
+    expect(store).toContain('RETURNING id');
+  });
+
+  it('insert success condition checks result.data instead of result.insertId', () => {
+    expect(store).toContain('result.data && result.data.length > 0');
+    expect(store).toContain('result.data[0].id');
+    expect(store).toNotContain('result.insertId');
+  });
+
+  it('field names in SELECT use double-quote quoting', () => {
+    expect(store).toContain('"id"');
+    expect(store).toContain('"ownerId"');
+    expect(store).toNotContain('BIN_TO_UUID');
+  });
+
+  it('deletedAt IS NULL uses double-quote quoting', () => {
+    expect(store).toContain('"deletedAt" IS NULL');
+  });
+
+  it('fieldsList mapping uses double-quote quoting', () => {
+    expect(store).toContain('`"${f}"`');
+    expect(store).toNotContain('`\\`${f}\\``');
+  });
+
+  it('updateFields mapping uses double-quote quoting', () => {
+    expect(store).toContain('`"${f}" = :${f}`');
+  });
+
+  it('updatedAt in SET clause uses double-quote quoting', () => {
+    expect(store).toContain('"updatedAt" = :updatedAt');
+  });
+
+  it('softDelete deletedAt uses double-quote quoting', () => {
+    expect(store).toContain('"deletedAt" = :deletedAt');
+  });
+
+  it('does not import crypto (numeric identifiers)', () => {
+    expect(store).toNotContain("from 'crypto'");
+  });
+});
+
+describe('StoreGenerator — postgres database, uuid identifiers', () => {
+  const pgUuidGen = new StoreGenerator();
+  const config = loadFixture('product.yaml');
+  const result = pgUuidGen.generateFromConfig(config, 'uuid', 'postgres');
+  const store = getCode(result as Record<string, unknown>, 'Product');
+
+  it('imports ISqlProvider from @currentjs/provider-postgres', () => {
+    expect(store).toContain("from '@currentjs/provider-postgres'");
+  });
+
+  it('does NOT use BIN_TO_UUID or UUID_TO_BIN (Postgres native UUID)', () => {
+    expect(store).toNotContain('BIN_TO_UUID');
+    expect(store).toNotContain('UUID_TO_BIN');
+  });
+
+  it('id fields in SELECT use plain double-quote quoting (no binary conversion)', () => {
+    expect(store).toContain('"id"');
+    expect(store).toContain('"ownerId"');
+  });
+
+  it('WHERE clause uses plain id = :id (no binary conversion)', () => {
+    expect(store).toContain('id = :id');
+    expect(store).toNotContain('UUID_TO_BIN(:id');
+  });
+
+  it('insert pre-generates id via randomUUID (same as MySQL uuid)', () => {
+    expect(store).toContain('const newId = randomUUID()');
+  });
+
+  it('does NOT use RETURNING id (id is pre-generated)', () => {
+    expect(store).toNotContain('RETURNING id');
+  });
+
+  it('uses double-quote quoting for table and column references', () => {
+    expect(store).toContain('"${this.tableName}"');
+    expect(store).toNotContain('\\`${this.tableName}\\`');
+  });
+
+  it('uses toPostgresTimestamp helper', () => {
+    expect(store).toContain('toPostgresTimestamp');
+  });
+
+  it('row interface has id: string', () => {
+    expect(store).toContain('id: string;');
+  });
+});
+
+describe('StoreGenerator — postgres database, nanoid identifiers', () => {
+  const pgNanoidGen = new StoreGenerator();
+  const config = loadFixture('product.yaml');
+  const result = pgNanoidGen.generateFromConfig(config, 'nanoid', 'postgres');
+  const store = getCode(result as Record<string, unknown>, 'Product');
+
+  it('imports ISqlProvider from @currentjs/provider-postgres', () => {
+    expect(store).toContain("from '@currentjs/provider-postgres'");
+  });
+
+  it('insert pre-generates id via generateNanoId (same as MySQL nanoid)', () => {
+    expect(store).toContain('const newId = this.generateNanoId()');
+  });
+
+  it('does NOT use RETURNING id (id is pre-generated)', () => {
+    expect(store).toNotContain('RETURNING id');
+  });
+
+  it('does not use result.insertId', () => {
+    expect(store).toNotContain('result.insertId');
+  });
+
+  it('uses double-quote quoting for table and columns', () => {
+    expect(store).toContain('"${this.tableName}"');
+    expect(store).toNotContain('\\`${this.tableName}\\`');
+  });
+
+  it('uses toPostgresTimestamp helper', () => {
+    expect(store).toContain('toPostgresTimestamp');
+    expect(store).toNotContain('toMySQLDatetime');
+  });
+
+  it('row interface has id: string', () => {
+    expect(store).toContain('id: string;');
+  });
+});
+
+describe('StoreGenerator — postgres, invoice store (datetime, value objects)', () => {
+  const pgInvoiceGen = new StoreGenerator();
+  const config = loadFixture('invoice.yaml');
+  const result = pgInvoiceGen.generateFromConfig(config, 'numeric', 'postgres');
+  const invoiceStore = getCode(result as Record<string, unknown>, 'Invoice');
+
+  it('imports ISqlProvider from @currentjs/provider-postgres', () => {
+    expect(invoiceStore).toContain("from '@currentjs/provider-postgres'");
+  });
+
+  it('datetime serialization uses toPostgresTimestamp', () => {
+    expect(invoiceStore).toContain('this.toPostgresTimestamp(');
+    expect(invoiceStore).toNotContain('this.toMySQLDatetime(');
+  });
+
+  it('createdAt and updatedAt use toPostgresTimestamp in insert', () => {
+    expect(invoiceStore).toContain('createdAt: this.toPostgresTimestamp(now)');
+    expect(invoiceStore).toContain('updatedAt: this.toPostgresTimestamp(now)');
+  });
+
+  it('ownerId filter uses double-quote quoting in ownerFilter', () => {
+    expect(invoiceStore).toContain('"ownerId"');
+  });
+
+  it('INSERT uses RETURNING id clause', () => {
+    expect(invoiceStore).toContain('RETURNING id');
+  });
+
+  it('insert reads newId from result.data[0].id', () => {
+    expect(invoiceStore).toContain('result.data[0].id');
   });
 });
