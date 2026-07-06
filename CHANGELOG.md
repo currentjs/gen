@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.3] - 2026-07-06
+
+- Support PostgreSQL
+- migrate push & migrate pull
+- .env support
+
 ## [0.6.2] - 2026-07-02
 
 - Tailwind CSS support
