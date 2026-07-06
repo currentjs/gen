@@ -4,6 +4,8 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { AggregateConfig, AggregateFieldConfig, IdentifierType } from '../types/configTypes';
 import { parseFieldType } from './typeUtils';
 
+export type DbType = 'mysql' | 'postgres';
+
 export interface SchemaState {
   aggregates: Record<string, AggregateConfig>;
   version: string;
@@ -30,7 +32,7 @@ export interface ForeignKeyInfo {
   REFERENCED_COLUMN_NAME: string;
 }
 
-const TYPE_MAPPING: Record<string, string> = {
+const TYPE_MAPPING_MYSQL: Record<string, string> = {
   string: 'VARCHAR(255)',
   number: 'INT',
   integer: 'INT',
@@ -44,7 +46,36 @@ const TYPE_MAPPING: Record<string, string> = {
   object: 'JSON'
 };
 
-export function getIdColumnDefinition(idType: IdentifierType = 'numeric'): string {
+const TYPE_MAPPING_POSTGRES: Record<string, string> = {
+  string: 'VARCHAR(255)',
+  number: 'INTEGER',
+  integer: 'INTEGER',
+  decimal: 'DECIMAL(10,2)',
+  boolean: 'BOOLEAN',
+  datetime: 'TIMESTAMP',
+  date: 'TIMESTAMP',
+  id: 'INTEGER',
+  json: 'JSONB',
+  array: 'JSONB',
+  object: 'JSONB'
+};
+
+function getTypeMapping(dbType: DbType): Record<string, string> {
+  return dbType === 'postgres' ? TYPE_MAPPING_POSTGRES : TYPE_MAPPING_MYSQL;
+}
+
+function q(name: string, dbType: DbType): string {
+  return dbType === 'postgres' ? `"${name}"` : `\`${name}\``;
+}
+
+export function getIdColumnDefinition(idType: IdentifierType = 'numeric', dbType: DbType = 'mysql'): string {
+  if (dbType === 'postgres') {
+    switch (idType) {
+      case 'uuid':   return '"id" UUID PRIMARY KEY DEFAULT gen_random_uuid()';
+      case 'nanoid': return '"id" VARCHAR(21) PRIMARY KEY';
+      default:       return '"id" SERIAL PRIMARY KEY';
+    }
+  }
   switch (idType) {
     case 'uuid':   return 'id BINARY(16) PRIMARY KEY DEFAULT (UUID_TO_BIN(UUID(), 1))';
     case 'nanoid': return 'id VARCHAR(21) PRIMARY KEY';
@@ -52,7 +83,14 @@ export function getIdColumnDefinition(idType: IdentifierType = 'numeric'): strin
   }
 }
 
-export function getFkColumnType(idType: IdentifierType = 'numeric'): string {
+export function getFkColumnType(idType: IdentifierType = 'numeric', dbType: DbType = 'mysql'): string {
+  if (dbType === 'postgres') {
+    switch (idType) {
+      case 'uuid':   return 'UUID';
+      case 'nanoid': return 'VARCHAR(21)';
+      default:       return 'INTEGER';
+    }
+  }
   switch (idType) {
     case 'uuid':   return 'BINARY(16)';
     case 'nanoid': return 'VARCHAR(21)';
@@ -60,24 +98,22 @@ export function getFkColumnType(idType: IdentifierType = 'numeric'): string {
   }
 }
 
-export function mapYamlTypeToSql(yamlType: string, availableAggregates: Set<string>, availableValueObjects?: Set<string>, identifiers: IdentifierType = 'numeric'): string {
-  // Simple aggregate reference → foreign key column matching PK type
+export function mapYamlTypeToSql(yamlType: string, availableAggregates: Set<string>, availableValueObjects?: Set<string>, identifiers: IdentifierType = 'numeric', dbType: DbType = 'mysql'): string {
   if (availableAggregates.has(yamlType)) {
-    return getFkColumnType(identifiers);
+    return getFkColumnType(identifiers, dbType);
   }
 
-  // Compound types: array ("Foo[]") or union ("Foo | Bar") → JSON column
   const parsed = parseFieldType(yamlType);
   if (parsed.isArray || parsed.isUnion) {
-    return 'JSON';
+    return dbType === 'postgres' ? 'JSONB' : 'JSON';
   }
 
-  // Named value object → stored as JSON
   if (availableValueObjects && availableValueObjects.has(yamlType)) {
-    return 'JSON';
+    return dbType === 'postgres' ? 'JSONB' : 'JSON';
   }
 
-  return TYPE_MAPPING[yamlType] || 'VARCHAR(255)';
+  const mapping = getTypeMapping(dbType);
+  return mapping[yamlType] || 'VARCHAR(255)';
 }
 
 /** Table name matches the store convention: singular lowercase aggregate name. */
@@ -113,52 +149,81 @@ export function generateCreateTableSQL(
   availableAggregates: Set<string>,
   availableValueObjects?: Set<string>,
   parentIdField?: string,
-  identifiers: IdentifierType = 'numeric'
+  identifiers: IdentifierType = 'numeric',
+  dbType: DbType = 'mysql'
 ): string {
   const tableName = getTableName(name);
   const columns: string[] = [];
   const indexes: string[] = [];
   const foreignKeys: string[] = [];
-  const fkType = getFkColumnType(identifiers);
+  const fkType = getFkColumnType(identifiers, dbType);
+  const isPg = dbType === 'postgres';
+  const tsType = isPg ? 'TIMESTAMP' : 'DATETIME';
+  const col = (n: string) => isPg ? `"${n}"` : n;
 
-  columns.push(`  ${getIdColumnDefinition(identifiers)}`);
+  columns.push(`  ${getIdColumnDefinition(identifiers, dbType)}`);
 
-  // Root aggregates get an ownerId column; child entities get a parent ID column.
   if (parentIdField) {
-    columns.push(`  ${parentIdField} ${fkType} NOT NULL`);
-    indexes.push(`  INDEX idx_${tableName}_${parentIdField} (${parentIdField})`);
+    columns.push(`  ${col(parentIdField)} ${fkType} NOT NULL`);
+    indexes.push(isPg
+      ? `  CREATE INDEX IF NOT EXISTS idx_${tableName}_${parentIdField} ON "${tableName}" ("${parentIdField}")`
+      : `  INDEX idx_${tableName}_${parentIdField} (${parentIdField})`);
   } else if (aggregate.root !== false) {
-    columns.push(`  ownerId ${fkType} NOT NULL`);
-    indexes.push(`  INDEX idx_${tableName}_ownerId (ownerId)`);
+    columns.push(`  ${col('ownerId')} ${fkType} NOT NULL`);
+    indexes.push(isPg
+      ? `  CREATE INDEX IF NOT EXISTS idx_${tableName}_ownerId ON "${tableName}" ("ownerId")`
+      : `  INDEX idx_${tableName}_ownerId (ownerId)`);
   }
 
   for (const [fieldName, field] of Object.entries(aggregate.fields)) {
     if (isRelationshipField(field.type, availableAggregates)) {
       const foreignKeyName = getForeignKeyFieldName(fieldName);
       const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
-      columns.push(`  ${foreignKeyName} ${fkType} ${nullable}`);
-      indexes.push(`  INDEX idx_${tableName}_${foreignKeyName} (${foreignKeyName})`);
+      columns.push(`  ${col(foreignKeyName)} ${fkType} ${nullable}`);
+      indexes.push(isPg
+        ? `  CREATE INDEX IF NOT EXISTS idx_${tableName}_${foreignKeyName} ON "${tableName}" ("${foreignKeyName}")`
+        : `  INDEX idx_${tableName}_${foreignKeyName} (${foreignKeyName})`);
       const refTableName = getTableName(field.type);
-      foreignKeys.push(
-        `  CONSTRAINT fk_${tableName}_${foreignKeyName} \n` +
-        `    FOREIGN KEY (${foreignKeyName}) \n` +
-        `    REFERENCES ${refTableName}(id) \n` +
-        `    ON DELETE RESTRICT \n` +
-        `    ON UPDATE CASCADE`
-      );
+      if (isPg) {
+        foreignKeys.push(
+          `  CONSTRAINT fk_${tableName}_${foreignKeyName} \n` +
+          `    FOREIGN KEY ("${foreignKeyName}") \n` +
+          `    REFERENCES "${refTableName}"("id") \n` +
+          `    ON DELETE RESTRICT \n` +
+          `    ON UPDATE CASCADE`
+        );
+      } else {
+        foreignKeys.push(
+          `  CONSTRAINT fk_${tableName}_${foreignKeyName} \n` +
+          `    FOREIGN KEY (${foreignKeyName}) \n` +
+          `    REFERENCES ${refTableName}(id) \n` +
+          `    ON DELETE RESTRICT \n` +
+          `    ON UPDATE CASCADE`
+        );
+      }
     } else {
-      const sqlType = mapYamlTypeToSql(field.type, availableAggregates, availableValueObjects, identifiers);
+      const sqlType = mapYamlTypeToSql(field.type, availableAggregates, availableValueObjects, identifiers, dbType);
       const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
-      columns.push(`  ${fieldName} ${sqlType} ${nullable}`);
+      columns.push(`  ${col(fieldName)} ${sqlType} ${nullable}`);
       if (['string', 'number', 'integer', 'id'].includes(field.type)) {
-        indexes.push(`  INDEX idx_${tableName}_${fieldName} (${fieldName})`);
+        indexes.push(isPg
+          ? `  CREATE INDEX IF NOT EXISTS idx_${tableName}_${fieldName} ON "${tableName}" ("${fieldName}")`
+          : `  INDEX idx_${tableName}_${fieldName} (${fieldName})`);
       }
     }
   }
 
-  columns.push('  createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP');
-  columns.push('  updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP');
-  columns.push('  deletedAt DATETIME NULL DEFAULT NULL');
+  columns.push(`  ${col('createdAt')} ${tsType} NOT NULL DEFAULT CURRENT_TIMESTAMP`);
+  columns.push(`  ${col('updatedAt')} ${tsType} NOT NULL DEFAULT CURRENT_TIMESTAMP${isPg ? '' : ' ON UPDATE CURRENT_TIMESTAMP'}`);
+  columns.push(`  ${col('deletedAt')} ${tsType} NULL DEFAULT NULL`);
+
+  if (isPg) {
+    indexes.push(`  CREATE INDEX IF NOT EXISTS idx_${tableName}_deletedAt ON "${tableName}" ("deletedAt")`);
+    indexes.push(`  CREATE INDEX IF NOT EXISTS idx_${tableName}_createdAt ON "${tableName}" ("createdAt")`);
+    const allParts = [...columns, ...foreignKeys];
+    const indexStatements = indexes.map(idx => `${idx.trim()};`).join('\n');
+    return `CREATE TABLE IF NOT EXISTS "${tableName}" (\n${allParts.join(',\n')}\n);\n${indexStatements}`;
+  }
 
   indexes.push(`  INDEX idx_${tableName}_deletedAt (deletedAt)`);
   indexes.push(`  INDEX idx_${tableName}_createdAt (createdAt)`);
@@ -167,8 +232,8 @@ export function generateCreateTableSQL(
   return `CREATE TABLE IF NOT EXISTS \`${tableName}\` (\n${allParts.join(',\n')}\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`;
 }
 
-export function generateDropTableSQL(tableName: string): string {
-  return `DROP TABLE IF EXISTS \`${tableName}\`;`;
+export function generateDropTableSQL(tableName: string, dbType: DbType = 'mysql'): string {
+  return `DROP TABLE IF EXISTS ${q(tableName, dbType)};`;
 }
 
 export function generateAddColumnSQL(
@@ -177,21 +242,22 @@ export function generateAddColumnSQL(
   field: AggregateFieldConfig,
   availableAggregates: Set<string>,
   availableValueObjects?: Set<string>,
-  identifiers: IdentifierType = 'numeric'
+  identifiers: IdentifierType = 'numeric',
+  dbType: DbType = 'mysql'
 ): string {
   if (isRelationshipField(field.type, availableAggregates)) {
     const foreignKeyName = getForeignKeyFieldName(fieldName);
     const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
-    return `ALTER TABLE \`${tableName}\` ADD COLUMN \`${foreignKeyName}\` ${getFkColumnType(identifiers)} ${nullable};`;
+    return `ALTER TABLE ${q(tableName, dbType)} ADD COLUMN ${q(foreignKeyName, dbType)} ${getFkColumnType(identifiers, dbType)} ${nullable};`;
   } else {
-    const sqlType = mapYamlTypeToSql(field.type, availableAggregates, availableValueObjects, identifiers);
+    const sqlType = mapYamlTypeToSql(field.type, availableAggregates, availableValueObjects, identifiers, dbType);
     const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
-    return `ALTER TABLE \`${tableName}\` ADD COLUMN \`${fieldName}\` ${sqlType} ${nullable};`;
+    return `ALTER TABLE ${q(tableName, dbType)} ADD COLUMN ${q(fieldName, dbType)} ${sqlType} ${nullable};`;
   }
 }
 
-export function generateDropColumnSQL(tableName: string, columnName: string): string {
-  return `ALTER TABLE \`${tableName}\` DROP COLUMN \`${columnName}\`;`;
+export function generateDropColumnSQL(tableName: string, columnName: string, dbType: DbType = 'mysql'): string {
+  return `ALTER TABLE ${q(tableName, dbType)} DROP COLUMN ${q(columnName, dbType)};`;
 }
 
 export function generateModifyColumnSQL(
@@ -200,17 +266,25 @@ export function generateModifyColumnSQL(
   field: AggregateFieldConfig,
   availableAggregates: Set<string>,
   availableValueObjects?: Set<string>,
-  identifiers: IdentifierType = 'numeric'
+  identifiers: IdentifierType = 'numeric',
+  dbType: DbType = 'mysql'
 ): string {
-  if (isRelationshipField(field.type, availableAggregates)) {
-    const foreignKeyName = getForeignKeyFieldName(fieldName);
-    const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
-    return `ALTER TABLE \`${tableName}\` MODIFY COLUMN \`${foreignKeyName}\` ${getFkColumnType(identifiers)} ${nullable};`;
-  } else {
-    const sqlType = mapYamlTypeToSql(field.type, availableAggregates, availableValueObjects, identifiers);
-    const nullable = field.required === false ? 'NULL DEFAULT NULL' : 'NOT NULL';
-    return `ALTER TABLE \`${tableName}\` MODIFY COLUMN \`${fieldName}\` ${sqlType} ${nullable};`;
+  const colName = isRelationshipField(field.type, availableAggregates)
+    ? getForeignKeyFieldName(fieldName)
+    : fieldName;
+  const sqlType = isRelationshipField(field.type, availableAggregates)
+    ? getFkColumnType(identifiers, dbType)
+    : mapYamlTypeToSql(field.type, availableAggregates, availableValueObjects, identifiers, dbType);
+  const nullable = field.required === false;
+
+  if (dbType === 'postgres') {
+    const alterType = `ALTER TABLE ${q(tableName, dbType)} ALTER COLUMN ${q(colName, dbType)} TYPE ${sqlType};`;
+    const alterNull = `ALTER TABLE ${q(tableName, dbType)} ALTER COLUMN ${q(colName, dbType)} ${nullable ? 'DROP NOT NULL' : 'SET NOT NULL'};`;
+    return `${alterType}\n${alterNull}`;
   }
+
+  const nullStr = nullable ? 'NULL DEFAULT NULL' : 'NOT NULL';
+  return `ALTER TABLE ${q(tableName, dbType)} MODIFY COLUMN ${q(colName, dbType)} ${sqlType} ${nullStr};`;
 }
 
 export function loadSchemaState(stateFilePath: string): SchemaState | null {
@@ -270,7 +344,8 @@ export function compareSchemas(
   oldState: SchemaState | null,
   newAggregates: Record<string, AggregateConfig>,
   availableValueObjects?: Set<string>,
-  identifiers: IdentifierType = 'numeric'
+  identifiers: IdentifierType = 'numeric',
+  dbType: DbType = 'mysql'
 ): string[] {
   const sqlStatements: string[] = [];
   const availableAggregates = new Set(Object.keys(newAggregates));
@@ -283,7 +358,7 @@ export function compareSchemas(
       const parentName = childToParent.get(name);
       const parentIdField = parentName ? `${parentName.toLowerCase()}Id` : undefined;
       sqlStatements.push(`-- Create ${tableName} table`);
-      sqlStatements.push(generateCreateTableSQL(name, aggregate, availableAggregates, availableValueObjects, parentIdField, identifiers));
+      sqlStatements.push(generateCreateTableSQL(name, aggregate, availableAggregates, availableValueObjects, parentIdField, identifiers, dbType));
       sqlStatements.push('');
     }
     return sqlStatements;
@@ -296,7 +371,7 @@ export function compareSchemas(
     if (!newAggregates[oldName]) {
       const tableName = getTableName(oldName);
       sqlStatements.push(`-- Drop ${tableName} table`);
-      sqlStatements.push(generateDropTableSQL(tableName));
+      sqlStatements.push(generateDropTableSQL(tableName, dbType));
       sqlStatements.push('');
     }
   }
@@ -310,7 +385,7 @@ export function compareSchemas(
 
     if (!oldAggregate) {
       sqlStatements.push(`-- Create ${tableName} table`);
-      sqlStatements.push(generateCreateTableSQL(name, newAggregate, availableAggregates, availableValueObjects, parentIdField, identifiers));
+      sqlStatements.push(generateCreateTableSQL(name, newAggregate, availableAggregates, availableValueObjects, parentIdField, identifiers, dbType));
       sqlStatements.push('');
     } else {
       const oldFields = oldAggregate.fields;
@@ -323,7 +398,7 @@ export function compareSchemas(
             ? getForeignKeyFieldName(oldFieldName)
             : oldFieldName;
           sqlStatements.push(`-- Drop column ${columnName} from ${tableName}`);
-          sqlStatements.push(generateDropColumnSQL(tableName, columnName));
+          sqlStatements.push(generateDropColumnSQL(tableName, columnName, dbType));
           sqlStatements.push('');
         }
       }
@@ -334,7 +409,7 @@ export function compareSchemas(
 
         if (!oldField) {
           sqlStatements.push(`-- Add column ${fieldName} to ${tableName}`);
-          sqlStatements.push(generateAddColumnSQL(tableName, fieldName, newField, availableAggregates, availableValueObjects, identifiers));
+          sqlStatements.push(generateAddColumnSQL(tableName, fieldName, newField, availableAggregates, availableValueObjects, identifiers, dbType));
           sqlStatements.push('');
         } else {
           const typeChanged = oldField.type !== newField.type;
@@ -342,7 +417,7 @@ export function compareSchemas(
 
           if (typeChanged || requiredChanged) {
             sqlStatements.push(`-- Modify column ${fieldName} in ${tableName}`);
-            sqlStatements.push(generateModifyColumnSQL(tableName, fieldName, newField, availableAggregates, availableValueObjects, identifiers));
+            sqlStatements.push(generateModifyColumnSQL(tableName, fieldName, newField, availableAggregates, availableValueObjects, identifiers, dbType));
             sqlStatements.push('');
           }
         }

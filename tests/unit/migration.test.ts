@@ -31,7 +31,7 @@ describe('migrationUtils', () => {
     });
   });
 
-  describe('mapYamlTypeToSql', () => {
+  describe('mapYamlTypeToSql (mysql)', () => {
     const noAggregates = new Set<string>();
     const withVOs = new Set<string>(['Money', 'Address']);
 
@@ -77,6 +77,45 @@ describe('migrationUtils', () => {
     it('maps compound array/union VO types to JSON', () => {
       assert.strictEqual(mapYamlTypeToSql('Money[]', noAggregates, withVOs), 'JSON');
       assert.strictEqual(mapYamlTypeToSql('Money | Address', noAggregates, withVOs), 'JSON');
+    });
+  });
+
+  describe('mapYamlTypeToSql (postgres)', () => {
+    const noAggregates = new Set<string>();
+    const withVOs = new Set<string>(['Money', 'Address']);
+
+    it('maps string to VARCHAR(255)', () => {
+      assert.strictEqual(mapYamlTypeToSql('string', noAggregates, undefined, 'numeric', 'postgres'), 'VARCHAR(255)');
+    });
+
+    it('maps number to INTEGER', () => {
+      assert.strictEqual(mapYamlTypeToSql('number', noAggregates, undefined, 'numeric', 'postgres'), 'INTEGER');
+    });
+
+    it('maps boolean to BOOLEAN', () => {
+      assert.strictEqual(mapYamlTypeToSql('boolean', noAggregates, undefined, 'numeric', 'postgres'), 'BOOLEAN');
+    });
+
+    it('maps datetime to TIMESTAMP', () => {
+      assert.strictEqual(mapYamlTypeToSql('datetime', noAggregates, undefined, 'numeric', 'postgres'), 'TIMESTAMP');
+    });
+
+    it('maps json to JSONB', () => {
+      assert.strictEqual(mapYamlTypeToSql('json', noAggregates, undefined, 'numeric', 'postgres'), 'JSONB');
+    });
+
+    it('maps value objects to JSONB', () => {
+      assert.strictEqual(mapYamlTypeToSql('Money', noAggregates, withVOs, 'numeric', 'postgres'), 'JSONB');
+    });
+
+    it('maps aggregate reference to INTEGER', () => {
+      const aggregates = new Set(['Author']);
+      assert.strictEqual(mapYamlTypeToSql('Author', aggregates, undefined, 'numeric', 'postgres'), 'INTEGER');
+    });
+
+    it('maps compound array/union VO types to JSONB', () => {
+      assert.strictEqual(mapYamlTypeToSql('Money[]', noAggregates, withVOs, 'numeric', 'postgres'), 'JSONB');
+      assert.strictEqual(mapYamlTypeToSql('Money | Address', noAggregates, withVOs, 'numeric', 'postgres'), 'JSONB');
     });
   });
 
@@ -342,7 +381,7 @@ describe('migrationUtils', () => {
 
 });
 
-describe('getIdColumnDefinition', () => {
+describe('getIdColumnDefinition (mysql)', () => {
   it('returns INT AUTO_INCREMENT for numeric (default)', () => {
     expect(getIdColumnDefinition('numeric')).toContain('INT AUTO_INCREMENT PRIMARY KEY');
   });
@@ -360,7 +399,27 @@ describe('getIdColumnDefinition', () => {
   });
 });
 
-describe('getFkColumnType', () => {
+describe('getIdColumnDefinition (postgres)', () => {
+  it('returns SERIAL PRIMARY KEY for numeric', () => {
+    const col = getIdColumnDefinition('numeric', 'postgres');
+    expect(col).toContain('SERIAL PRIMARY KEY');
+    expect(col).toNotContain('AUTO_INCREMENT');
+  });
+
+  it('returns UUID with gen_random_uuid() for uuid', () => {
+    const col = getIdColumnDefinition('uuid', 'postgres');
+    expect(col).toContain('UUID PRIMARY KEY');
+    expect(col).toContain('gen_random_uuid()');
+    expect(col).toNotContain('BINARY');
+  });
+
+  it('returns VARCHAR(21) for nanoid', () => {
+    const col = getIdColumnDefinition('nanoid', 'postgres');
+    expect(col).toContain('VARCHAR(21) PRIMARY KEY');
+  });
+});
+
+describe('getFkColumnType (mysql)', () => {
   it('returns INT for numeric', () => {
     assert.strictEqual(getFkColumnType('numeric'), 'INT');
   });
@@ -371,6 +430,216 @@ describe('getFkColumnType', () => {
 
   it('returns VARCHAR(21) for nanoid', () => {
     assert.strictEqual(getFkColumnType('nanoid'), 'VARCHAR(21)');
+  });
+});
+
+describe('getFkColumnType (postgres)', () => {
+  it('returns INTEGER for numeric', () => {
+    assert.strictEqual(getFkColumnType('numeric', 'postgres'), 'INTEGER');
+  });
+
+  it('returns UUID for uuid', () => {
+    assert.strictEqual(getFkColumnType('uuid', 'postgres'), 'UUID');
+  });
+
+  it('returns VARCHAR(21) for nanoid', () => {
+    assert.strictEqual(getFkColumnType('nanoid', 'postgres'), 'VARCHAR(21)');
+  });
+});
+
+// ─── Postgres-specific generation tests ──────────────────────────────────────
+
+describe('generateCreateTableSQL — postgres root aggregate', () => {
+  const rootAggregate: AggregateConfig = {
+    root: true,
+    fields: {
+      title: { type: 'string', required: true },
+      content: { type: 'string', required: false },
+      isActive: { type: 'boolean', required: true },
+      publishedAt: { type: 'datetime', required: false },
+    },
+  };
+  const available = new Set(['Post']);
+  const sql = generateCreateTableSQL('Post', rootAggregate, available, undefined, undefined, 'numeric', 'postgres');
+
+  it('uses double-quoted table name without ENGINE clause', () => {
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS "post"');
+    expect(sql).toNotContain('ENGINE=InnoDB');
+    expect(sql).toNotContain('`');
+  });
+
+  it('uses SERIAL PRIMARY KEY for numeric id', () => {
+    expect(sql).toContain('SERIAL PRIMARY KEY');
+    expect(sql).toNotContain('AUTO_INCREMENT');
+  });
+
+  it('uses INTEGER for ownerId', () => {
+    expect(sql).toContain('"ownerId" INTEGER NOT NULL');
+  });
+
+  it('uses BOOLEAN instead of TINYINT(1)', () => {
+    expect(sql).toContain('"isActive" BOOLEAN NOT NULL');
+    expect(sql).toNotContain('TINYINT');
+  });
+
+  it('uses TIMESTAMP instead of DATETIME', () => {
+    expect(sql).toContain('"createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP');
+    expect(sql).toContain('"updatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP');
+    expect(sql).toContain('"deletedAt" TIMESTAMP NULL DEFAULT NULL');
+    expect(sql).toNotContain('DATETIME');
+  });
+
+  it('does not use ON UPDATE CURRENT_TIMESTAMP', () => {
+    expect(sql).toNotContain('ON UPDATE CURRENT_TIMESTAMP');
+  });
+
+  it('generates separate CREATE INDEX statements', () => {
+    expect(sql).toContain('CREATE INDEX IF NOT EXISTS idx_post_deletedAt ON "post"');
+    expect(sql).toContain('CREATE INDEX IF NOT EXISTS idx_post_createdAt ON "post"');
+  });
+});
+
+describe('generateCreateTableSQL — postgres FK references', () => {
+  const bookAggregate: AggregateConfig = {
+    root: true,
+    fields: {
+      title: { type: 'string', required: true },
+      author: { type: 'Author', required: false },
+    },
+  };
+  const available = new Set(['Author', 'Book']);
+  const sql = generateCreateTableSQL('Book', bookAggregate, available, undefined, undefined, 'numeric', 'postgres');
+
+  it('FK column uses double-quoted camelCase name with INTEGER type', () => {
+    expect(sql).toContain('"authorId" INTEGER');
+  });
+
+  it('FK REFERENCES uses double-quoted table and column', () => {
+    expect(sql).toContain('REFERENCES "author"("id")');
+  });
+});
+
+describe('generateCreateTableSQL — postgres value objects', () => {
+  const aggregate: AggregateConfig = {
+    root: true,
+    fields: {
+      amount: { type: 'Money', required: true },
+      tags: { type: 'json', required: false },
+    },
+  };
+  const available = new Set(['Invoice']);
+  const valueObjects = new Set(['Money']);
+  const sql = generateCreateTableSQL('Invoice', aggregate, available, valueObjects, undefined, 'numeric', 'postgres');
+
+  it('maps value objects to JSONB', () => {
+    expect(sql).toContain('"amount" JSONB NOT NULL');
+  });
+
+  it('maps json fields to JSONB', () => {
+    expect(sql).toContain('"tags" JSONB NULL DEFAULT NULL');
+  });
+});
+
+describe('generateCreateTableSQL — postgres uuid identifiers', () => {
+  const rootAggregate: AggregateConfig = {
+    root: true,
+    fields: {
+      title: { type: 'string', required: true },
+    },
+  };
+  const available = new Set(['Post']);
+  const sql = generateCreateTableSQL('Post', rootAggregate, available, undefined, undefined, 'uuid', 'postgres');
+
+  it('id column uses UUID with gen_random_uuid()', () => {
+    expect(sql).toContain('UUID PRIMARY KEY DEFAULT gen_random_uuid()');
+    expect(sql).toNotContain('BINARY');
+  });
+
+  it('ownerId column uses UUID type', () => {
+    expect(sql).toContain('"ownerId" UUID NOT NULL');
+  });
+});
+
+describe('compareSchemas — postgres initial migration', () => {
+  const aggregates: Record<string, AggregateConfig> = {
+    Post: {
+      root: true,
+      fields: {
+        title: { type: 'string', required: true },
+        body: { type: 'string', required: false },
+      },
+    },
+  };
+
+  const statements = compareSchemas(null, aggregates, undefined, 'numeric', 'postgres');
+  const joined = statements.join('\n');
+
+  it('generates postgres-style CREATE TABLE', () => {
+    expect(joined).toContain('CREATE TABLE IF NOT EXISTS "post"');
+    expect(joined).toNotContain('`');
+    expect(joined).toNotContain('ENGINE=InnoDB');
+  });
+
+  it('uses SERIAL for id and INTEGER for ownerId', () => {
+    expect(joined).toContain('SERIAL PRIMARY KEY');
+    expect(joined).toContain('"ownerId" INTEGER NOT NULL');
+  });
+
+  it('uses TIMESTAMP for audit columns', () => {
+    expect(joined).toContain('"createdAt" TIMESTAMP');
+    expect(joined).toContain('"deletedAt" TIMESTAMP NULL DEFAULT NULL');
+  });
+});
+
+describe('compareSchemas — postgres schema diff (add column, drop column, modify column)', () => {
+  const oldAggregates: Record<string, AggregateConfig> = {
+    Post: {
+      root: true,
+      fields: {
+        title: { type: 'string', required: true },
+        oldField: { type: 'number', required: true },
+      },
+    },
+  };
+  const newAggregates: Record<string, AggregateConfig> = {
+    Post: {
+      root: true,
+      fields: {
+        title: { type: 'string', required: false },
+        subtitle: { type: 'string', required: false },
+      },
+    },
+    Comment: {
+      root: true,
+      fields: { text: { type: 'string', required: true } },
+    },
+  };
+
+  const oldState = {
+    aggregates: oldAggregates,
+    version: '2024-01-01',
+    timestamp: '2024-01-01T00:00:00.000Z',
+  };
+
+  const statements = compareSchemas(oldState, newAggregates, undefined, 'numeric', 'postgres');
+  const joined = statements.join('\n');
+
+  it('generates postgres ADD COLUMN with double-quoted names', () => {
+    expect(joined).toContain('ADD COLUMN "subtitle"');
+  });
+
+  it('generates postgres DROP COLUMN with double-quoted names', () => {
+    expect(joined).toContain('DROP COLUMN "oldField"');
+  });
+
+  it('generates postgres ALTER COLUMN TYPE + SET/DROP NOT NULL instead of MODIFY COLUMN', () => {
+    expect(joined).toContain('ALTER COLUMN "title" TYPE');
+    expect(joined).toContain('ALTER COLUMN "title" DROP NOT NULL');
+    expect(joined).toNotContain('MODIFY COLUMN');
+  });
+
+  it('generates postgres CREATE TABLE for new aggregate', () => {
+    expect(joined).toContain('CREATE TABLE IF NOT EXISTS "comment"');
   });
 });
 
@@ -387,6 +656,22 @@ describe('mapYamlTypeToSql — identifier-aware aggregate FK type', () => {
 
   it('maps aggregate reference to VARCHAR(21) for nanoid', () => {
     assert.strictEqual(mapYamlTypeToSql('Author', aggregates, undefined, 'nanoid'), 'VARCHAR(21)');
+  });
+});
+
+describe('mapYamlTypeToSql — postgres identifier-aware aggregate FK type', () => {
+  const aggregates = new Set(['Author']);
+
+  it('maps aggregate reference to INTEGER for numeric postgres', () => {
+    assert.strictEqual(mapYamlTypeToSql('Author', aggregates, undefined, 'numeric', 'postgres'), 'INTEGER');
+  });
+
+  it('maps aggregate reference to UUID for uuid postgres', () => {
+    assert.strictEqual(mapYamlTypeToSql('Author', aggregates, undefined, 'uuid', 'postgres'), 'UUID');
+  });
+
+  it('maps aggregate reference to VARCHAR(21) for nanoid postgres', () => {
+    assert.strictEqual(mapYamlTypeToSql('Author', aggregates, undefined, 'nanoid', 'postgres'), 'VARCHAR(21)');
   });
 });
 
