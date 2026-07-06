@@ -46,6 +46,7 @@ export const frontendScriptTemplate = loadTemplate('frontendScriptTemplate');
 export const translationsTemplate = loadTemplate('translationsTemplate');
 export const cursorRulesTemplate = loadTemplate('cursorRulesTemplate');
 export const systemTsTemplate = loadTemplate('systemTsTemplate');
+export const envTemplate = loadTemplate('envTemplate');
 
 // Directory structure constants
 export const DEFAULT_DIRECTORIES = {
@@ -70,5 +71,6 @@ export const DEFAULT_FILES = {
   FRONTEND_SCRIPT: 'app.js',
   TRANSLATIONS: 'translations.json',
   CURSOR_RULES: 'AGENTS.md',
-  SYSTEM_TS: 'system.ts'
+  SYSTEM_TS: 'system.ts',
+  ENV: '.env'
 } as const;

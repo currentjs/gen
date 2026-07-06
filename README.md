@@ -495,15 +495,29 @@ The SQL types of primary keys and foreign keys are determined by the `config.ide
 
 After generating the file, the schema state is updated so the next `migrate commit` only produces a diff of subsequent changes.
 
-### `migrate push` *(not yet implemented)*
+### `migrate push`
 
-Will apply pending migration files to the database.
+```bash
+currentjs migrate push
+```
 
-### `migrate update` *(not yet implemented)*
+Applies all pending `.sql` files from the `migrations/` directory to the database. Applied migrations are tracked in a `_migrations` table (created automatically on first run). Files are applied in ascending filename (timestamp) order.
 
-Will compare the live database schema against the current model definitions and generate a migration to bring them in sync.
+Requires a database connection — set the `MYSQL` or `POSTGRES` environment variable (or add it to a `.env` file in the project root):
 
-→ Reference: [migrate commit](REFERENCE.md#migrate-commit)
+```bash
+MYSQL='{"host":"localhost","port":3306,"user":"root","password":"secret","database":"myapp"}'
+```
+
+### `migrate pull`
+
+```bash
+currentjs migrate pull
+```
+
+Introspects the live database schema and updates `migrations/schema_state.yaml` to match. Use this when the database has been modified outside the normal migration workflow. After running `migrate pull`, the next `migrate commit` will detect no diff.
+
+→ Reference: [migrate commit](REFERENCE.md#migrate-commit) · [migrate push](REFERENCE.md#migrate-push) · [migrate pull](REFERENCE.md#migrate-pull)
 
 ## Template System
 

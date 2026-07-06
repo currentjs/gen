@@ -7,6 +7,7 @@ import { loadAppConfig, getModuleEntries } from '../utils/commandUtils';
 import { isValidModuleConfig, AggregateConfig, normalizeIdentifierType, IdentifierType } from '../types/configTypes';
 import {
   SchemaState,
+  DbType,
   loadSchemaState,
   saveSchemaState,
   compareSchemas,
@@ -18,6 +19,7 @@ interface CollectedSchema {
   aggregates: Record<string, AggregateConfig>;
   valueObjects: Set<string>;
   identifiers: IdentifierType;
+  dbType: DbType;
 }
 
 function collectSchemaFromModules(appYamlPath: string): CollectedSchema {
@@ -30,6 +32,8 @@ function collectSchemaFromModules(appYamlPath: string): CollectedSchema {
   const sources: string[] = [];
   const rawIdentifiers = appConfig.config?.identifiers ?? 'numeric';
   const identifiers = normalizeIdentifierType(rawIdentifiers);
+  const rawDbType = appConfig.config?.database ?? 'mysql';
+  const dbType: DbType = rawDbType === 'postgres' ? 'postgres' : 'mysql';
 
   for (const entry of moduleEntries) {
     const moduleYamlPath = path.isAbsolute(entry.path)
@@ -70,7 +74,7 @@ function collectSchemaFromModules(appYamlPath: string): CollectedSchema {
     console.log(colors.gray(`   Sources: ${sources.join(', ')}`));
   }
 
-  return { aggregates: allAggregates, valueObjects: allValueObjects, identifiers };
+  return { aggregates: allAggregates, valueObjects: allValueObjects, identifiers, dbType };
 }
 
 export function handleMigrateCommit(yamlPath?: string): void {
@@ -95,7 +99,7 @@ export function handleMigrateCommit(yamlPath?: string): void {
 
     // eslint-disable-next-line no-console
     console.log(colors.cyan('\n📋 Collecting aggregates from all modules...'));
-    const { aggregates: currentAggregates, valueObjects: currentValueObjects, identifiers } = collectSchemaFromModules(resolvedYamlPath);
+    const { aggregates: currentAggregates, valueObjects: currentValueObjects, identifiers, dbType } = collectSchemaFromModules(resolvedYamlPath);
 
     if (Object.keys(currentAggregates).length === 0) {
       // eslint-disable-next-line no-console
@@ -118,7 +122,7 @@ export function handleMigrateCommit(yamlPath?: string): void {
 
     // eslint-disable-next-line no-console
     console.log(colors.cyan('\n🔍 Comparing schemas...'));
-    const sqlStatements = compareSchemas(oldState, currentAggregates, currentValueObjects, identifiers);
+    const sqlStatements = compareSchemas(oldState, currentAggregates, currentValueObjects, identifiers, dbType);
 
     if (sqlStatements.length === 0 || sqlStatements.every(s => s.trim() === '' || s.startsWith('--'))) {
       // eslint-disable-next-line no-console
@@ -157,7 +161,7 @@ export function handleMigrateCommit(yamlPath?: string): void {
     // eslint-disable-next-line no-console
     console.log(colors.gray(`   Location: Application-level migrations directory`));
     // eslint-disable-next-line no-console
-    console.log(colors.cyan('\n💡 Next step: Run "currentjs migrate push" to apply this migration to the database (not implemented yet).'));
+    console.log(colors.cyan('\n💡 Next step: Run "currentjs migrate push" to apply this migration to the database.'));
 
   } catch (error) {
     // eslint-disable-next-line no-console

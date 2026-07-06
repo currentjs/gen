@@ -1,6 +1,9 @@
 import { createWebServer } from '@currentjs/router';
 import { createTemplateEngine } from '@currentjs/templating';
 import * as path from 'path';
+import { loadEnv } from './system';
+
+loadEnv();
 
 /** DO NOT CHANGE THESE LINES **/
 // currentjs:controllers:start
@@ -12,7 +15,7 @@ export async function main() {
   const webDir = path.join(process.cwd(), 'web');
   const renderEngine = createTemplateEngine({ directories: [process.cwd()] });
   const app = createWebServer({ controllers, webDir }, { 
-    port: 3000, 
+    port: parseInt(process.env.PORT || '3000'), 
     renderer: (template, data, layout) => {
       try {
         return layout ? renderEngine.renderWithLayout(layout, template, data) : renderEngine.render(template, data);

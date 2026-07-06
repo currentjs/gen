@@ -124,7 +124,7 @@ export async function handleGenerateAll(
     // eslint-disable-next-line no-await-in-loop
     await serviceGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers);
     // eslint-disable-next-line no-await-in-loop
-    await storeGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers);
+    await storeGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers, entry.database === 'postgres' ? 'postgres' : 'mysql');
     // eslint-disable-next-line no-await-in-loop
     await controllerGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers);
     // eslint-disable-next-line no-await-in-loop

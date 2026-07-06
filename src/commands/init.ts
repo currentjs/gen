@@ -13,6 +13,7 @@ import {
   translationsTemplate,
   cursorRulesTemplate,
   systemTsTemplate,
+  envTemplate,
   DEFAULT_DIRECTORIES,
   DEFAULT_FILES
 } from '../generators/templates/appTemplates';
@@ -36,6 +37,7 @@ export function handleInit(rawName?: string): void {
   ensureDir(migrationsDir);
 
   // Files using imported templates
+  writeFileIfMissing(path.join(targetRoot, DEFAULT_FILES.ENV), envTemplate);
   writeFileIfMissing(path.join(targetRoot, DEFAULT_FILES.PACKAGE_JSON), packageJsonTemplate(path.basename(targetRoot)));
   writeFileIfMissing(path.join(targetRoot, DEFAULT_FILES.TSCONFIG), tsconfigTemplate);
   writeFileIfMissing(path.join(targetRoot, DEFAULT_FILES.APP_YAML), appYamlTemplate);

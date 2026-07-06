@@ -16,8 +16,8 @@ export class {{ENTITY_NAME}}Store {
 
   constructor(private db: ISqlProvider) {}
 
-  private toMySQLDatetime(date: Date): string {
-    return date.toISOString().slice(0, 19).replace('T', ' ');
+  private {{DATETIME_HELPER_NAME}}(date: Date): string {
+    {{DATETIME_HELPER_BODY}}
   }
 
   private ensureParsed(value: any): any {
@@ -35,7 +35,7 @@ export class {{ENTITY_NAME}}Store {
 
   async getById(id: {{ID_TYPE}}): Promise<{{ENTITY_NAME}} | null> {
     const result = await this.db.query(
-      \`SELECT {{FIELD_NAMES}} FROM \\\`\${this.tableName}\\\` WHERE {{WHERE_ID_EXPR}} AND deletedAt IS NULL\`,
+      \`SELECT {{FIELD_NAMES}} FROM {{Q}}\${this.tableName}{{Q}} WHERE {{WHERE_ID_EXPR}} AND {{Q}}deletedAt{{Q}} IS NULL\`,
       { id{{ID_PARAM_EXPR}} }
     );
 
@@ -50,16 +50,16 @@ export class {{ENTITY_NAME}}Store {
 {{INSERT_ID_PRE_LOGIC}}
     const data: Partial<{{ENTITY_NAME}}Row> = {
 {{INSERT_ID_DATA}}{{INSERT_DATA_MAPPING}},
-      createdAt: this.toMySQLDatetime(now),
-      updatedAt: this.toMySQLDatetime(now)
+      createdAt: this.{{DATETIME_HELPER_NAME}}(now),
+      updatedAt: this.{{DATETIME_HELPER_NAME}}(now)
     };
 
     const cleanData = Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined));
-    const fieldsList = Object.keys(cleanData).map(f => \`\\\`\${f}\\\`\`).join(', ');
+    const fieldsList = Object.keys(cleanData).map(f => \`{{Q}}\${f}{{Q}}\`).join(', ');
     const placeholders = Object.keys(cleanData).map(f => \`:\${f}\`).join(', ');
 
     const result = await this.db.query(
-      \`INSERT INTO \\\`\${this.tableName}\\\` (\${fieldsList}) VALUES (\${placeholders})\`,
+      \`INSERT INTO {{Q}}\${this.tableName}{{Q}} (\${fieldsList}) VALUES (\${placeholders}){{INSERT_RETURNING_CLAUSE}}\`,
       cleanData
     );
 
@@ -76,16 +76,16 @@ export class {{ENTITY_NAME}}Store {
     const now = new Date();
     const rawData: Partial<{{ENTITY_NAME}}Row> = {
 {{UPDATE_DATA_MAPPING}},
-      updatedAt: this.toMySQLDatetime(now)
+      updatedAt: this.{{DATETIME_HELPER_NAME}}(now)
     };
 
     const cleanData = Object.fromEntries(Object.entries(rawData).filter(([, v]) => v !== undefined));
     const updateFields = {{UPDATE_FIELDS_ARRAY}}
       .filter(f => f in cleanData)
-      .map(f => \`\\\`\${f}\\\` = :\${f}\`).join(', ');
+      .map(f => \`{{Q}}\${f}{{Q}} = :\${f}\`).join(', ');
 
     const result = await this.db.query(
-      \`UPDATE \\\`\${this.tableName}\\\` SET \${updateFields}, updatedAt = :updatedAt WHERE {{WHERE_ID_EXPR}}\`,
+      \`UPDATE {{Q}}\${this.tableName}{{Q}} SET \${updateFields}, {{Q}}updatedAt{{Q}} = :updatedAt WHERE {{WHERE_ID_EXPR}}\`,
       { ...cleanData, id{{ID_PARAM_EXPR}} }
     );
 
@@ -99,8 +99,8 @@ export class {{ENTITY_NAME}}Store {
   async softDelete(id: {{ID_TYPE}}): Promise<boolean> {
     const now = new Date();
     const result = await this.db.query(
-      \`UPDATE \\\`\${this.tableName}\\\` SET deletedAt = :deletedAt WHERE {{WHERE_ID_EXPR}}\`,
-      { deletedAt: this.toMySQLDatetime(now), id{{ID_PARAM_EXPR}} }
+      \`UPDATE {{Q}}\${this.tableName}{{Q}} SET {{Q}}deletedAt{{Q}} = :deletedAt WHERE {{WHERE_ID_EXPR}}\`,
+      { deletedAt: this.{{DATETIME_HELPER_NAME}}(now), id{{ID_PARAM_EXPR}} }
     );
 
     return result.success;
@@ -108,7 +108,7 @@ export class {{ENTITY_NAME}}Store {
 
   async hardDelete(id: {{ID_TYPE}}): Promise<boolean> {
     const result = await this.db.query(
-      \`DELETE FROM \\\`\${this.tableName}\\\` WHERE {{WHERE_ID_EXPR}}\`,
+      \`DELETE FROM {{Q}}\${this.tableName}{{Q}} WHERE {{WHERE_ID_EXPR}}\`,
       { id{{ID_PARAM_EXPR}} }
     );
 
@@ -120,7 +120,7 @@ export class {{ENTITY_NAME}}Store {
 
 export const storeFileTemplate = `import { Injectable } from '../../../../system';
 import { {{ENTITY_IMPORT_ITEMS}} } from '../../domain/entities/{{ENTITY_NAME}}';
-import type { ISqlProvider } from '@currentjs/provider-mysql';{{CRYPTO_IMPORT}}{{VALUE_OBJECT_IMPORTS}}{{AGGREGATE_REF_IMPORTS}}
+import type { ISqlProvider } from '{{PROVIDER_IMPORT}}';{{CRYPTO_IMPORT}}{{VALUE_OBJECT_IMPORTS}}{{AGGREGATE_REF_IMPORTS}}
 
 {{ROW_INTERFACE}}
 

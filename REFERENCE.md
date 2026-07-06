@@ -17,6 +17,8 @@ Version: 0.5.6
   - [diff](#diff)
   - [infer](#infer)
   - [migrate commit](#migrate-commit)
+  - [migrate push](#migrate-push)
+  - [migrate pull](#migrate-pull)
 - [Global Options](#global-options)
 - [Application Configuration (app.yaml)](#application-configuration-appyaml)
 - [Module Configuration (module YAML)](#module-configuration-module-yaml)
@@ -291,7 +293,39 @@ currentjs migrate commit
 
 Collects model definitions from all module YAMLs and the `app.yaml`, compares them against the stored schema state (`migrations/schema_state.yaml`), and generates a SQL migration file in the `migrations/` directory.
 
-Note: `migrate push` and `migrate update` are not yet implemented.
+After generating the file, the schema state is updated so the next `migrate commit` only produces a diff of subsequent changes.
+
+---
+
+### migrate push
+
+Apply all pending migration files to the database.
+
+```
+currentjs migrate push
+```
+
+Reads the connection configuration from the environment (see [Database Connection for Migrations](#database-connection-for-migrations)), connects to the database, and applies any `.sql` files in the `migrations/` directory that have not yet been executed.
+
+Applied migrations are tracked in the `_migrations` table, which is created automatically on the first run.
+
+Migration files are applied in ascending filename order (timestamp-based).
+
+---
+
+### migrate pull
+
+Introspect the live database schema and update the local schema state.
+
+```
+currentjs migrate pull
+```
+
+Connects to the database, reads its current table structure (via `information_schema`), and updates `migrations/schema_state.yaml` to reflect the live schema. This is the reverse of `migrate push`.
+
+Use this command when the database has been modified outside of the migration workflow (e.g. manual SQL changes, another developer's migration) and you want to re-sync the local state without generating a new migration file. After running `migrate pull`, the next `migrate commit` will see no diff.
+
+Known aggregate names from module YAMLs are used to produce accurate keys in `schema_state.yaml`; tables without a matching aggregate fall back to a capitalised version of the table name.
 
 ---
 
@@ -332,18 +366,17 @@ modules:
 
 ### Fields
 
-| Field | Type                          | Default                                  | Description |
-|-------|-------------------------------|------------------------------------------|-------------|
-| `providers` | `Record<string, string>`      | `{ mysql: "@currentjs/provider-mysql" }` | Map of provider key to npm package or local path. |
-| `config.database` | `string`                      | `"mysql"`                                | Default database provider key (must match a key in `providers`). |
-| `config.styling` | `"bootstrap"` \| `"tailwind"` | `"bootstrap"`                            | Default styling framework for generated HTML templates. `"bootstrap"` uses Bootstrap 5 CDN and utility classes; `"tailwind"` uses the Tailwind CSS CDN play script and utility classes. |
-| `config.identifiers` | `string`                      | `numeric`                                 | Primary key and FK column type. See [Identifier Types](#identifier-types). |
-| `modules` | `Record<string, ModuleEntry>` | `{}`                                     | Map of module name to module entry. |
-| `modules.<Name>.path` | `string`                      | --                                       | Relative path from project root to the module's YAML file. Required. |
-| `modules.<Name>.database` | `string`                      | Inherits from `config.database`          | Database provider override for this module. |
-| `modules.<Name>.styling` | `"bootstrap"` \| `"tailwind"` | Inherits from `config.styling`           | Styling framework override for this specific module's generated HTML templates. |
-| `modules.<Name>.identifiers` | `numeric` \                   | `uuid` \                                 | `nanoid` | Inherits from `config.identifiers` | Identifier type override for this specific module. |
-
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `providers` | `Record<string, string>` | `{ mysql: "@currentjs/provider-mysql" }` | Map of provider key to npm package or local path. |
+| `config.database` | `"mysql"` \| `"postgres"` | `"mysql"` | Default database provider key. Must match a key in `providers`. Controls the SQL dialect used in generated stores. |
+| `config.styling` | `"bootstrap"` \| `"tailwind"` | `"bootstrap"` | Default styling framework for generated HTML templates. `"bootstrap"` uses Bootstrap 5 CDN; `"tailwind"` uses the Tailwind CSS CDN play script. |
+| `config.identifiers` | `"numeric"` \| `"uuid"` \| `"nanoid"` | `"numeric"` | Primary key and FK column type. See [Identifier Types](#identifier-types). |
+| `modules` | `Record<string, ModuleEntry>` | `{}` | Map of module name to module entry. |
+| `modules.<Name>.path` | `string` | -- | Relative path from project root to the module's YAML file. Required. |
+| `modules.<Name>.database` | `"mysql"` \| `"postgres"` | Inherits from `config.database` | Database provider override for this module. |
+| `modules.<Name>.styling` | `"bootstrap"` \| `"tailwind"` | Inherits from `config.styling` | Styling framework override for this module's generated HTML templates. |
+| `modules.<Name>.identifiers` | `"numeric"` \| `"uuid"` \| `"nanoid"` | Inherits from `config.identifiers` | Identifier type override for this module. |
 ### Styling Frameworks
 
 The `config.styling` setting controls which CSS framework is used in generated HTML templates (module views and the app-level layout/error templates).
@@ -357,11 +390,62 @@ Both values produce fully functional HTML. Bootstrap uses traditional class name
 
 For production Tailwind projects it is recommended to replace the CDN play script with a proper build step after initial scaffolding.
 
+### Database Providers
+
+The `config.database` setting controls which SQL dialect is used in generated store files. Currently two values are supported:
+
+| Value | Package | Store behavior |
+|-------|---------|----------------|
+| `mysql` | `@currentjs/provider-mysql` | Backtick identifier quoting, `toMySQLDatetime()` for timestamps, `result.insertId` for numeric inserts, UUID columns use `UUID_TO_BIN`/`BIN_TO_UUID`. |
+| `postgres` | `@currentjs/provider-postgres` | Double-quote identifier quoting, `toPostgresTimestamp()` returns ISO strings, `INSERT … RETURNING id` for numeric inserts, UUID stored as native `uuid` type. |
+
+**Example: switching to PostgreSQL**
+
+```yaml
+providers:
+  postgres: '@currentjs/provider-postgres'
+config:
+  database: postgres
+  styling: bootstrap
+  identifiers: numeric
+modules: {}
+```
+
+Install the provider and set its connection environment variable (named after the uppercase provider key):
+
+```bash
+npm install @currentjs/provider-postgres
+```
+
+```bash
+POSTGRES='{"host":"localhost","port":5432,"user":"myuser","password":"mypassword","database":"myapp"}'
+```
+
+**Per-module database override**
+
+You can use different databases for different modules in the same application:
+
+```yaml
+providers:
+  mysql: '@currentjs/provider-mysql'
+  postgres: '@currentjs/provider-postgres'
+config:
+  database: mysql
+modules:
+  Legacy:
+    path: src/modules/Legacy/legacy.yaml
+  NewFeature:
+    path: src/modules/NewFeature/newfeature.yaml
+    database: postgres   # this module uses PostgreSQL
+```
+
+---
+
 ### Provider Import Resolution
 
 Provider values can be:
 
-- An npm package name (e.g., `"@currentjs/provider-mysql"`).
+- An npm package name (e.g., `"@currentjs/provider-mysql"`, `"@currentjs/provider-postgres"`).
 - A local path starting with `./` or `/`, resolved relative to the `src/` directory.
 
 ---
@@ -370,13 +454,44 @@ Provider values can be:
 
 The `config.identifiers` setting in `app.yaml` controls how primary keys and foreign keys are generated across the whole application.
 
-| Value | SQL column type | TypeScript type | ID generation |
-|-------|-----------------|-----------------|---------------|
-| `numeric` | `INT AUTO_INCREMENT PRIMARY KEY` | `number` | Database auto-increment |
-| `uuid` | `BINARY(16) PRIMARY KEY DEFAULT (UUID_TO_BIN(UUID(), 1))` | `string` | `crypto.randomUUID()` before insert |
-| `nanoid` | `VARCHAR(21) PRIMARY KEY` | `string` | Custom `generateNanoId()` using `crypto.randomBytes` |
+The behavior differs between databases for `uuid` identifiers:
 
-The value is **case-insensitive**: `NanoID`, `nanoid`, and `NANOID` are all equivalent. The legacy value `id` is treated as `numeric` for backward compatibility.
+| Value | MySQL SQL column | PostgreSQL SQL column | TypeScript type | ID generation |
+|-------|------------------|-----------------------|-----------------|---------------|
+| `numeric` | `INT AUTO_INCREMENT PRIMARY KEY` | `SERIAL PRIMARY KEY` | `number` | Database auto-increment (`result.insertId` for MySQL; `RETURNING id` for PostgreSQL) |
+| `uuid` | `BINARY(16) PRIMARY KEY DEFAULT (UUID_TO_BIN(UUID(), 1))` | `UUID PRIMARY KEY` | `string` | `crypto.randomUUID()` pre-generated before insert (no binary conversion for PostgreSQL) |
+| `nanoid` | `VARCHAR(21) PRIMARY KEY` | `VARCHAR(21) PRIMARY KEY` | `string` | Custom `generateNanoId()` using `crypto.randomBytes` |
+
+
+### Database Connection for Migrations
+
+The `migrate push` and `migrate pull` commands connect to the database at runtime. The connection configuration is read from the environment variable named after the **uppercase provider key** defined in `app.yaml`.
+
+| `config.database` | Environment variable | Example |
+|-------------------|---------------------|---------|
+| `mysql` | `MYSQL` | `MYSQL='{"host":"localhost","port":3306,"user":"root","password":"secret","database":"myapp"}'` |
+| `postgres` | `POSTGRES` | `POSTGRES='{"host":"localhost","port":5432,"user":"postgres","password":"secret","database":"myapp"}'` |
+
+The variable value must be a JSON object. It is resolved in this priority order:
+
+1. `process.env` (shell environment / CI secrets)
+2. `.env` file in the project root (next to `app.yaml`)
+
+**.env file example:**
+
+```
+MYSQL={"host":"localhost","port":3306,"user":"root","password":"secret","database":"myapp"}
+```
+
+Or with quotes for shell safety:
+
+```
+MYSQL='{"host":"localhost","port":3306,"user":"root","password":"secret","database":"myapp"}'
+```
+
+The provider package (e.g. `@currentjs/provider-mysql`) must be installed in the project — `migrate push` and `migrate pull` load it dynamically from the project's own `node_modules`.
+
+---
 
 ### Changing the identifier type
 
@@ -996,15 +1111,15 @@ The following fields are added automatically and must not be included in the YAM
 - **Child entities:** `id`, `<parentEntityName>Id` (e.g., `invoiceId` for a child of `Invoice`).
 - **All tables:** `id`, `ownerId` (root) or `<parentName>Id` (child), `createdAt`, `updatedAt`, `deletedAt`.
 
-The TypeScript type and SQL column type of `id`, `ownerId`, and all FK columns depend on the `config.identifiers` setting:
+The TypeScript type and SQL column type of `id`, `ownerId`, and all FK columns depend on the `config.identifiers` and `config.database` settings:
 
-| `identifiers` | TypeScript type | SQL column |
-|---------------|-----------------|------------|
-| `numeric` | `number` | `INT AUTO_INCREMENT PRIMARY KEY` |
-| `uuid` | `string` | `BINARY(16) PRIMARY KEY DEFAULT (UUID_TO_BIN(UUID(), 1))` |
-| `nanoid` | `string` | `VARCHAR(21) PRIMARY KEY` |
+| `identifiers` | TypeScript type | MySQL SQL column | PostgreSQL SQL column |
+|---------------|-----------------|------------------|-----------------------|
+| `numeric` | `number` | `INT AUTO_INCREMENT PRIMARY KEY` | `SERIAL PRIMARY KEY` |
+| `uuid` | `string` | `BINARY(16) PRIMARY KEY DEFAULT (UUID_TO_BIN(UUID(), 1))` | `UUID PRIMARY KEY` |
+| `nanoid` | `string` | `VARCHAR(21) PRIMARY KEY` | `VARCHAR(21) PRIMARY KEY` |
 
-See the [Identifier Types](#identifier-types) section for full details.
+See the [Identifier Types](#identifier-types) and [Database Providers](#database-providers) sections for full details.
 
 ### Naming Conventions
 
