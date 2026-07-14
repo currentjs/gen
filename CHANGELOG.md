@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.4] - 2026-07-14
+
+- registry commands: ai, install module, install provider
+
 ## [0.6.3] - 2026-07-06
 
 - Support PostgreSQL
