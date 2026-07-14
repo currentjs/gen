@@ -1,6 +1,111 @@
 import * as readline from 'readline';
 import { colors } from './colors';
 
+// ─── Interactive checkbox list ─────────────────────────────────────────────
+
+export type CheckboxItem<T> = {
+  value: T;
+  label: string;
+  checked: boolean;
+  /** Disabled items cannot be toggled (e.g. already at latest version). */
+  disabled?: boolean;
+  disabledReason?: string;
+};
+
+/**
+ * Interactive checkbox list using raw terminal mode.
+ * Navigate with ↑/↓, toggle with <space>, confirm with <enter>.
+ * Disabled items are displayed but cannot be toggled.
+ */
+export async function promptCheckboxList<T>(
+  items: CheckboxItem<T>[],
+  header?: string,
+): Promise<T[]> {
+  if (!process.stdin.isTTY) {
+    // Non-interactive mode: return all pre-checked non-disabled items
+    return items.filter(i => i.checked && !i.disabled).map(i => i.value);
+  }
+
+  const state = items.map(item => ({ ...item }));
+  let cursor = 0;
+
+  const KEYS = {
+    UP: '\u001b[A',
+    DOWN: '\u001b[B',
+    SPACE: ' ',
+    ENTER: '\r',
+    CTRL_C: '\u0003',
+  };
+
+  function render() {
+    process.stdout.write('\u001b[?25l'); // hide cursor
+    const lines: string[] = [];
+    if (header) lines.push(colors.bold(header));
+    for (let i = 0; i < state.length; i++) {
+      const item = state[i];
+      const isCursor = i === cursor;
+      let checkbox: string;
+      if (item.disabled) {
+        checkbox = colors.gray('[-]');
+      } else if (item.checked) {
+        checkbox = colors.green('[x]');
+      } else {
+        checkbox = '[ ]';
+      }
+      let label: string;
+      if (item.disabled) {
+        label = colors.gray(item.label + (item.disabledReason ? ` (${item.disabledReason})` : ''));
+      } else {
+        label = item.label;
+      }
+      const row = `  ${checkbox} ${label}`;
+      lines.push(isCursor ? colors.bold('> ' + row.trimStart()) : '  ' + row.trimStart());
+    }
+    lines.push('');
+    lines.push(colors.gray('  ↑/↓ navigate   <space> toggle   <enter> install'));
+    process.stdout.write('\u001b[2J\u001b[H' + lines.join('\n'));
+  }
+
+  return new Promise<T[]>((resolve) => {
+    render();
+
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.setEncoding('utf8');
+
+    function onKey(key: string) {
+      if (key === KEYS.CTRL_C) {
+        cleanup();
+        process.exit(0);
+      } else if (key === KEYS.UP) {
+        cursor = (cursor - 1 + state.length) % state.length;
+        render();
+      } else if (key === KEYS.DOWN) {
+        cursor = (cursor + 1) % state.length;
+        render();
+      } else if (key === KEYS.SPACE) {
+        const item = state[cursor];
+        if (!item.disabled) {
+          item.checked = !item.checked;
+        }
+        render();
+      } else if (key === KEYS.ENTER) {
+        cleanup();
+        resolve(state.filter(i => i.checked && !i.disabled).map(i => i.value));
+      }
+    }
+
+    function cleanup() {
+      process.stdin.removeListener('data', onKey);
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+      process.stdout.write('\u001b[?25h\n'); // show cursor
+    }
+
+    process.stdin.on('data', onKey);
+  });
+}
+
 export function createRl(): readline.Interface {
   return readline.createInterface({ input: process.stdin, output: process.stdout });
 }

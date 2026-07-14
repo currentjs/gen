@@ -1,5 +1,12 @@
 // Common constants used across the generator
 
+// Registry
+export const REGISTRY = {
+  BASE_URL: 'https://raw.githubusercontent.com/currentjs/registry/refs/heads/main/',
+  INDEX: 'registry.json',
+  INSTALLED_FILE: '.currentjs/installed.json',
+} as const;
+
 // File extensions
 export const FILE_EXTENSIONS = {
   YAML: '.yaml',

@@ -19,6 +19,9 @@ Version: 0.5.6
   - [migrate commit](#migrate-commit)
   - [migrate push](#migrate-push)
   - [migrate pull](#migrate-pull)
+  - [ai](#ai)
+  - [install module](#install-module)
+  - [install provider](#install-provider)
 - [Global Options](#global-options)
 - [Application Configuration (app.yaml)](#application-configuration-appyaml)
 - [Module Configuration (module YAML)](#module-configuration-module-yaml)
@@ -326,6 +329,67 @@ Connects to the database, reads its current table structure (via `information_sc
 Use this command when the database has been modified outside of the migration workflow (e.g. manual SQL changes, another developer's migration) and you want to re-sync the local state without generating a new migration file. After running `migrate pull`, the next `migrate commit` will see no diff.
 
 Known aggregate names from module YAMLs are used to produce accurate keys in `schema_state.yaml`; tables without a matching aggregate fall back to a capitalised version of the table name.
+
+---
+
+### ai
+
+Fetch and install AI skills from the CurrentJS registry.
+
+```
+currentjs ai
+```
+
+Connects to the registry, lists all available skills, and displays an interactive selection screen. Skills that are new or have updates are pre-selected. Skills already at the latest version are shown as grayed out and cannot be toggled.
+
+Navigate with ↑/↓, toggle selection with `<space>`, confirm with `<enter>`.
+
+Selected skills are installed for both:
+- **Cursor**: `.cursor/skills/<skill-name>/` — available as AI skills in Cursor
+- **Claude Code**: `.claude/commands/<skill-name>.md` — available as a slash command
+
+Installation status is tracked in `.currentjs/installed.json`. Re-running `currentjs ai` will detect installed versions and offer updates when available.
+
+---
+
+### install module
+
+Download and install a module from the CurrentJS registry.
+
+```
+currentjs install module <name>
+```
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `name` | Yes | Module name as listed in the registry. |
+
+Downloads all module files into `src/modules/<name>/` and registers the module in `app.yaml`. If the module is already installed, prompts to update when a newer version is available.
+
+After installation, run `currentjs generate` to generate TypeScript source files from the module YAML.
+
+---
+
+### install provider
+
+Download and install a provider from the CurrentJS registry.
+
+```
+currentjs install provider <name>
+```
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `name` | Yes | Provider name as listed in the registry. |
+
+Downloads provider files into `src/shared/providers/<name>/`. If the provider is already installed, prompts to update when a newer version is available.
+
+After installation, wire the provider in `app.yaml`:
+
+```yaml
+providers:
+  myProvider: './src/shared/providers/<name>'
+```
 
 ---
 

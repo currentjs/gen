@@ -18,6 +18,7 @@ A CLI code generator that transforms YAML specifications into fully functional T
 - [Change Tracking: diff and commit](#change-tracking-diff-and-commit)
 - [Database Migrations](#database-migrations)
 - [Template System](#template-system)
+- [Registry: AI Skills, Modules & Providers](#registry-ai-skills-modules--providers)
 - [Authorship & Contribution](#authorship--contribution)
 - [License](#license)
 
@@ -599,6 +600,38 @@ config:
 By default, `currentjs generate` does not overwrite existing HTML templates. Only missing templates are created. Use `--with-templates` to force regeneration of all templates.
 
 → Reference: [Notes — Template Regeneration](REFERENCE.md#template-regeneration) · [web](REFERENCE.md#web)
+
+## Registry: AI Skills, Modules & Providers
+
+The [CurrentJS Registry](https://github.com/currentjs/registry) provides installable content: AI skills, application modules, and providers.
+
+### AI Skills
+
+```bash
+currentjs ai
+```
+
+Fetches all available skills from the registry and shows an interactive selection screen. Skills are installed for both **Cursor** (`.cursor/skills/`) and **Claude Code** (`.claude/commands/`). Already-installed skills show their version status; updates are pre-selected automatically.
+
+### Install a Module
+
+```bash
+currentjs install module <name>
+```
+
+Downloads the named module into `src/modules/<name>/` and registers it in `app.yaml`. Prompts to update if a newer version is available. Run `currentjs generate` afterwards to produce TypeScript source files.
+
+### Install a Provider
+
+```bash
+currentjs install provider <name>
+```
+
+Downloads the named provider into `src/shared/providers/<name>/`. Wire it into `app.yaml` under `providers:` after installation.
+
+→ Reference: [ai](REFERENCE.md#ai) · [install module](REFERENCE.md#install-module) · [install provider](REFERENCE.md#install-provider)
+
+---
 
 ## Authorship & Contribution
 
