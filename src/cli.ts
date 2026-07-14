@@ -10,6 +10,8 @@ import { handleInfer } from './commands/infer';
 import { handleMigrateCommit } from './commands/migrateCommit';
 import { handleMigratePush } from './commands/migratePush';
 import { handleMigratePull } from './commands/migratePull';
+import { handleAi } from './commands/ai';
+import { handleInstallModule, handleInstallProvider } from './commands/install';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { version: pkgVersion } = require('../package.json') as { version: string };
@@ -35,6 +37,9 @@ ${usage}
   ${cmd('currentjs migrate commit')} ${flag('--yaml')} ${colors.gray('app.yaml')}
   ${cmd('currentjs migrate push')}   ${flag('--yaml')} ${colors.gray('app.yaml')}
   ${cmd('currentjs migrate pull')}   ${flag('--yaml')} ${colors.gray('app.yaml')}
+  ${cmd('currentjs ai')}
+  ${cmd('currentjs install module')} ${colors.gray('<name>')}
+  ${cmd('currentjs install provider')} ${colors.gray('<name>')}
 
 ${options}
   ${flag('--yaml')} <path>   ${colors.gray('Path to app.yaml (default: ./app.yaml)')}
@@ -85,6 +90,13 @@ function parseArgs(argv: string[]): Args {
   }
   else if (result.command === 'migrate') {
     result.sub = rest.shift();
+  }
+  else if (result.command === 'ai') {
+    // no subcommands
+  }
+  else if (result.command === 'install') {
+    result.sub = rest.shift(); // 'module' or 'provider'
+    result.name = rest[0] && !rest[0].startsWith('-') ? rest.shift() : undefined;
   }
 
   for (let i = 0; i < rest.length; i += 1) {
@@ -164,6 +176,23 @@ async function run() {
         }
         if (args.sub === 'pull') {
           await handleMigratePull(args.yaml);
+          return;
+        }
+        printHelp();
+        process.exitCode = 1;
+        return;
+      }
+      case 'ai': {
+        await handleAi();
+        return;
+      }
+      case 'install': {
+        if (args.sub === 'module') {
+          await handleInstallModule(args.name);
+          return;
+        }
+        if (args.sub === 'provider') {
+          await handleInstallProvider(args.name);
           return;
         }
         printHelp();

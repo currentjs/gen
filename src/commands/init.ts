@@ -11,7 +11,6 @@ import {
   errorTemplateTailwind,
   frontendScriptTemplate,
   translationsTemplate,
-  cursorRulesTemplate,
   systemTsTemplate,
   envTemplate,
   DEFAULT_DIRECTORIES,
@@ -41,7 +40,6 @@ export function handleInit(rawName?: string): void {
   writeFileIfMissing(path.join(targetRoot, DEFAULT_FILES.PACKAGE_JSON), packageJsonTemplate(path.basename(targetRoot)));
   writeFileIfMissing(path.join(targetRoot, DEFAULT_FILES.TSCONFIG), tsconfigTemplate);
   writeFileIfMissing(path.join(targetRoot, DEFAULT_FILES.APP_YAML), appYamlTemplate);
-  writeFileIfMissing(path.join(targetRoot, DEFAULT_FILES.CURSOR_RULES), cursorRulesTemplate);
   writeFileIfMissing(path.join(srcDir, DEFAULT_FILES.APP_TS), appTsTemplate);
   writeFileIfMissing(path.join(srcDir, DEFAULT_FILES.SYSTEM_TS), systemTsTemplate);
 
