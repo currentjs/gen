@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.5] - 2026-07-27
+
+- rework readme – ai powered workflow
+
 ## [0.6.4] - 2026-07-14
 
 - registry commands: ai, install module, install provider
