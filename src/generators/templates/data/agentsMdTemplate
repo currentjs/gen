@@ -1,0 +1,68 @@
+# AGENTS.md — CurrentJS Application
+
+This is a **CurrentJS** application — a TypeScript web app generated from YAML configuration files using the `@currentjs/gen` CLI.
+
+## Workflow
+
+YAML is the source of truth. The recommended workflow:
+
+1. **Install AI skills** (first time only):
+   ```
+   currentjs ai
+   ```
+
+2. **Create or modify modules** using the `/current-create-module` skill:
+   > /current-create-module I need a Blog module with posts that have title, content, and status. Public read, authenticated create, owner/admin edit and delete.
+
+   The more detailed description is the best. The AI will scaffold the module, write YAML, generate TypeScript, implement custom logic, and commit.
+
+3. For subsequent changes, describe what you need in natural language — the skill handles YAML updates, regeneration, and commits.
+
+### Manual Workflow (alternative)
+
+```
+currentjs create module Blog        # scaffold module directory + starter YAML
+# edit src/modules/Blog/blog.yaml   # define models, routes, actions, permissions
+currentjs generate Blog             # generate TypeScript from YAML
+# optionally customize generated code
+currentjs commit                    # preserve manual edits across regeneration
+```
+
+## Key Commands
+
+| Command | Purpose |
+|---------|---------|
+| `currentjs create module <Name>` | Scaffold a new module |
+| `currentjs generate [module]` | Generate TypeScript from YAML configs |
+| `currentjs commit [files...]` | Preserve manual edits across regeneration |
+| `currentjs diff [module]` | Show generated vs current code differences |
+| `currentjs migrate commit` | Generate SQL migration from model changes |
+| `currentjs migrate push` | Apply pending migrations to database |
+| `currentjs ai` | Install/update AI skills |
+
+## Project Structure
+
+```
+app.yaml                        # App-level config (do not edit manually)
+src/
+├── app.ts                      # Server entry + DI wiring (auto-managed section)
+├── system.ts                   # Env loading, decorators
+├── common/ui/templates/        # Layout + error templates
+└── modules/<ModuleName>/
+    ├── <name>.yaml             # Module config (source of truth)
+    ├── domain/entities/        # Entity classes
+    ├── application/services/   # Business logic
+    ├── application/dto/        # Input/output DTOs
+    ├── infrastructure/
+    │   ├── controllers/        # API + Web controllers
+    │   └── stores/             # Database access
+    └── views/                  # HTML templates
+```
+
+## Important Rules
+
+- **YAML drives generation.** Edit YAML, then `currentjs generate`. Don't hand-edit generated files without committing.
+- **Auto-generated fields:** `id`, `ownerId`, `createdAt`, `updatedAt`, `deletedAt` are added automatically — never define them in YAML.
+- **`currentjs commit`** saves manual edits so they survive regeneration. Do not make early commits – it will pollute the registry.
+- **`src/app.ts`** has marker comments (`// currentjs:controllers:start` / `end`) — the generator manages that section automatically.
+- **Custom business logic** goes in Service methods, referenced from YAML as `service:methodName` handlers.

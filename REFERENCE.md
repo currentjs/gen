@@ -37,6 +37,7 @@ Version: 0.5.6
   - [auth](#auth)
 - [Field Types](#field-types)
 - [Generated File Structure](#generated-file-structure)
+- [Template System](#template-system)
 - [Notes](#notes)
 
 ---
@@ -52,38 +53,40 @@ currentjs init myapp
 cd myapp
 ```
 
-2. Create a module:
+2. Install AI skills:
+
+```
+currentjs ai
+```
+
+3. Use the `/current-create-module` AI skill (in Cursor or Claude Code) to describe your module:
+
+> /current-create-module I need a Blog module with posts that have title, content, excerpt, and a status field (draft/published/archived). Posts should be publishable and archivable. Public read access, only authenticated users can create, owners and admins can edit/delete.
+
+The AI will create the module, write the YAML configuration, generate TypeScript source code, implement any custom business logic, and build the app.
+
+For subsequent changes, describe what you want in natural language — the AI will update the YAML, regenerate, and commit.
+
+<details>
+<summary>Alternative: manual CLI workflow</summary>
+
+You can also create modules using the interactive wizard:
 
 ```
 currentjs create module Blog
-```
-
-3. Run an interactive command:
-
-```
 currentjs create model Blog:Post
 ```
 
-It will:
-- ask everything it needs,
-- generate yaml config,
-- generate a TypeScript source code,
-- and build it.
-
-UI tool will come some time soon.
-
-Alternatevly, you can:
- - edit the generated module YAML at `src/modules/Blog/blog.yaml`. Define the domain model fields, use cases, API endpoints, and web routes.
- - Generate TypeScript files from the YAML configuration: `currentjs generate Blog`
- - If needed, make manual changes to generated files (domain entities, views, services).
- - Commit those manual changes so they survive regeneration: `currentjs commit`
-
-To add custom (non-CRUD) behavior: define a method in the service, reference it in the module YAML as a handler, regenerate, and commit.
+Or edit the module YAML at `src/modules/Blog/blog.yaml` by hand, then generate and commit:
 
 ```
 currentjs generate Blog
 currentjs commit
 ```
+
+To add custom (non-CRUD) behavior: define a method in the service, reference it in the module YAML as a handler, regenerate, and commit.
+
+</details>
 
 ### Development Flow
 
@@ -93,26 +96,29 @@ currentjs commit
                     └────────┬─────────┘
                              │
                              ▼
-                ┌────────────────────────┐
-                │ currentjs create module│
-                └────────────┬───────────┘
+                    ┌──────────────────┐
+                    │   currentjs ai   │
+                    │ (install skills) │
+                    └────────┬─────────┘
                              │
-                ┌────────────┴────────────┐
-                │                         │
-                ▼                         ▼
-   ┌────────────────────┐   ┌────────────────────────┐
-   │ Edit module YAML   │   │ currentjs create model │
-   │ (define structure) │   │ (interactive wizard)   │
-   └─────────┬──────────┘   └────────────┬───────────┘
-             │                           │
-             ▼                           │
-   ┌───────────────────┐                 │
-   │ currentjs generate│                 │
-   └─────────┬─────────┘                 │
-             │                           │
-             └────────────┬──────────────┘
-                          │
-                          ▼
+               ┌─────────────┼─────────────┐
+               │             │             │
+               ▼             ▼             ▼
+  ┌─────────────────┐ ┌───────────┐ ┌──────────────────────┐
+  │ AI skill:       │ │ Edit YAML │ │ currentjs create     │
+  │ /current-create │ │  manually │ │ model (wizard)       │
+  │ -module         │ │           │ │                      │
+  │ (recommended)   │ │           │ │                      │
+  └────────┬────────┘ └─────┬─────┘ └──────────┬───────────┘
+           │                │                   │
+           │                ▼                   │
+           │       ┌───────────────────┐        │
+           │       │ currentjs generate│        │
+           │       └─────────┬─────────┘        │
+           │                 │                  │
+           └─────────────────┼──────────────────┘
+                             │
+                             ▼
               ┌───────────────────────┐
               │ Modify generated files│
               │ (entities, views, etc)│
@@ -653,7 +659,13 @@ domain:
 
 Do not include `id`, `ownerId`, or `deletedAt` fields -- these are added automatically.
 
-When `type` is set to another aggregate's name, it becomes a foreign key reference. The generated store maps it to a column named `<fieldName>Id` of type `number`.
+When `type` is set to another aggregate's name, it becomes a foreign key reference. The generator automatically:
+
+- Creates a foreign key column `<fieldName>Id` in the database (e.g., `author` → `authorId`).
+- Uses the full referenced entity object in the domain model (not just the ID).
+- Uses `<fieldName>Id: number` in DTOs for API transmission.
+- Generates a `<select>` dropdown with a "Create New" button in HTML forms.
+- Wires the related store as a dependency for loading relationships.
 
 ---
 
@@ -1162,6 +1174,79 @@ The generator also updates:
 
 - `src/app.ts` -- imports, provider initialization, dependency injection wiring, and controller registration (between `// currentjs:controllers:start` and `// currentjs:controllers:end` markers).
 - `src/system.ts` -- created if missing.
+
+---
+
+## Template System
+
+Generated HTML templates use the `@currentjs/templating` engine. Templates are placed in the module's `views/` directory and referenced by name in the `web` section of the YAML.
+
+### Template Header
+
+Each template starts with a comment that declares its name:
+
+```html
+<!-- @template name="postList" -->
+```
+
+### Variables
+
+Double-brace syntax renders values from the template data context:
+
+```html
+{{ title }}
+{{ post.authorName }}
+{{ formData.email || '' }}
+```
+
+Use `{{ $root.arrayData }}` to access root-level data explicitly, and `{{ $index }}` for the current loop iteration index.
+
+### Loops
+
+```html
+<tbody x-for="items" x-row="item">
+  <tr>
+    <td>{{ item.name }}</td>
+    <td>{{ $index }}</td>
+  </tr>
+</tbody>
+```
+
+`x-for` specifies the data key to iterate over, `x-row` names the loop variable.
+
+### Conditionals
+
+```html
+<div x-if="user.isAdmin">Admin-only content</div>
+<span x-if="errors.name">{{ errors.name }}</span>
+```
+
+The element (and its children) is rendered only when the value is truthy.
+
+### Layouts
+
+Templates are rendered inside a layout (specified per resource or per page in the `web` config). The layout receives the rendered template content as `{{ content }}`.
+
+Set `layout: "none"` on a web resource or page to render the template without a layout.
+
+### Forms
+
+Generated forms include `data-strategy` attributes for the frontend JavaScript (`web/app.js`) to handle submission via AJAX:
+
+```html
+<form data-strategy='["toast", "back"]'
+      data-entity-name="Post"
+      data-field-types='{"age": "number", "active": "boolean"}'>
+  <input name="title" type="text" required>
+  <button type="submit">Save</button>
+</form>
+```
+
+`data-field-types` tells the frontend how to convert form values before sending (e.g., string to number, checkbox to boolean).
+
+### Template Regeneration
+
+By default, `generate` does not overwrite existing HTML templates. New templates (for views not yet on disk) are always created. Use `--with-templates` to force regeneration of all templates.
 
 ---
 

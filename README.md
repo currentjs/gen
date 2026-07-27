@@ -1,19 +1,16 @@
 # @currentjs/gen
 
-A CLI code generator that transforms YAML specifications into fully functional TypeScript applications following clean architecture principles.
+An AI-ready CLI code generator that transforms YAML specifications into fully functional TypeScript applications following clean architecture principles. Works standalone or as a backend for AI coding assistants — describe what you need in natural language, and the AI handles YAML configuration, code generation, and custom business logic.
 
 ## Table of Contents
 
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+  - [AI-Powered Workflow](#ai-powered-workflow)
 - [Development Flow](#development-flow)
   - [TL;DR](#tldr)
 - [Reference](#reference)
 - [Module Configuration Overview](#module-configuration-overview)
-  - [Domain Layer](#domain-layer-domain)
-  - [Use Cases Layer](#use-cases-layer-usecases)
-  - [API Layer](#api-layer-api)
-  - [Web Layer](#web-layer-web)
 - [Generated Source Code](#generated-source-code)
 - [Change Tracking: diff and commit](#change-tracking-diff-and-commit)
 - [Database Migrations](#database-migrations)
@@ -47,30 +44,49 @@ cd myapp
 currentjs create module Blog
 ```
 
-3. Run an interactive command:
+3. Edit the module YAML at `src/modules/Blog/blog.yaml` — define your data models, use cases, API endpoints, and web pages. See [Module Configuration Overview](#module-configuration-overview) for the YAML structure, or the full [Reference](REFERENCE.md) for all options.
 
-```
-currentjs create model Blog:Post
-```
-
-It will:
-- ask everything it needs,
-- generate yaml config,
-- generate a TypeScript source code,
-- and build it.
-
-Alternatively, you can:
- - edit the generated module YAML at `src/modules/Blog/blog.yaml`. Define the domain model fields, use cases, API endpoints, and web routes.
- - Generate TypeScript files from the YAML configuration: `currentjs generate Blog`
- - If needed, make manual changes to generated files (domain entities, views, services).
- - Commit those manual changes so they survive regeneration: `currentjs commit`
-
-To add custom (non-CRUD) behavior: define a method in the service, reference it in the module YAML as a handler, regenerate, and commit.
+4. Generate TypeScript from the YAML:
 
 ```
 currentjs generate Blog
+```
+
+5. Optionally customize the generated code (business logic, templates, etc.), then preserve your changes:
+
+```
 currentjs commit
 ```
+
+To add custom (non-CRUD) behavior: define a method in the service, reference it in the module YAML as a handler, regenerate, and commit.
+
+<details>
+<summary>Alternative: interactive wizard</summary>
+
+Instead of editing YAML by hand, you can use the interactive CLI wizard to define fields, use cases, and routes step-by-step:
+
+```
+currentjs create module Blog
+currentjs create model Blog:Post
+```
+
+The wizard walks you through field definitions, use cases, and route configuration, then generates the YAML for you.
+
+</details>
+
+### AI-Powered Workflow
+
+If you use an AI coding assistant like [Cursor](https://cursor.com) or [Claude Code](https://claude.ai), you can skip manual YAML editing entirely. Install the AI skills:
+
+```
+currentjs ai
+```
+
+This installs AI skills for both Cursor (`.cursor/skills/`) and Claude Code (`.claude/commands/`). Then describe the module you need using the `/current-create-module` skill:
+
+> /current-create-module I need a Blog module with posts that have title, content, excerpt, and a status field (draft/published/archived). Posts should be publishable and archivable. Public read access, only authenticated users can create, owners and admins can edit/delete.
+
+The AI will create the module structure, generate the YAML configuration, implement custom business logic, generate TypeScript, and build the app. For subsequent changes, describe what you want in natural language — the AI handles YAML updates and regeneration.
 
 ## Development Flow
 
@@ -79,63 +95,55 @@ currentjs commit
                     │   currentjs init │
                     └────────┬─────────┘
                              │
-                             ▼
-                ┌────────────────────────┐
-                │ currentjs create module│
-                └────────────┬───────────┘
-                             │
-                ┌────────────┴────────────┐
-                │                         │
-                ▼                         ▼
-   ┌────────────────────┐   ┌────────────────────────┐
-   │ Edit module YAML   │   │ currentjs create model │
-   │ (define structure) │   │ (interactive wizard)   │
-   └─────────┬──────────┘   └────────────┬───────────┘
-             │                           │
-             ▼                           │
-   ┌───────────────────┐                 │
-   │ currentjs generate│                 │
-   └─────────┬─────────┘                 │
-             │                           │
-             └────────────┬──────────────┘
-                          │
-                          ▼
-              ┌───────────────────────┐
-              │ Modify generated files│
-              │ (entities, views, etc)│
-              │ (optional step)       │
-              └───────────┬───────────┘
-                          │
-                          ▼
-                ┌───────────────────┐
-                │ currentjs commit  │
-                └───────────────────┘
+               ┌─────────────┴──────────────┐
+               │                            │
+               ▼                            ▼
+  ┌──────────────────────┐    ┌───────────────────────┐
+  │ currentjs create     │    │ currentjs ai          │
+  │   module <Name>      │    │ (install AI skills)   │
+  └──────────┬───────────┘    └───────────┬───────────┘
+             │                            │
+             ▼                            ▼
+  ┌──────────────────────┐    ┌───────────────────────┐
+  │ Edit YAML manually   │    │ AI skill:             │
+  │ (or use wizard)      │    │ /current-create-module│
+  └──────────┬───────────┘    │ (describe what you    │
+             │                │  need in plain text)  │
+             ▼                └───────────┬───────────┘
+  ┌──────────────────────┐                │
+  │ currentjs generate   │                │
+  └──────────┬───────────┘                │
+             │                            │
+             └─────────────┬──────────────┘
+                           │
+                           ▼
+             ┌───────────────────────┐
+             │ Modify generated files│
+             │ (optional)            │
+             └───────────┬───────────┘
+                         │
+                         ▼
+               ┌───────────────────┐
+               │ currentjs commit  │
+               └───────────────────┘
 ```
 
-There are two paths after creating a module:
+There are two paths to building a module:
 
-- **Interactive wizard** (`currentjs create model Blog:Post`) — prompts for fields, use cases, routes, and permissions, then generates everything automatically.
-- **Manual editing** — edit the module YAML by hand, then run `currentjs generate`. This gives full control over every configuration option.
+- **Manual** — create a module with `currentjs create module`, edit the YAML by hand (or use the interactive wizard), then run `currentjs generate`. Full control over every configuration option.
+- **AI-powered** — install AI skills with `currentjs ai`, then use `/current-create-module` to describe what you need in plain language. The AI creates the module, writes the YAML, generates code, and implements custom logic.
 
 Both paths converge at the same point: once files are generated, you can optionally customize the generated code (business logic, templates, etc.) and run `currentjs commit` to preserve those changes across future regenerations.
 
-When you need behavior beyond standard CRUD:
-
-1. Implement the custom method in the generated service class.
-2. Reference it in the module YAML as a handler (e.g., `serviceName:myMethod`).
-3. Optionally add API/web endpoints for the new action.
-4. Regenerate and commit.
-
 #### TLDR
 
-- module's YAML configurations (plus "commits") are the source of truth.
-- `currentjs create module` creates module's structure (empty folders, YAML configuration with one model without any fields)
-- `currentjs create model`: You > YAML > `generate`
-- `currentjs generate`: YAML + commits > TypeScript > JS
-- since YAML is the main source of truth, it's also the best place to make changes
-- if changes are beyond configuration (require some coding), the best place is (in descending order): model, service
-- in order to preserve changes in TypeScript files, use `currentjs commit`
-- templates can be changed freely, they are not regenerated by default.
+- Module YAML configurations (plus "commits") are the source of truth.
+- `currentjs generate`: YAML + commits → TypeScript → JS
+- For AI-assisted development: install skills with `currentjs ai`, then use `/current-create-module` — describe what you need, the AI handles everything.
+- Since YAML is the main source of truth, it's also the best place to make changes.
+- If changes are beyond configuration (require some coding), the best place is (in descending order): model, service.
+- In order to preserve changes in TypeScript files, use `currentjs commit`.
+- Templates can be changed freely, they are not regenerated by default.
 
 
 ## Reference
@@ -146,268 +154,16 @@ For detailed documentation of all CLI commands, YAML configuration options, and 
 
 Each module is configured through a single YAML file located at `src/modules/<Name>/<name>.yaml`. The configuration follows a layered structure inspired by Clean Architecture. Each layer in the YAML maps to a set of generated TypeScript files.
 
-### Layers at a Glance
-
 | YAML Section | Purpose | Generated Files |
 |---|---|---|
-| `domain` | Define your data models (aggregates, value objects) | Entity classes, value object classes |
+| `domain` | Define your data models (aggregates, value objects, relationships) | Entity classes, value object classes |
 | `useCases` | Define business operations, input/output shapes, handler chains | Services, DTOs |
-| `api` | Define REST API endpoints | API controller (orchestrates handler chain directly) |
-| `web` | Define server-rendered pages and forms | Web controller (orchestrates handler chain directly), HTML templates |
+| `api` | Define REST API endpoints with auth | API controller |
+| `web` | Define server-rendered pages and forms | Web controller, HTML templates |
 
 A minimal module YAML needs at least `domain` and `useCases`. The `api` and `web` sections are optional.
 
-→ Reference: [Module Configuration](REFERENCE.md#module-configuration-module-yaml)
-
----
-
-### Domain Layer (`domain`)
-
-The domain layer defines your data models. There are two kinds: **aggregates** (entities) and **value objects**.
-
-#### Aggregates
-
-Aggregates are the main entities. One aggregate should be marked as the root (`root: true`), which enables ownership tracking (auto-generated `ownerId` field).
-
-```yaml
-domain:
-  aggregates:
-    Post:
-      root: true
-      fields:
-        title: { type: string, required: true }
-        content: { type: string, required: true }
-        status: { type: enum, values: [draft, published, archived] }
-        publishedAt: { type: datetime }
-```
-
-Fields like `id`, `ownerId`, `created_at`, `updated_at`, and `deleted_at` are added automatically — do not include them.
-
-**Available field types:** `string`, `number`, `integer`, `decimal`, `boolean`, `datetime`, `date`, `id`, `json`, `array`, `object`, `enum`.
-
-For `enum` fields, provide the allowed values with `values: [...]`.
-
-#### Model Relationships
-
-Set the `type` to another aggregate's name to create a foreign key relationship:
-
-```yaml
-domain:
-  aggregates:
-    Author:
-      root: true
-      fields:
-        name: { type: string, required: true }
-    Post:
-      root: true
-      fields:
-        title: { type: string, required: true }
-        author: { type: Author, required: true }
-```
-
-The generator automatically:
-- Creates a foreign key column `authorId` in the database.
-- Uses the full `Author` object in the domain model (not just the ID).
-- Uses `authorId: number` in DTOs for API transmission.
-- Generates a `<select>` dropdown with a "Create New" button in HTML forms.
-- Wires the related store as a dependency for loading relationships.
-
-Foreign key naming follows the pattern `fieldName + 'Id'` (e.g., `author` → `authorId`).
-
-#### Child Entities
-
-An aggregate can have child entities listed in the `entities` field:
-
-```yaml
-domain:
-  aggregates:
-    Invoice:
-      root: true
-      fields:
-        number: { type: string, required: true }
-      entities: [InvoiceItem]
-
-    InvoiceItem:
-      fields:
-        productName: { type: string, required: true }
-        quantity: { type: integer, required: true }
-```
-
-Child entities get a `getByParentId()` method in their store and `listByParent()` in their service. Use `input.parentId` in child use cases to link them to the parent.
-
-#### Value Objects
-
-Value objects are reusable types embedded in aggregates, stored as JSON in the database:
-
-```yaml
-domain:
-  valueObjects:
-    Money:
-      fields:
-        amount: { type: decimal, constraints: { min: 0 } }
-        currency: { type: enum, values: [USD, EUR, PLN] }
-```
-
-→ Reference: [aggregates](REFERENCE.md#aggregates) · [valueObjects](REFERENCE.md#valueobjects) · [Field Types](REFERENCE.md#field-types) · [Child Entities](REFERENCE.md#child-entities)
-
----
-
-### Use Cases Layer (`useCases`)
-
-Use cases define the operations available for each model. Each use case specifies its input shape, output shape, and a chain of handlers to execute.
-
-```yaml
-useCases:
-  Post:
-    list:
-      input:
-        pagination: { type: offset, defaults: { limit: 20, maxLimit: 100 } }
-      output: { from: Post, pagination: true }
-      handlers: [default:list]
-    get:
-      input: { identifier: id }
-      output: { from: Post }
-      handlers: [default:get]
-    create:
-      input: { from: Post }
-      output: { from: Post }
-      handlers: [default:create]
-```
-
-#### Handlers
-
-Handlers are listed in execution order. Each handler becomes a method on the service class.
-
-**Built-in handlers:**
-
-| Handler | Description |
-|---|---|
-| `default:list` | Paginated list of entities |
-| `default:get` | Fetch by ID |
-| `default:create` | Create with validation |
-| `default:update` | Update by ID |
-| `default:delete` | Soft-delete by ID |
-
-**Custom handlers** — use `methodName` (or `service:methodName`). The generator creates a stub method that receives `(result, input)`:
-
-```yaml
-useCases:
-  Post:
-    publish:
-      input: { identifier: id }
-      output: { from: Post }
-      handlers:
-        - default:get
-        - validateForPublish
-        - updatePublishStatus
-```
-
-This generates three service methods called in sequence. The controller orchestrates the chain directly — each result is passed as the first argument to the next handler. Custom methods get a TODO comment for you to fill in.
-
-#### Input Configuration
-
-Inputs can derive fields from a model (`from`), pick/omit specific fields, add extra fields, define validation rules, enable pagination, filtering, and sorting. See the [Reference](REFERENCE.md) for the full input specification.
-
-#### Displaying Child Entities (`withChild`)
-
-When an aggregate root has child entities, you can show them on the root's pages:
-
-```yaml
-useCases:
-  Invoice:
-    list:
-      withChild: true   # Adds a link column to child entities on the list page
-      # ...
-    get:
-      withChild: true   # Shows a child entities table on the detail page
-      # ...
-```
-
-→ Reference: [useCases](REFERENCE.md#usecases) · [handlers](REFERENCE.md#handlers) · [input](REFERENCE.md#input) · [output](REFERENCE.md#output)
-
----
-
-### API Layer (`api`)
-
-Defines REST API endpoints. Each model gets its own section keyed by name:
-
-```yaml
-api:
-  Post:
-    prefix: /api/posts
-    endpoints:
-      - method: GET
-        path: /
-        useCase: Post:list
-        auth: all
-      - method: POST
-        path: /
-        useCase: Post:create
-        auth: authenticated
-      - method: PUT
-        path: /:id
-        useCase: Post:update
-        auth: [owner, admin]
-```
-
-Each endpoint references a use case with the format `ModelName:actionName`.
-
-#### Auth / Roles
-
-The `auth` field controls access:
-
-| Value | Meaning |
-|---|---|
-| `all` | Public, no authentication required |
-| `authenticated` | Any logged-in user (valid JWT) |
-| `owner` | User must own the resource (matched via `ownerId`) |
-| `admin`, `editor`, etc. | User must have this role (from JWT) |
-| `[owner, admin]` | OR logic — user matches any of the listed roles |
-
-When `owner` is combined with privileged roles (e.g., `[owner, admin]`), privileged roles bypass the ownership check.
-
-→ Reference: [api](REFERENCE.md#api) · [auth](REFERENCE.md#auth)
-
----
-
-### Web Layer (`web`)
-
-Defines server-rendered pages and forms:
-
-```yaml
-web:
-  Post:
-    prefix: /posts
-    layout: main_view
-    pages:
-      - path: /
-        useCase: Post:list
-        view: postList
-        auth: all
-      - path: /create
-        method: GET
-        view: postCreate
-        auth: authenticated
-      - path: /create
-        method: POST
-        useCase: Post:create
-        auth: authenticated
-        onSuccess:
-          redirect: /posts/:id
-          toast: "Post created"
-        onError:
-          stay: true
-          toast: error
-```
-
-Form submission results are handled with `onSuccess` / `onError`:
-
-- `toast: "message"` — show a toast notification
-- `back: true` — navigate back in browser history
-- `redirect: /path` — redirect to a URL (supports `:id` placeholder)
-- `stay: true` — stay on the current page
-
-→ Reference: [web](REFERENCE.md#web) · [auth](REFERENCE.md#auth)
+For the full YAML specification — field types, handler chains, input/output configuration, auth roles, form strategies, relationships, child entities, and more — see the [Reference](REFERENCE.md#module-configuration-module-yaml).
 
 ---
 

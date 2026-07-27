@@ -13,6 +13,7 @@ import {
   translationsTemplate,
   systemTsTemplate,
   envTemplate,
+  agentsMdTemplate,
   DEFAULT_DIRECTORIES,
   DEFAULT_FILES
 } from '../generators/templates/appTemplates';
@@ -54,6 +55,8 @@ export function handleInit(rawName?: string): void {
 
   writeFileIfMissing(path.join(webDir, DEFAULT_FILES.FRONTEND_SCRIPT), frontendScriptTemplate);
   writeFileIfMissing(path.join(webDir, DEFAULT_FILES.TRANSLATIONS), translationsTemplate);
+
+  writeFileIfMissing(path.join(targetRoot, DEFAULT_FILES.AGENTS_MD), agentsMdTemplate);
 
   // Run npm install
   runCommand('npm install', {
