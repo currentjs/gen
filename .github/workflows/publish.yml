@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write # Required for npm trusted publishing (OIDC)
 
 jobs:
   release:
@@ -31,7 +32,15 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          # Trusted publishing needs Node >= 22.14 and npm >= 11.5.1
+          node-version: 24
+          # Do NOT set registry-url: it writes _authToken=${NODE_AUTH_TOKEN} into
+          # .npmrc; an empty token makes npm skip OIDC and fail publish with 403.
+          package-manager-cache: false
+
+      - name: Ensure npm supports OIDC publish
+        # Pin npm 11 — npm@latest (12.x) has had provenance/OIDC packaging regressions
+        run: npm install -g npm@11
 
       - name: Install dependencies
         run: npm install
@@ -106,15 +115,17 @@ jobs:
           git push
           git push --tags
 
-      - name: Setup Node.js for publish
-        uses: actions/setup-node@v4
-        with:
-          node-version: 18
-          registry-url: 'https://registry.npmjs.org'
-
       - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # Native trusted publishing: npm >= 11.5.1 detects the GitHub Actions
+        # OIDC environment, exchanges the ID token with the registry itself and
+        # authenticates the publish with the short-lived OIDC token. No npm
+        # token may be configured anywhere (no NODE_AUTH_TOKEN, no _authToken
+        # in any .npmrc), otherwise npm may fall back to token auth.
+        #
+        # Provenance is explicitly DISABLED: the registry silently rejects
+        # provenance-attached publishes of this package with a bodyless 403,
+        # while the identical publish without provenance succeeds (verified
+        # 2026-08-07, v0.2.2). Reported to npm support; re-enable once fixed.
         run: npm publish --access public
-
-
+        env:
+          NPM_CONFIG_PROVENANCE: "false"
