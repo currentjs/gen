@@ -123,3 +123,91 @@ describe('PortGenerator - module with no exports or dependencies', () => {
     expect(Object.keys(ports).join('')).toNotContain('Interface');
   });
 });
+
+describe('PortGenerator - command export ports', () => {
+  const config = loadFixture('notification-command-export.yaml');
+  const ports = portGen.generateExportPorts(config, 'numeric');
+
+  it('generates one port file per exported command', () => {
+    const keys = Object.keys(ports);
+    expect(keys.join(',')).toContain('SendEmailInterface');
+    expect(keys.join(',')).toContain('MarkAllReadInterface');
+  });
+
+  describe('sendEmail port (void output)', () => {
+    const code = ports['SendEmailInterface'] ?? '';
+
+    it('contains SendEmailInput class', () => {
+      expect(code).toContain('export class SendEmailInput');
+    });
+
+    it('contains void Output type', () => {
+      expect(code).toContain('export type SendEmailOutput = void');
+    });
+
+    it('contains ISendEmailCommand interface (not ISendEmailQuery)', () => {
+      expect(code).toContain('export interface ISendEmailCommand');
+      expect(code).toNotContain('ISendEmailQuery');
+    });
+
+    it('interface execute() returns Promise<SendEmailOutput>', () => {
+      expect(code).toContain('execute(input: SendEmailInput): Promise<SendEmailOutput>');
+    });
+  });
+
+  describe('markAllRead port (non-void output)', () => {
+    const code = ports['MarkAllReadInterface'] ?? '';
+
+    it('contains MarkAllReadOutput class', () => {
+      expect(code).toContain('export class MarkAllReadOutput');
+    });
+
+    it('contains IMarkAllReadCommand interface', () => {
+      expect(code).toContain('export interface IMarkAllReadCommand');
+    });
+
+    it('output picks only declared fields (id, sentAt)', () => {
+      expect(code).toContain('readonly sentAt');
+      expect(code).toNotContain('readonly recipientEmail');
+    });
+  });
+});
+
+describe('PortGenerator - command dependency re-export ports', () => {
+  const config = loadFixture('order-command-consumer.yaml');
+
+  it('generateDependencyPorts generates command re-export file when exporter is found', () => {
+    const ports = portGen.generateDependencyPorts(config, '/app/src/modules/Order', {
+      modules: {
+        Notification: { path: '/app/src/modules/Notification/notification.yaml' }
+      }
+    });
+
+    const code = ports['SendEmailInterface'] ?? '';
+    expect(code).toContain('export {');
+    expect(code).toContain('ISendEmailCommand');
+    expect(code).toContain('SendEmailInput');
+    expect(code).toContain('SendEmailOutput');
+  });
+
+  it('command re-export uses I*Command (not I*Query)', () => {
+    const ports = portGen.generateDependencyPorts(config, '/app/src/modules/Order', {
+      modules: {
+        Notification: { path: '/app/src/modules/Notification/notification.yaml' }
+      }
+    });
+    const code = ports['SendEmailInterface'] ?? '';
+    expect(code).toContain('ISendEmailCommand');
+    expect(code).toNotContain('ISendEmailQuery');
+  });
+
+  it('re-export path is relative', () => {
+    const ports = portGen.generateDependencyPorts(config, '/app/src/modules/Order', {
+      modules: {
+        Notification: { path: '/app/src/modules/Notification/notification.yaml' }
+      }
+    });
+    const code = ports['SendEmailInterface'] ?? '';
+    expect(code).toContain("from '../");
+  });
+});

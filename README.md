@@ -165,6 +165,8 @@ A minimal module YAML needs at least `domain` and `useCases`. The `api` and `web
 
 For the full YAML specification — field types, handler chains, input/output configuration, auth roles, form strategies, relationships, child entities, and more — see the [Reference](REFERENCE.md#module-configuration-module-yaml).
 
+Modules can also expose read-only data to other modules via `exports.queries`, or trigger write operations in other modules via `exports.commands`. Consuming modules declare these under `dependencies`. See [exports](REFERENCE.md#exports) and [dependencies](REFERENCE.md#dependencies) in the Reference.
+
 ---
 
 ## Generated Source Code

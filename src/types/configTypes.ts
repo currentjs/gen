@@ -194,12 +194,21 @@ export interface ExportedQueryConfig {
   output?: UseCaseOutputConfig | 'void';
 }
 
+export interface ExportedCommandConfig {
+  model?: string;
+  input?: UseCaseInputConfig;
+  output?: UseCaseOutputConfig | 'void';
+  handlers: string[];
+}
+
 export interface ExportsConfig {
   queries?: Record<string, ExportedQueryConfig>;
+  commands?: Record<string, ExportedCommandConfig>;
 }
 
 export interface DependencyConfig {
   queries?: string[];
+  commands?: string[];
 }
 
 // ============= MODULE CONFIG =============

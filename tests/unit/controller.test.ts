@@ -308,3 +308,49 @@ describe('ControllerGenerator — identifier types', () => {
     });
   });
 });
+
+describe('ControllerGenerator — cross-module imported commands', () => {
+  const config = loadFixture('order-command-consumer.yaml');
+  const result = controllerGen.generateFromConfig(config);
+  const apiCode = getCode(result as Record<string, unknown>, 'OrderApi');
+
+  it('generates OrderApiController', () => {
+    expect(apiCode).toContain('class OrderApiController');
+  });
+
+  it('imports ISendEmailCommand (not ISendEmailQuery) from ports', () => {
+    expect(apiCode).toContain('ISendEmailCommand');
+    expect(apiCode).toContain("application/ports/SendEmailInterface'");
+    expect(apiCode).toNotContain('ISendEmailQuery');
+  });
+
+  it('imports SendEmailInput for parsing inside the handler', () => {
+    expect(apiCode).toContain('SendEmailInput');
+  });
+
+  it('constructor has sendEmailCommand typed as ISendEmailCommand', () => {
+    expect(apiCode).toContain('private sendEmailCommand: ISendEmailCommand');
+    expect(apiCode).toNotContain('private sendEmailQuery:');
+  });
+
+  it('handler chain calls sendEmailCommand.execute(), not orderService.sendEmail()', () => {
+    expect(apiCode).toContain('sendEmailCommand.execute(');
+    expect(apiCode).toNotContain('orderService.sendEmail(');
+  });
+
+  it('imported command handler parses input from body+params', () => {
+    expect(apiCode).toContain('SendEmailInput.parse({ ...context.request.body, ...context.request.parameters })');
+  });
+});
+
+describe('ControllerGenerator — mixed default + imported command handler chain', () => {
+  it('default handler before imported command is still called via service', () => {
+    const config = loadFixture('order-command-consumer.yaml');
+    const result = controllerGen.generateFromConfig(config);
+    const apiCode = getCode(result as Record<string, unknown>, 'OrderApi');
+
+    // Order:complete has handlers [default:get, sendEmail]
+    expect(apiCode).toContain('orderService.get(');
+    expect(apiCode).toContain('sendEmailCommand.execute(');
+  });
+});

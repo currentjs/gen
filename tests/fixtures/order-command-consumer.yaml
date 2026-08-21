@@ -1,0 +1,81 @@
+domain:
+  aggregates:
+    Order:
+      root: true
+      fields:
+        customerEmail:
+          type: string
+          required: true
+        total:
+          type: number
+          required: true
+        status:
+          type: string
+          required: true
+
+useCases:
+  Order:
+    list:
+      input:
+        pagination:
+          type: offset
+          defaults:
+            limit: 20
+      output:
+        from: Order
+        pagination: true
+      handlers:
+        - default:list
+    get:
+      input:
+        identifier: id
+      output:
+        from: Order
+      handlers:
+        - default:get
+    create:
+      input:
+        from: Order
+      output:
+        from: Order
+      handlers:
+        - default:create
+    complete:
+      input:
+        identifier: id
+      output:
+        from: Order
+      handlers:
+        - default:get
+        - sendEmail
+  Notification:
+    notifyCustomer:
+      input:
+        identifier: id
+      output: void
+      handlers:
+        - sendEmail
+
+api:
+  Order:
+    prefix: /api/orders
+    endpoints:
+      - method: GET
+        path: /
+        useCase: Order:list
+      - method: GET
+        path: /:id
+        useCase: Order:get
+      - method: POST
+        path: /
+        useCase: Order:create
+      - method: POST
+        path: /:id/complete
+        useCase: Order:complete
+      - method: POST
+        path: /:id/notify
+        useCase: Notification:notifyCustomer
+
+dependencies:
+  Notification:
+    commands: [sendEmail]

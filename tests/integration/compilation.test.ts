@@ -11,6 +11,8 @@ const GEN_ROOT = path.join(process.cwd(), 'tests', 'fixtures');
 const FIXTURES = {
   invoice: path.join(GEN_ROOT, 'invoice.yaml'),
   product: path.join(GEN_ROOT, 'product.yaml'),
+  notificationCommandExport: path.join(GEN_ROOT, 'notification-command-export.yaml'),
+  orderCommandConsumer: path.join(GEN_ROOT, 'order-command-consumer.yaml'),
 };
 
 describe('Integration: full app generation and compilation', () => {
@@ -69,6 +71,81 @@ describe('Integration: full app generation and compilation', () => {
 
     // 7. Verify build succeeds (throws if build fails)
     execSync('npm run build', { cwd: tempDir, stdio: 'pipe' });
+  });
+
+  it('cross-module commands: exporter generates command class and consumer compiles with injected port', async () => {
+    const crossDir = fs.mkdtempSync(path.join(os.tmpdir(), 'currentjs-command-cross-test-'));
+    const savedCwd = process.cwd();
+
+    try {
+      handleInit(crossDir);
+
+      const notifModuleDir = path.join(crossDir, 'src', 'modules', 'Notification');
+      const orderModuleDir = path.join(crossDir, 'src', 'modules', 'Order');
+      fs.mkdirSync(notifModuleDir, { recursive: true });
+      fs.mkdirSync(orderModuleDir, { recursive: true });
+      fs.copyFileSync(FIXTURES.notificationCommandExport, path.join(notifModuleDir, 'notification.yaml'));
+      fs.copyFileSync(FIXTURES.orderCommandConsumer, path.join(orderModuleDir, 'order.yaml'));
+
+      const appYamlPath = path.join(crossDir, 'app.yaml');
+      const updatedYaml = fs.readFileSync(appYamlPath, 'utf8').replace(
+        'modules: {}',
+        `modules:
+  Notification:
+    path: src/modules/Notification/notification.yaml
+  Order:
+    path: src/modules/Order/order.yaml`
+      );
+      fs.writeFileSync(appYamlPath, updatedYaml, 'utf8');
+
+      process.chdir(crossDir);
+      await handleGenerateAll('app.yaml', undefined, undefined, { force: true });
+
+      const notifSrc = path.join(crossDir, 'src', 'modules', 'Notification');
+      const orderSrc = path.join(crossDir, 'src', 'modules', 'Order');
+
+      // Exporter generates command class and port interface
+      assert.ok(
+        fs.existsSync(path.join(notifSrc, 'application', 'commands', 'SendEmailCommand.ts')),
+        'SendEmailCommand.ts should be generated in exporter'
+      );
+      assert.ok(
+        fs.existsSync(path.join(notifSrc, 'application', 'ports', 'SendEmailInterface.ts')),
+        'SendEmailInterface.ts should be generated in exporter'
+      );
+
+      // Consumer gets re-export port
+      assert.ok(
+        fs.existsSync(path.join(orderSrc, 'application', 'ports', 'SendEmailInterface.ts')),
+        'SendEmailInterface.ts re-export should exist in consumer'
+      );
+
+      // Verify command port content
+      const cmdClass = fs.readFileSync(
+        path.join(notifSrc, 'application', 'commands', 'SendEmailCommand.ts'),
+        'utf8'
+      );
+      assert.ok(cmdClass.includes('class SendEmailCommand'), 'command class name');
+      assert.ok(cmdClass.includes('implements ISendEmailCommand'), 'implements port interface');
+      assert.ok(cmdClass.includes('@Injectable()'), 'decorated with @Injectable');
+
+      // Verify re-export links back to exporter
+      const reexport = fs.readFileSync(
+        path.join(orderSrc, 'application', 'ports', 'SendEmailInterface.ts'),
+        'utf8'
+      );
+      assert.ok(reexport.includes('ISendEmailCommand'), 'consumer re-export contains ISendEmailCommand');
+
+      // Full TypeScript compilation must succeed
+      execSync('npm run build', { cwd: crossDir, stdio: 'pipe' });
+    } finally {
+      process.chdir(savedCwd);
+      try {
+        fs.rmSync(crossDir, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }
   });
 
   it('init writes all 4 layout template files', () => {

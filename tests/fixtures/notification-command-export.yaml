@@ -1,0 +1,91 @@
+domain:
+  aggregates:
+    Notification:
+      root: true
+      fields:
+        recipientEmail:
+          type: string
+          required: true
+        subject:
+          type: string
+          required: true
+        body:
+          type: string
+          required: true
+        sentAt:
+          type: datetime
+          required: false
+
+useCases:
+  Notification:
+    list:
+      input:
+        pagination:
+          type: offset
+          defaults:
+            limit: 20
+      output:
+        from: Notification
+        pagination: true
+      handlers:
+        - default:list
+    get:
+      input:
+        identifier: id
+      output:
+        from: Notification
+      handlers:
+        - default:get
+    create:
+      input:
+        from: Notification
+      output:
+        from: Notification
+      handlers:
+        - default:create
+    delete:
+      input:
+        identifier: id
+      output: void
+      handlers:
+        - default:delete
+
+api:
+  Notification:
+    prefix: /api/notifications
+    endpoints:
+      - method: GET
+        path: /
+        useCase: Notification:list
+      - method: GET
+        path: /:id
+        useCase: Notification:get
+      - method: POST
+        path: /
+        useCase: Notification:create
+      - method: DELETE
+        path: /:id
+        useCase: Notification:delete
+
+exports:
+  queries: {}
+  commands:
+    sendEmail:
+      model: Notification
+      input:
+        from: Notification
+      output: void
+      handlers:
+        - default:create
+        - dispatch
+    markAllRead:
+      input:
+        identifier: id
+      output:
+        from: Notification
+        pick: [id, sentAt]
+      handlers:
+        - default:get
+        - markRead
+
+dependencies: {}

@@ -82,7 +82,26 @@ export async function handleGenerateAll(
     return;
   }
 
-  const { domainGen, dtoGen, portGen, queryGen, serviceGen, controllerGen, templateGen, storeGen } = createGenerators();
+  const { domainGen, dtoGen, portGen, queryGen, commandGen, serviceGen, controllerGen, templateGen, storeGen } = createGenerators();
+
+  // Pre-pass: collect names of all commands whose execute() returns void across all modules.
+  // This lets the controller generator emit correct handler chains when a void command is the
+  // last step in a non-void use case (e.g. "get order → send notification → return order").
+  const voidCommandNames = new Set<string>();
+  for (const entry of filteredEntries) {
+    const entryYamlPath = path.isAbsolute(entry.path)
+      ? entry.path
+      : path.resolve(process.cwd(), entry.path);
+    if (!fs.existsSync(entryYamlPath)) continue;
+    try {
+      const yaml = fs.readFileSync(entryYamlPath, 'utf8');
+      const cfg = parseYaml(yaml);
+      for (const [commandName, cmdConfig] of Object.entries((cfg as any)?.exports?.commands || {})) {
+        const output = (cmdConfig as any)?.output;
+        if (!output || output === 'void') voidCommandNames.add(commandName);
+      }
+    } catch { /* ignore malformed YAMLs in pre-pass */ }
+  }
 
   const moduleScansBySrcDir = new Map<string, ModuleScanEntry[]>();
 
@@ -122,11 +141,13 @@ export async function handleGenerateAll(
     // eslint-disable-next-line no-await-in-loop
     await queryGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers);
     // eslint-disable-next-line no-await-in-loop
+    await commandGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers);
+    // eslint-disable-next-line no-await-in-loop
     await serviceGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers);
     // eslint-disable-next-line no-await-in-loop
     await storeGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers, entry.database === 'postgres' ? 'postgres' : 'mysql');
     // eslint-disable-next-line no-await-in-loop
-    await controllerGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers);
+    await controllerGen.generateAndSaveFiles(moduleYamlPath, moduleDir, opts, identifiers, voidCommandNames);
     // eslint-disable-next-line no-await-in-loop
     await templateGen.generateAndSaveFiles(moduleYamlPath, moduleDir, { force: opts?.force, skipOnConflict: opts?.skip, onlyIfMissing: !opts?.withTemplates }, entry.styling);
 
