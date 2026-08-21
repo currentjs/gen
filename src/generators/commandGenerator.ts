@@ -38,7 +38,10 @@ export class CommandGenerator {
 
       if (handler.startsWith('default:')) {
         const action = handler.replace('default:', '');
-        const args = defaultHandlerArgs(action, commandConfig.input);
+        const rawArgs = defaultHandlerArgs(action, commandConfig.input);
+        // Cast to 'any' for create/update since the command's port input type may differ
+        // structurally from the service's DTO type (e.g. SendEmailInput vs NotificationCreateInput).
+        const args = (action === 'create' || action === 'update') ? `${rawArgs} as any` : rawArgs;
         lines.push(`    const ${resultVar} = await this.${serviceVar}.${action}(${args});`);
       } else if (handler.startsWith('service:')) {
         const method = handler.replace('service:', '');

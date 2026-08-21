@@ -419,7 +419,8 @@ ${setterCalls}
     useCases: Record<string, UseCaseDefinition>,
     aggregateConfig: AggregateConfig,
     childInfo?: ChildEntityInfo,
-    importedCommandPorts: Array<{ name: string; pascalName: string }> = []
+    importedCommandPorts: Array<{ name: string; pascalName: string }> = [],
+    commandStubs: Array<{ handlerName: string; resultType: string; inputType: string; returnType: string; portImport: string }> = []
   ): string {
     const serviceName = `${modelName}Service`;
     const storeName = `${modelName}Store`;
@@ -434,6 +435,8 @@ ${setterCalls}
     // Collect DTO types needed for imports
     const dtoTypes = new Set<string>();
     const enumTypeNames = new Set<string>();
+    // Port input type imports (from command port interfaces, not DTO files)
+    const portInputImports = new Set<string>();
 
     // Generate methods for each handler
     const methods: string[] = [];
@@ -479,6 +482,22 @@ ${setterCalls}
       methods.push(getResourceOwnerMethod);
     }
 
+    // Generate stubs for command-specific custom handlers not already in regular use cases.
+    // These use the command's port input type (e.g. SendEmailInput from ../ports/SendEmailInterface),
+    // not the non-existent DTO file.
+    for (const stub of commandStubs) {
+      if (!handlers.has(stub.handlerName)) {
+        portInputImports.add(stub.portImport);
+        methods.push(this.generateCustomHandlerMethod(
+          modelName,
+          stub.handlerName,
+          stub.resultType,
+          stub.inputType,
+          stub.returnType
+        ));
+      }
+    }
+
     // Collect imports for aggregate reference types used in fields
     const aggRefImports = Object.entries(aggregateConfig.fields)
       .filter(([, fc]) => isAggregateReference(fc.type, this.availableAggregates) && fc.type !== modelName)
@@ -496,9 +515,10 @@ ${setterCalls}
 
     const entityImports = [modelName, ...enumTypeNames].join(', ');
 
-    const commandPortImports = importedCommandPorts
-      .map(p => `import { I${p.pascalName}Command } from '../ports/${p.pascalName}Interface';`)
-      .join('\n');
+    const commandPortImports = [
+      ...importedCommandPorts.map(p => `import { I${p.pascalName}Command } from '../ports/${p.pascalName}Interface';`),
+      ...[...portInputImports]
+    ].join('\n');
     const commandPortImportStr = commandPortImports ? '\n' + commandPortImports : '';
 
     const commandConstructorParams = importedCommandPorts
@@ -553,25 +573,57 @@ ${methods.join('\n\n')}
       }
     }
 
-    // Synthesise virtual use-case entries from exports.commands so that the backing
-    // service gains any default:* or service:* method stubs the command declares.
-    const commandUseCasesByModel = new Map<string, Record<string, UseCaseDefinition>>();
+    // Compute command-specific custom handler stubs.
+    // Only custom (non-default:*) handlers not already declared in regular use cases
+    // are included. These stubs use the command's port input type (e.g. SendEmailInput
+    // from ../ports/SendEmailInterface) rather than a non-existent DTO file.
+    interface CommandStub {
+      handlerName: string;
+      resultType: string;
+      inputType: string;
+      returnType: string;
+      portImport: string;
+    }
+    const commandStubsByModel = new Map<string, CommandStub[]>();
     for (const [commandName, commandConfig] of Object.entries(config.exports?.commands || {})) {
       const modelName = resolveCommandModel(commandConfig);
       if (!modelName) continue;
-      if (!commandUseCasesByModel.has(modelName)) commandUseCasesByModel.set(modelName, {});
-      commandUseCasesByModel.get(modelName)![commandName] = {
-        input: commandConfig.input,
-        output: commandConfig.output,
-        handlers: commandConfig.handlers
-      };
+      if (!this.availableAggregates.has(modelName)) continue;
+
+      const pascal = capitalize(commandName);
+      const inputType = `${pascal}Input`;
+      const portImport = `import { ${inputType} } from '../ports/${pascal}Interface';`;
+
+      // Gather handlers already declared in regular use cases for this model
+      const existingHandlers = new Set<string>();
+      for (const ucDef of Object.values(config.useCases?.[modelName] || {})) {
+        for (const h of (ucDef.handlers || [])) existingHandlers.add(h);
+      }
+
+      for (let i = 0; i < commandConfig.handlers.length; i++) {
+        const handler = commandConfig.handlers[i];
+        if (handler.startsWith('default:')) continue; // covered by regular use cases
+        if (existingHandlers.has(handler)) continue;   // already generated
+
+        // Determine the previous handler's return type (for the result param)
+        const prevHandler = commandConfig.handlers[i - 1];
+        let resultType = modelName;
+        if (prevHandler?.startsWith('default:')) {
+          resultType = this.getDefaultHandlerReturnType(prevHandler.replace('default:', ''), modelName);
+        }
+
+        const stubs = commandStubsByModel.get(modelName) || [];
+        if (!stubs.some(s => s.handlerName === handler)) {
+          stubs.push({ handlerName: handler, resultType, inputType, returnType: modelName, portImport });
+        }
+        commandStubsByModel.set(modelName, stubs);
+      }
     }
 
-    // Build the set of model names we need to generate services for:
-    // actual use-case models + command-backing models (if the aggregate exists).
+    // Build the set of model names we need to generate services for.
     const allModelNames = new Set([
       ...Object.keys(config.useCases || {}),
-      ...commandUseCasesByModel.keys()
+      ...commandStubsByModel.keys()
     ]);
 
     allModelNames.forEach(modelName => {
@@ -595,19 +647,18 @@ ${methods.join('\n\n')}
         }
       }
 
-      // Merge command-backing virtual use cases (these always have local handlers)
-      const commandUseCases = commandUseCasesByModel.get(modelName) || {};
-      const mergedUseCases = { ...localUseCases, ...commandUseCases };
+      const commandStubs = commandStubsByModel.get(modelName) || [];
 
-      if (Object.keys(mergedUseCases).length === 0) return;
+      if (Object.keys(localUseCases).length === 0 && commandStubs.length === 0) return;
 
       const childInfo = childEntityMap.get(modelName);
       result[modelName] = this.generateService(
         modelName,
-        mergedUseCases,
+        localUseCases,
         aggregateConfig,
         childInfo,
-        importedCommandPorts
+        importedCommandPorts,
+        commandStubs
       );
     });
 

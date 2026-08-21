@@ -45,7 +45,7 @@ describe('CommandGenerator - void output command (sendEmail)', () => {
   });
 
   it('execute() calls default:create handler', () => {
-    expect(code).toContain('notificationService.create(input)');
+    expect(code).toContain('notificationService.create(input as any)');
   });
 
   it('execute() calls dispatch handler passing previous result', () => {

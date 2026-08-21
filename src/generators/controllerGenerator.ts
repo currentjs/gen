@@ -21,6 +21,8 @@ import { collectImportedPorts, PortKind } from '../utils/crossModuleUtils';
 
 export class ControllerGenerator {
   private identifiers: IdentifierType = 'numeric';
+  /** Command names whose execute() returns void (sourced from all modules' exports.commands) */
+  private voidCommandNames: Set<string> = new Set();
 
   /** Returns the map of all imported port names to their kind ('query' | 'command') */
   private getImportedPorts(config: ModuleConfig): Map<string, PortKind> {
@@ -253,10 +255,42 @@ export class ControllerGenerator {
     indent: string = '    '
   ): string {
     const handlers = useCaseDef.handlers;
+    const useCaseIsVoid = !useCaseDef.output || useCaseDef.output === 'void';
+
+    // A handler is a "void command" when it is an imported command whose execute()
+    // returns void. In a non-void use case, void commands must not capture their
+    // result so that the previous (meaningful) result reaches the output transform.
+    const isVoidCmd = (h: string) =>
+      importedPorts.get(h) === 'command' && this.voidCommandNames.has(h);
+
+    // Find the index of the last non-void handler so we can name it 'result'.
+    // For void use cases every handler keeps the default naming (last → 'result').
+    let lastNonVoidIdx = handlers.length - 1;
+    if (!useCaseIsVoid) {
+      for (let i = handlers.length - 1; i >= 0; i--) {
+        if (!isVoidCmd(handlers[i])) { lastNonVoidIdx = i; break; }
+      }
+    }
+
+    // Pre-compute result variable names (null = no capture, only for void cmds in non-void use cases)
+    const resultVarFor = (idx: number): string | null => {
+      if (!useCaseIsVoid && isVoidCmd(handlers[idx])) return null;
+      if (idx === lastNonVoidIdx) return 'result';
+      return `result${idx}`;
+    };
+
+    // Find the nearest preceding non-null result variable for custom service handlers
+    const prevResultFor = (idx: number): string => {
+      for (let j = idx - 1; j >= 0; j--) {
+        const rv = resultVarFor(j);
+        if (rv !== null) return rv;
+      }
+      return 'null';
+    };
 
     const lines = handlers.map((handler, index) => {
-      const isLast = index === handlers.length - 1;
-      const resultVar = isLast ? 'result' : `result${index}`;
+      const resultVar = resultVarFor(index);
+      const noCapture = resultVar === null;
 
       if (handler.startsWith('default:')) {
         const defaultAction = handler.replace('default:', '');
@@ -280,19 +314,19 @@ export class ControllerGenerator {
         } else {
           params = 'input';
         }
+        // default:* handlers are never void commands
         return `${indent}const ${resultVar} = await this.${serviceVar}.${defaultAction}(${params});`;
       } else if (importedPorts.has(handler)) {
         const kind = importedPorts.get(handler)!;
         const pascal = capitalize(handler);
-        if (kind === 'query') {
-          const portVar = `${handler}Query`;
-          return `${indent}const ${resultVar} = await this.${portVar}.execute(${pascal}Input.parse({ ...context.request.body, ...context.request.parameters }));`;
-        } else {
-          const portVar = `${handler}Command`;
-          return `${indent}const ${resultVar} = await this.${portVar}.execute(${pascal}Input.parse({ ...context.request.body, ...context.request.parameters }));`;
+        const portVar = kind === 'query' ? `${handler}Query` : `${handler}Command`;
+        const call = `this.${portVar}.execute(${pascal}Input.parse({ ...context.request.body, ...context.request.parameters }))`;
+        if (noCapture) {
+          return `${indent}await ${call};`;
         }
+        return `${indent}const ${resultVar} = await ${call};`;
       } else {
-        const prevResult = index === 0 ? 'null' : `result${index - 1}`;
+        const prevResult = prevResultFor(index);
         return `${indent}const ${resultVar} = await this.${serviceVar}.${handler}(${prevResult}, input);`;
       }
     });
@@ -909,8 +943,10 @@ ${methods.join('\n\n')}
     yamlFilePath: string,
     moduleDir: string,
     opts?: { force?: boolean; skipOnConflict?: boolean },
-    identifiers: IdentifierType = 'numeric'
+    identifiers: IdentifierType = 'numeric',
+    voidCommandNames: Set<string> = new Set()
   ): Promise<string[]> {
+    this.voidCommandNames = voidCommandNames;
     const controllersByName = this.generateFromYamlFile(yamlFilePath, identifiers);
     
     const controllersDir = path.join(moduleDir, 'infrastructure', 'controllers');
