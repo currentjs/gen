@@ -238,3 +238,62 @@ describe('ServiceGenerator — imported query handlers excluded from service', (
     expect(dashboardService).toContain('async get(');
   });
 });
+
+describe('ServiceGenerator — exports.commands generate methods on backing service', () => {
+  const gen = new ServiceGenerator();
+  const config = loadFixture('notification-command-export.yaml');
+  const result = gen.generateFromConfig(config);
+  const code = result['Notification'] ?? '';
+
+  it('generates the exporting service (Notification)', () => {
+    expect(code).toContain('class NotificationService');
+  });
+
+  it('generates dispatch stub from sendEmail command handlers', () => {
+    expect(code).toContain('async dispatch(');
+  });
+
+  it('generates markRead stub from markAllRead command handlers', () => {
+    expect(code).toContain('async markRead(');
+  });
+
+  it('does NOT inject any command ports (exporter has no dependencies.commands)', () => {
+    expect(code).toNotContain('ICommand');
+  });
+});
+
+describe('ServiceGenerator — consumer service receives injected command ports', () => {
+  const gen = new ServiceGenerator();
+  const config = loadFixture('order-command-consumer.yaml');
+  const result = gen.generateFromConfig(config);
+  const code = result['Order'] ?? '';
+
+  it('generates OrderService', () => {
+    expect(code).toContain('class OrderService');
+  });
+
+  it('imports ISendEmailCommand from port file', () => {
+    expect(code).toContain("import { ISendEmailCommand }");
+    expect(code).toContain("'../ports/SendEmailInterface'");
+  });
+
+  it('constructor includes sendEmailCommand: ISendEmailCommand', () => {
+    expect(code).toContain('private sendEmailCommand: ISendEmailCommand');
+  });
+
+  it('does NOT generate sendEmail as a service method (it is dispatched via the command)', () => {
+    expect(code).toNotContain('async sendEmail(');
+  });
+});
+
+describe('ServiceGenerator — imported command handlers excluded from service stubs', () => {
+  it('does not generate a service method for handlers that are imported commands', () => {
+    const gen = new ServiceGenerator();
+    const config = loadFixture('order-command-consumer.yaml');
+    const result = gen.generateFromConfig(config);
+    const orderService = result['Order'] ?? '';
+    expect(orderService).toNotContain('async sendEmail(');
+    // native default:get handler should still produce get
+    expect(orderService).toContain('async get(');
+  });
+});

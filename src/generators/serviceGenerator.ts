@@ -14,6 +14,7 @@ import {
 } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
 import { capitalize, mapType as mapTypeUtil, isAggregateReference } from '../utils/typeUtils';
+import { collectImportedPorts, resolveCommandModel } from '../utils/crossModuleUtils';
 
 interface HandlerContext {
   actionName: string;
@@ -417,7 +418,8 @@ ${setterCalls}
     modelName: string,
     useCases: Record<string, UseCaseDefinition>,
     aggregateConfig: AggregateConfig,
-    childInfo?: ChildEntityInfo
+    childInfo?: ChildEntityInfo,
+    importedCommandPorts: Array<{ name: string; pascalName: string }> = []
   ): string {
     const serviceName = `${modelName}Service`;
     const storeName = `${modelName}Store`;
@@ -494,9 +496,21 @@ ${setterCalls}
 
     const entityImports = [modelName, ...enumTypeNames].join(', ');
 
+    const commandPortImports = importedCommandPorts
+      .map(p => `import { I${p.pascalName}Command } from '../ports/${p.pascalName}Interface';`)
+      .join('\n');
+    const commandPortImportStr = commandPortImports ? '\n' + commandPortImports : '';
+
+    const commandConstructorParams = importedCommandPorts
+      .map(p => `    private ${p.name}Command: I${p.pascalName}Command`)
+      .join(',\n');
+    const constructorBody = commandConstructorParams
+      ? `    private ${storeVar}: ${storeName},\n${commandConstructorParams}`
+      : `    private ${storeVar}: ${storeName}`;
+
     return `import { Injectable } from '../../../../system';
 import { ${entityImports} } from '../../domain/entities/${modelName}';${aggRefImportStr}${dtoImportStr}
-import { ${storeName} } from '../../infrastructure/stores/${storeName}';
+import { ${storeName} } from '../../infrastructure/stores/${storeName}';${commandPortImportStr}
 
 /**
  * Service layer for ${modelName}
@@ -505,7 +519,7 @@ import { ${storeName} } from '../../infrastructure/stores/${storeName}';
 @Injectable()
 export class ${serviceName} {
   constructor(
-    private ${storeVar}: ${storeName}
+${constructorBody}
   ) {}
 
 ${methods.join('\n\n')}
@@ -526,34 +540,75 @@ ${methods.join('\n\n')}
     const childEntityMap = buildChildEntityMap(config);
     const dependencyKeys = new Set(Object.keys(config.dependencies || {}));
 
-    // Generate a Service file for each model
-    Object.entries(config.useCases).forEach(([modelName, useCases]) => {
+    // All imported port names (queries + commands) — these are dispatched by the controller
+    // and must not become service method stubs.
+    const importedPorts = collectImportedPorts(config);
+    const importedPortNames = new Set(importedPorts.keys());
+
+    // Imported command ports injected into every real-model service of this module.
+    const importedCommandPorts: Array<{ name: string; pascalName: string }> = [];
+    for (const [portName, kind] of importedPorts.entries()) {
+      if (kind === 'command') {
+        importedCommandPorts.push({ name: portName, pascalName: capitalize(portName) });
+      }
+    }
+
+    // Synthesise virtual use-case entries from exports.commands so that the backing
+    // service gains any default:* or service:* method stubs the command declares.
+    const commandUseCasesByModel = new Map<string, Record<string, UseCaseDefinition>>();
+    for (const [commandName, commandConfig] of Object.entries(config.exports?.commands || {})) {
+      const modelName = resolveCommandModel(commandConfig);
+      if (!modelName) continue;
+      if (!commandUseCasesByModel.has(modelName)) commandUseCasesByModel.set(modelName, {});
+      commandUseCasesByModel.get(modelName)![commandName] = {
+        input: commandConfig.input,
+        output: commandConfig.output,
+        handlers: commandConfig.handlers
+      };
+    }
+
+    // Build the set of model names we need to generate services for:
+    // actual use-case models + command-backing models (if the aggregate exists).
+    const allModelNames = new Set([
+      ...Object.keys(config.useCases || {}),
+      ...commandUseCasesByModel.keys()
+    ]);
+
+    allModelNames.forEach(modelName => {
       const aggregateConfig = this.availableAggregates.get(modelName);
       
       if (!aggregateConfig) {
         // Pseudo-models (dependency keys with no local aggregate) — no service generated
         if (dependencyKeys.has(modelName)) return;
-        console.warn(`Warning: No aggregate found for model ${modelName}`);
+        // If there's no aggregate, we can't generate a service (even for command-only models)
         return;
       }
 
-      // For models that reference dependencies, filter out pure imported-query handlers
-      // so the service only generates methods for local/default handlers
-      const importedQueryNames = new Set<string>();
-      for (const depConfig of Object.values(config.dependencies || {})) {
-        (depConfig.queries || []).forEach(q => importedQueryNames.add(q));
-      }
-      const localUseCases: typeof useCases = {};
-      for (const [actionName, ucDef] of Object.entries(useCases)) {
-        const localHandlers = ucDef.handlers.filter(h => !importedQueryNames.has(h));
+      const rawUseCases = config.useCases?.[modelName] || {};
+
+      // Filter out imported port handlers (queries and commands) so they don't become service stubs.
+      const localUseCases: typeof rawUseCases = {};
+      for (const [actionName, ucDef] of Object.entries(rawUseCases)) {
+        const localHandlers = ucDef.handlers.filter(h => !importedPortNames.has(h));
         if (localHandlers.length > 0) {
           localUseCases[actionName] = { ...ucDef, handlers: localHandlers };
         }
       }
-      if (Object.keys(localUseCases).length === 0) return;
+
+      // Merge command-backing virtual use cases (these always have local handlers)
+      const commandUseCases = commandUseCasesByModel.get(modelName) || {};
+      const mergedUseCases = { ...localUseCases, ...commandUseCases };
+
+      if (Object.keys(mergedUseCases).length === 0) return;
 
       const childInfo = childEntityMap.get(modelName);
-      result[modelName] = this.generateService(modelName, localUseCases, aggregateConfig, childInfo);
+      result[modelName] = this.generateService(
+        modelName,
+        mergedUseCases,
+        aggregateConfig,
+        childInfo,
+        importedCommandPorts
+      );
     });
 
     return result;

@@ -17,19 +17,14 @@ import {
 import { buildChildEntityMap, ChildEntityInfo, getChildrenOfParent, ParentChildInfo } from '../utils/childEntityUtils';
 import { capitalize } from '../utils/typeUtils';
 import { AUTH_ROLES, AUTH_ERRORS } from '../utils/constants';
+import { collectImportedPorts, PortKind } from '../utils/crossModuleUtils';
 
 export class ControllerGenerator {
   private identifiers: IdentifierType = 'numeric';
 
-  /** Returns the set of all imported query names declared in dependencies */
-  private getImportedQueryNames(config: ModuleConfig): Set<string> {
-    const names = new Set<string>();
-    if (config.dependencies) {
-      for (const depConfig of Object.values(config.dependencies)) {
-        (depConfig.queries || []).forEach(q => names.add(q));
-      }
-    }
-    return names;
+  /** Returns the map of all imported port names to their kind ('query' | 'command') */
+  private getImportedPorts(config: ModuleConfig): Map<string, PortKind> {
+    return collectImportedPorts(config);
   }
 
   /** Returns true when a model exists in dependencies but not in domain.aggregates (pseudo-model) */
@@ -245,16 +240,15 @@ export class ControllerGenerator {
   }
 
   /**
-   * Generate inlined handler chain code (previously in UseCase layer).
-   * Produces sequential service method calls from the handlers array.
-   * Imported query handlers (names in importedQueryNames) are called via their query interface.
+   * Generate inlined handler chain code.
+   * Imported query/command handlers are called via their port interface instance.
    * @param indent - indentation string for each generated line
    */
   private generateHandlerChain(
     actionName: string,
     useCaseDef: UseCaseDefinition,
     serviceVar: string,
-    importedQueryNames: Set<string>,
+    importedPorts: Map<string, PortKind>,
     ownerIdArg?: string,
     indent: string = '    '
   ): string {
@@ -287,11 +281,16 @@ export class ControllerGenerator {
           params = 'input';
         }
         return `${indent}const ${resultVar} = await this.${serviceVar}.${defaultAction}(${params});`;
-      } else if (importedQueryNames.has(handler)) {
-        // Imported cross-module query: call via the query interface instance
-        const pascalQuery = capitalize(handler);
-        const queryVar = `${handler}Query`;
-        return `${indent}const ${resultVar} = await this.${queryVar}.execute(${pascalQuery}Input.parse({ ...context.request.body, ...context.request.parameters }));`;
+      } else if (importedPorts.has(handler)) {
+        const kind = importedPorts.get(handler)!;
+        const pascal = capitalize(handler);
+        if (kind === 'query') {
+          const portVar = `${handler}Query`;
+          return `${indent}const ${resultVar} = await this.${portVar}.execute(${pascal}Input.parse({ ...context.request.body, ...context.request.parameters }));`;
+        } else {
+          const portVar = `${handler}Command`;
+          return `${indent}const ${resultVar} = await this.${portVar}.execute(${pascal}Input.parse({ ...context.request.body, ...context.request.parameters }));`;
+        }
       } else {
         const prevResult = index === 0 ? 'null' : `result${index - 1}`;
         return `${indent}const ${resultVar} = await this.${serviceVar}.${handler}(${prevResult}, input);`;
@@ -301,14 +300,14 @@ export class ControllerGenerator {
     return lines.join('\n');
   }
 
-  /** Collect all imported query names actually used across a set of handler lists */
-  private collectUsedImportedQueries(
+  /** Collect all imported port names actually used across a set of handler names */
+  private collectUsedImportedPorts(
     handlers: string[],
-    importedQueryNames: Set<string>
-  ): Set<string> {
-    const used = new Set<string>();
+    importedPorts: Map<string, PortKind>
+  ): Map<string, PortKind> {
+    const used = new Map<string, PortKind>();
     for (const h of handlers) {
-      if (importedQueryNames.has(h)) used.add(h);
+      if (importedPorts.has(h)) used.set(h, importedPorts.get(h)!);
     }
     return used;
   }
@@ -318,9 +317,9 @@ export class ControllerGenerator {
     resourceName: string,
     useCasesConfig: UseCasesConfig,
     config: ModuleConfig,
-    importedQueryNames: Set<string>,
+    importedPorts: Map<string, PortKind>,
     childInfo?: ChildEntityInfo
-  ): { method: string; dtoImports: Set<string>; voidOutputDtos: Set<string>; usedQueries: Set<string> } {
+  ): { method: string; dtoImports: Set<string>; voidOutputDtos: Set<string>; usedPorts: Map<string, PortKind> } {
     const { model, action } = this.parseUseCase(endpoint.useCase);
     const methodName = action;
     const decorator = this.getHttpDecorator(endpoint.method);
@@ -333,7 +332,7 @@ export class ControllerGenerator {
 
     const dtoImports = new Set<string>();
     const voidOutputDtos = new Set<string>();
-    const usedQueries = new Set<string>();
+    const usedPorts = new Map<string, PortKind>();
 
     // Pseudo-models have no aggregate DTOs — skip adding to dtoImports
     if (!isPseudo) {
@@ -343,10 +342,10 @@ export class ControllerGenerator {
       }
     }
 
-    // Collect imported queries used by this endpoint
+    // Collect imported ports (queries and commands) used by this endpoint
     if (useCaseDef) {
       useCaseDef.handlers.forEach(h => {
-        if (importedQueryNames.has(h)) usedQueries.add(h);
+        if (importedPorts.has(h)) usedPorts.set(h, importedPorts.get(h)!);
       });
     }
 
@@ -401,7 +400,7 @@ export class ControllerGenerator {
 
     let handlerChain: string;
     if (useCaseDef) {
-      handlerChain = this.generateHandlerChain(action, useCaseDef, serviceVar, importedQueryNames, ownerIdArg, '    ');
+      handlerChain = this.generateHandlerChain(action, useCaseDef, serviceVar, importedPorts, ownerIdArg, '    ');
     } else if (!isPseudo) {
       const callArg = ownerIdArg ? `input, ${ownerIdArg}` : 'input';
       handlerChain = `    const result = await this.${serviceVar}.${action}(${callArg});`;
@@ -416,7 +415,7 @@ ${handlerChain}${postFetchOwnerCheck}
     ${outputTransform}
   }`;
 
-    return { method, dtoImports, voidOutputDtos, usedQueries };
+    return { method, dtoImports, voidOutputDtos, usedPorts };
   }
 
   private generateWebPageMethod(
@@ -425,14 +424,14 @@ ${handlerChain}${postFetchOwnerCheck}
     layout: string | undefined,
     methodIndex: number,
     config: ModuleConfig,
-    importedQueryNames: Set<string>,
+    importedPorts: Map<string, PortKind>,
     childInfo?: ChildEntityInfo,
     withChildChildren?: ParentChildInfo[]
-  ): { method: string; dtoImports: Set<string>; usedQueries: Set<string> } {
+  ): { method: string; dtoImports: Set<string>; usedPorts: Map<string, PortKind> } {
     const method = page.method || 'GET';
     const decorator = this.getHttpDecorator(method);
     const dtoImports = new Set<string>();
-    const usedQueries = new Set<string>();
+    const usedPorts = new Map<string, PortKind>();
     
     const pathSegments = page.path.split('/').filter(Boolean);
     let baseMethodName = pathSegments.length === 0 
@@ -501,8 +500,8 @@ ${handlerChain}${postFetchOwnerCheck}
 
         let handlerChain: string;
         if (useCaseDef) {
-          handlerChain = this.generateHandlerChain(action, useCaseDef, serviceVar, importedQueryNames, ownerIdArg, '    ');
-          useCaseDef.handlers.forEach(h => { if (importedQueryNames.has(h)) usedQueries.add(h); });
+          handlerChain = this.generateHandlerChain(action, useCaseDef, serviceVar, importedPorts, ownerIdArg, '    ');
+          useCaseDef.handlers.forEach(h => { if (importedPorts.has(h)) usedPorts.set(h, importedPorts.get(h)!); });
         } else {
           const callArg = ownerIdArg ? `input, ${ownerIdArg}` : 'input';
           handlerChain = `    const result = await this.${serviceVar}.${action}(${callArg});`;
@@ -516,7 +515,7 @@ ${handlerChain}${postFetchOwnerCheck}${loadChildCode}
     return ${returnExpr};
   }`;
 
-        return { method: methodCode, dtoImports, usedQueries };
+        return { method: methodCode, dtoImports, usedPorts };
       } else {
         const emptyFormData = childInfo
           ? `{ formData: {}, ${childInfo.parentIdField}: context.request.parameters.${childInfo.parentIdField} }`
@@ -527,7 +526,7 @@ ${handlerChain}${postFetchOwnerCheck}${loadChildCode}
     return ${emptyFormData};
   }`;
 
-        return { method: methodCode, dtoImports, usedQueries };
+        return { method: methodCode, dtoImports, usedPorts };
       }
     } else if (method === 'POST' && page.useCase) {
       const { model, action } = this.parseUseCase(page.useCase);
@@ -563,8 +562,8 @@ ${handlerChain}${postFetchOwnerCheck}${loadChildCode}
       let handlerChain: string;
       if (useCaseDef) {
         // Inside try block: use 6-space indent
-        handlerChain = this.generateHandlerChain(action, useCaseDef, serviceVar, importedQueryNames, undefined, '      ');
-        useCaseDef.handlers.forEach(h => { if (importedQueryNames.has(h)) usedQueries.add(h); });
+        handlerChain = this.generateHandlerChain(action, useCaseDef, serviceVar, importedPorts, undefined, '      ');
+        useCaseDef.handlers.forEach(h => { if (importedPorts.has(h)) usedPorts.set(h, importedPorts.get(h)!); });
       } else {
         handlerChain = `      const result = await this.${serviceVar}.${action}(input);`;
       }
@@ -582,7 +581,7 @@ ${handlerChain}
     }
   }`;
 
-      return { method: methodCode, dtoImports, usedQueries };
+      return { method: methodCode, dtoImports, usedPorts };
     }
 
     const methodCode = `  @${decorator}('${page.path}')
@@ -591,7 +590,7 @@ ${handlerChain}
     return {};
   }`;
 
-    return { method: methodCode, dtoImports, usedQueries };
+    return { method: methodCode, dtoImports, usedPorts };
   }
 
   private generateOnSuccessHandler(page: WebPageConfig): string {
@@ -660,7 +659,7 @@ ${handlerChain}
     endpoints: ApiEndpointConfig[],
     useCasesConfig: UseCasesConfig,
     config: ModuleConfig,
-    importedQueryNames: Set<string>,
+    importedPorts: Map<string, PortKind>,
     childInfo?: ChildEntityInfo
   ): string {
     const controllerName = `${resourceName}ApiController`;
@@ -668,7 +667,7 @@ ${handlerChain}
     const serviceModels = new Set<string>();
     const allDtoImports = new Set<string>();
     const allVoidOutputDtos = new Set<string>();
-    const allUsedQueries = new Set<string>();
+    const allUsedPorts = new Map<string, PortKind>();
     const methods: string[] = [];
 
     const sortedEndpoints = this.sortRoutesBySpecificity(endpoints);
@@ -679,13 +678,13 @@ ${handlerChain}
         serviceModels.add(model);
       }
       
-      const { method, dtoImports, voidOutputDtos, usedQueries } = this.generateApiEndpointMethod(
-        endpoint, resourceName, useCasesConfig, config, importedQueryNames, childInfo
+      const { method, dtoImports, voidOutputDtos, usedPorts } = this.generateApiEndpointMethod(
+        endpoint, resourceName, useCasesConfig, config, importedPorts, childInfo
       );
       methods.push(method);
       dtoImports.forEach(d => allDtoImports.add(d));
       voidOutputDtos.forEach(d => allVoidOutputDtos.add(d));
-      usedQueries.forEach(q => allUsedQueries.add(q));
+      usedPorts.forEach((kind, name) => allUsedPorts.set(name, kind));
     });
 
     const serviceImports = Array.from(serviceModels)
@@ -701,19 +700,25 @@ ${handlerChain}
       })
       .join('\n');
 
-    // Imported query interface and input imports
-    const queryImportStatements = Array.from(allUsedQueries)
-      .map(q => {
-        const pascal = capitalize(q);
-        return `import { I${pascal}Query, ${pascal}Input } from '../../application/ports/${pascal}Interface';`;
+    // Imported port interface and input imports (queries and commands)
+    const portImportStatements = Array.from(allUsedPorts.entries())
+      .map(([name, kind]) => {
+        const pascal = capitalize(name);
+        const iface = kind === 'query' ? `I${pascal}Query` : `I${pascal}Command`;
+        return `import { ${iface}, ${pascal}Input } from '../../application/ports/${pascal}Interface';`;
       })
       .join('\n');
 
     const serviceConstructorParams = Array.from(serviceModels)
       .map(model => `private ${model.toLowerCase()}Service: ${model}Service`);
-    const queryConstructorParams = Array.from(allUsedQueries)
-      .map(q => `private ${q}Query: I${capitalize(q)}Query`);
-    const allConstructorParams = [...serviceConstructorParams, ...queryConstructorParams].join(',\n    ');
+    const portConstructorParams = Array.from(allUsedPorts.entries())
+      .map(([name, kind]) => {
+        const pascal = capitalize(name);
+        return kind === 'query'
+          ? `private ${name}Query: I${pascal}Query`
+          : `private ${name}Command: I${pascal}Command`;
+      });
+    const allConstructorParams = [...serviceConstructorParams, ...portConstructorParams].join(',\n    ');
 
     const errorImports = this.getNeededHttpErrorImports(sortedEndpoints.map(e => e.auth));
     const routerImports = ['Controller', 'Get', 'Post', 'Put', 'Delete', 'type IContext', ...errorImports].join(', ');
@@ -722,7 +727,7 @@ ${handlerChain}
       `import { ${routerImports} } from '@currentjs/router';`,
       serviceImports,
       dtoImportStatements,
-      queryImportStatements
+      portImportStatements
     ].filter(Boolean).join('\n');
 
     return `${importLines}
@@ -743,7 +748,7 @@ ${methods.join('\n\n')}
     layout: string | undefined,
     pages: WebPageConfig[],
     config: ModuleConfig,
-    importedQueryNames: Set<string>,
+    importedPorts: Map<string, PortKind>,
     childInfo?: ChildEntityInfo
   ): string {
     const controllerName = `${resourceName}WebController`;
@@ -752,7 +757,7 @@ ${methods.join('\n\n')}
 
     const serviceModels = new Set<string>();
     const allDtoImports = new Set<string>();
-    const allUsedQueries = new Set<string>();
+    const allUsedPorts = new Map<string, PortKind>();
     const methods: string[] = [];
 
     const sortedPages = this.sortRoutesBySpecificity(pages);
@@ -768,12 +773,12 @@ ${methods.join('\n\n')}
       const useCaseWithChild = model && action && (config.useCases[model] as Record<string, { withChild?: boolean }>)?.[action]?.withChild === true;
       const withChildForThisPage = useCaseWithChild && action === 'get' && withChildChildren.length > 0 ? withChildChildren : undefined;
       
-      const { method, dtoImports, usedQueries } = this.generateWebPageMethod(
-        page, resourceName, layout, index, config, importedQueryNames, childInfo, withChildForThisPage
+      const { method, dtoImports, usedPorts } = this.generateWebPageMethod(
+        page, resourceName, layout, index, config, importedPorts, childInfo, withChildForThisPage
       );
       methods.push(method);
       dtoImports.forEach(d => allDtoImports.add(d));
-      usedQueries.forEach(q => allUsedQueries.add(q));
+      usedPorts.forEach((kind, name) => allUsedPorts.set(name, kind));
     });
 
     const needsChildServices = withChildChildren.length > 0 && sortedPages.some(page => {
@@ -794,9 +799,14 @@ ${methods.join('\n\n')}
         constructorParams.push(`private ${childVar}Service: ${child.childEntityName}Service`);
       });
     }
-    // Imported query constructor params
-    Array.from(allUsedQueries).forEach(q => {
-      constructorParams.push(`private ${q}Query: I${capitalize(q)}Query`);
+    // Imported port constructor params (queries and commands)
+    allUsedPorts.forEach((kind, name) => {
+      const pascal = capitalize(name);
+      if (kind === 'query') {
+        constructorParams.push(`private ${name}Query: I${pascal}Query`);
+      } else {
+        constructorParams.push(`private ${name}Command: I${pascal}Command`);
+      }
     });
 
     const serviceImports = Array.from(serviceModels)
@@ -807,10 +817,11 @@ ${methods.join('\n\n')}
       .map(dto => `import { ${dto}Input } from '../../application/dto/${dto}';`)
       .join('\n');
 
-    const queryImportStatements = Array.from(allUsedQueries)
-      .map(q => {
-        const pascal = capitalize(q);
-        return `import { I${pascal}Query } from '../../application/ports/${pascal}Interface';`;
+    const portImportStatements = Array.from(allUsedPorts.entries())
+      .map(([name, kind]) => {
+        const pascal = capitalize(name);
+        const iface = kind === 'query' ? `I${pascal}Query` : `I${pascal}Command`;
+        return `import { ${iface} } from '../../application/ports/${pascal}Interface';`;
       })
       .join('\n');
 
@@ -828,7 +839,7 @@ ${methods.join('\n\n')}
       serviceImports,
       extraServiceImports.join('\n'),
       dtoImportStatements,
-      queryImportStatements
+      portImportStatements
     ].filter(Boolean).join('\n');
 
     return `${importLines}
@@ -845,7 +856,7 @@ ${methods.join('\n\n')}
     const result: Record<string, string> = {};
     this.identifiers = identifiers;
     const childEntityMap = buildChildEntityMap(config);
-    const importedQueryNames = this.getImportedQueryNames(config);
+    const importedPorts = this.getImportedPorts(config);
 
     if (config.api) {
       Object.entries(config.api).forEach(([resourceName, resourceConfig]) => {
@@ -856,7 +867,7 @@ ${methods.join('\n\n')}
           resourceConfig.endpoints,
           config.useCases,
           config,
-          importedQueryNames,
+          importedPorts,
           childInfo
         );
         result[`${resourceName}Api`] = code;
@@ -873,7 +884,7 @@ ${methods.join('\n\n')}
           moduleLayout,
           resourceConfig.pages,
           config,
-          importedQueryNames,
+          importedPorts,
           childInfo
         );
         result[`${resourceName}Web`] = code;

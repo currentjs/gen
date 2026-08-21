@@ -12,6 +12,7 @@ import { StoreGenerator } from '../generators/storeGenerator';
 import { TemplateGenerator } from '../generators/templateGenerator';
 import { PortGenerator } from '../generators/portGenerator';
 import { QueryGenerator } from '../generators/queryGenerator';
+import { CommandGenerator } from '../generators/commandGenerator';
 import { normalizeIdentifierType } from '../types/configTypes';
 
 export interface ModuleEntry {
@@ -102,6 +103,7 @@ export function createGenerators(): {
   dtoGen: DtoGenerator;
   portGen: PortGenerator;
   queryGen: QueryGenerator;
+  commandGen: CommandGenerator;
   serviceGen: ServiceGenerator;
   controllerGen: ControllerGenerator;
   templateGen: TemplateGenerator;
@@ -112,6 +114,7 @@ export function createGenerators(): {
     dtoGen: new DtoGenerator(),
     portGen: new PortGenerator(),
     queryGen: new QueryGenerator(),
+    commandGen: new CommandGenerator(),
     serviceGen: new ServiceGenerator(),
     controllerGen: new ControllerGenerator(),
     templateGen: new TemplateGenerator(),

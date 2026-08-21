@@ -14,6 +14,7 @@ import {
 } from '../types/configTypes';
 import { capitalize, mapType as mapTypeUtil, isAggregateReference } from '../utils/typeUtils';
 import { AppConfig } from '../utils/commandUtils';
+import { resolveCommandModel } from '../utils/crossModuleUtils';
 
 export class PortGenerator {
   private availableAggregates: Map<string, AggregateConfig> = new Map();
@@ -277,7 +278,7 @@ ${mappingsStr}
 }`;
   }
 
-  /** Generate port interface files for this module's exported queries */
+  /** Generate port interface files for this module's exported queries and commands */
   public generateExportPorts(config: ModuleConfig, identifiers: IdentifierType): Record<string, string> {
     const result: Record<string, string> = {};
     this.identifiers = identifiers;
@@ -287,6 +288,15 @@ ${mappingsStr}
       Object.entries(config.domain.aggregates).forEach(([name, aggConfig]) => {
         this.availableAggregates.set(name, aggConfig);
       });
+    }
+
+    // Detect name collisions between queries and commands (both emit to the same interface file)
+    const queryNames = new Set(Object.keys(config.exports?.queries || {}));
+    for (const cmdName of Object.keys(config.exports?.commands || {})) {
+      if (queryNames.has(cmdName)) {
+        // eslint-disable-next-line no-console
+        console.warn(colors.yellow(`Warning: '${cmdName}' is declared as both a query and a command in exports — the command interface will overwrite the query interface.`));
+      }
     }
 
     const queries = config.exports?.queries || {};
@@ -312,10 +322,31 @@ ${mappingsStr}
       result[`${pascalName}Interface`] = parts.join('\n\n');
     }
 
+    const commands = config.exports?.commands || {};
+    for (const [commandName, commandConfig] of Object.entries(commands)) {
+      const pascalName = capitalize(commandName);
+
+      const inputCode = this.generatePortInput(pascalName, commandConfig.input);
+      const outputCode = this.generatePortOutput(pascalName, commandConfig.output);
+
+      const modelRef = resolveCommandModel(commandConfig);
+      const imports: string[] = [];
+      if (modelRef) {
+        imports.push(`import { ${modelRef} } from '../../domain/entities/${modelRef}';`);
+      }
+
+      const interfaceCode = `export interface I${pascalName}Command {
+  execute(input: ${pascalName}Input): Promise<${pascalName}Output>;
+}`;
+
+      const parts = [...(imports.length ? [imports.join('\n')] : []), inputCode, outputCode, interfaceCode];
+      result[`${pascalName}Interface`] = parts.join('\n\n');
+    }
+
     return result;
   }
 
-  /** Generate re-export port files for this module's dependencies */
+  /** Generate re-export port files for this module's dependencies (queries and commands) */
   public generateDependencyPorts(
     config: ModuleConfig,
     moduleDir: string,
@@ -327,7 +358,8 @@ ${mappingsStr}
 
     for (const [depModuleName, depConfig] of Object.entries(dependencies)) {
       const queryNames = depConfig.queries || [];
-      if (queryNames.length === 0) continue;
+      const commandNames = depConfig.commands || [];
+      if (queryNames.length === 0 && commandNames.length === 0) continue;
 
       // Find the exporting module's directory from app.yaml
       const exporterEntry = Object.entries(appConfig.modules).find(
@@ -355,6 +387,18 @@ ${mappingsStr}
         result[portFileName] =
           `export { I${pascalName}Query, ${pascalName}Input, ${pascalName}Output } from '${relPath}';`;
       }
+
+      for (const commandName of commandNames) {
+        const pascalName = capitalize(commandName);
+        const portFileName = `${pascalName}Interface`;
+        const exporterPortFile = path.join(exporterPortsDir, portFileName);
+
+        let relPath = path.relative(consumerPortsDir, exporterPortFile).replace(/\\/g, '/');
+        if (!relPath.startsWith('.')) relPath = `./${relPath}`;
+
+        result[portFileName] =
+          `export { I${pascalName}Command, ${pascalName}Input, ${pascalName}Output } from '${relPath}';`;
+      }
     }
 
     return result;
@@ -372,8 +416,12 @@ ${mappingsStr}
 
     if (!isValidModuleConfig(config)) return;
 
-    const hasExports = config.exports?.queries && Object.keys(config.exports.queries).length > 0;
-    const hasDeps = config.dependencies && Object.keys(config.dependencies).length > 0;
+    const hasQueryExports = !!(config.exports?.queries && Object.keys(config.exports.queries).length > 0);
+    const hasCommandExports = !!(config.exports?.commands && Object.keys(config.exports.commands).length > 0);
+    const hasExports = hasQueryExports || hasCommandExports;
+    const hasDeps = !!(config.dependencies && Object.keys(config.dependencies).some(
+      k => (config.dependencies![k].queries?.length ?? 0) > 0 || (config.dependencies![k].commands?.length ?? 0) > 0
+    ));
     if (!hasExports && !hasDeps) return;
 
     const portsDir = path.join(moduleDir, 'application', 'ports');

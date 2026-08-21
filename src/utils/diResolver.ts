@@ -188,19 +188,28 @@ function topologicalSort(graph: Map<string, string[]>): string[] {
   const visited = new Set<string>();
   const visiting = new Set<string>();
   const result: string[] = [];
+  const stack: string[] = [];
 
   function visit(node: string): void {
     if (visited.has(node)) return;
     if (visiting.has(node)) {
-      throw new Error(`Circular dependency detected involving: ${node}`);
+      const cycleStart = stack.indexOf(node);
+      const cycle = [...stack.slice(cycleStart), node].join(' -> ');
+      throw new Error(
+        `Circular dependency detected: ${cycle}\n` +
+        `Hint: This is often caused by two modules that each declare the other as a command dependency.\n` +
+        `Consider restructuring so one module owns the command and the other only consumes it.`
+      );
     }
     visiting.add(node);
+    stack.push(node);
     const deps = graph.get(node) || [];
     for (const dep of deps) {
       if (graph.has(dep)) {
         visit(dep);
       }
     }
+    stack.pop();
     visiting.delete(node);
     visited.add(node);
     result.push(node);

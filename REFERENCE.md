@@ -608,13 +608,16 @@ api:                        # optional
 web:                        # optional
   <ResourceName>: { ... }
 
-exports:                    # optional — cross-module query exports
+exports:                    # optional — cross-module query/command exports
   queries:
     <queryName>: { ... }
+  commands:
+    <commandName>: { ... }
 
-dependencies:               # optional — cross-module query dependencies
+dependencies:               # optional — cross-module query/command dependencies
   <ModuleName>:
     queries: [<queryName>, ...]
+    commands: [<commandName>, ...]
 ```
 
 ---
@@ -1003,7 +1006,13 @@ Authorization can be configured on both API endpoints and web pages. The `auth` 
 
 ### exports
 
-Declares named queries this module makes available to other modules. Each exported query has a typed input and output, and is backed by a generated query class in `application/queries/`.
+Declares named queries and commands this module makes available to other modules.
+
+> **Queries vs commands:** Use `exports.queries` for read-only cross-module data retrieval (store-backed). Use `exports.commands` for write operations or side-effects (service-backed with a handler chain). If you are mutating state in another module, it is a command.
+
+#### exports.queries
+
+Each exported query has a typed input and output, and is backed by a generated query class in `application/queries/`.
 
 ```yaml
 exports:
@@ -1050,17 +1059,91 @@ export interface IGetQuizStatsQuery {
 }
 ```
 
+#### exports.commands
+
+Each exported command has a typed input/output and a **handler chain** backed by the exporting module's `{Model}Service`. Commands are the write-side counterpart to queries.
+
+```yaml
+exports:
+  commands:
+    <commandName>:
+      model: <ModelName>               # backing service model; defaults to output.from
+      input: <UseCaseInputConfig>      # same schema as useCases input
+      output: <UseCaseOutputConfig>    # same schema, or "void"
+      handlers: [<handler>, ...]       # same default:* / custom handler vocabulary as useCases
+```
+
+**Example:**
+
+```yaml
+exports:
+  commands:
+    publishPost:
+      model: Post
+      input:
+        identifier: id
+        add:
+          publishedBy: { type: string }
+      output:
+        from: Post
+        pick: [id, title, status]
+      handlers:
+        - default:get
+        - validateForPublish
+        - updatePublishStatus
+```
+
+**Generated files (exporting module):**
+
+```
+application/
+  ports/
+    PublishPostInterface.ts   # PublishPostInput, PublishPostOutput, IPublishPostCommand
+  commands/
+    PublishPostCommand.ts     # @Injectable, implements IPublishPostCommand, injects PostService
+```
+
+Generated `PublishPostCommand.execute()`:
+
+```typescript
+async execute(input: PublishPostInput): Promise<PublishPostOutput> {
+  const result0 = await this.postService.get(input.id);
+  const result1 = await this.postService.validateForPublish(result0, input);
+  const result = await this.postService.updatePublishStatus(result1, input);
+  return PublishPostOutput.from(result);
+}
+```
+
+With `output: void` the chain runs but nothing is returned.
+
+**Model resolution:** if `model` is omitted, the generator falls back to `output.from`. At least one of them must be present.
+
+**`IPublishPostCommand` interface:**
+
+```typescript
+export interface IPublishPostCommand {
+  execute(input: PublishPostInput): Promise<PublishPostOutput>;
+}
+```
+
+**Backing service stubs:** any `default:*` handler is added to the model's service as usual. Custom handlers (e.g. `validateForPublish`) generate `async validateForPublish(result, input)` stubs on the backing `PostService`.
+
 ---
 
 ### dependencies
 
-Declares which exported queries from other modules this module depends on. Each dependency introduces a **pseudo-model** that can be referenced in `useCases` handlers.
+Declares which exported queries and commands from other modules this module depends on.
 
 ```yaml
 dependencies:
-  <ModuleName>:                  # module name (matches app.yaml key)
-    queries: [<queryName>, ...]  # exported query names from that module
+  <ModuleName>:                   # module name (matches app.yaml key)
+    queries: [<queryName>, ...]   # exported query names from that module
+    commands: [<commandName>, ...]# exported command names from that module
 ```
+
+#### Importing queries
+
+Each query dependency introduces a **pseudo-model** that can be referenced in `useCases` handlers.
 
 **Example:**
 
@@ -1084,7 +1167,7 @@ useCases:
 
 - `<ModuleName>` must match a key in `app.yaml modules`.
 - A pseudo-model in `useCases` (model name matches a dependency key, no local aggregate) generates no service or store — only controller wiring.
-- Imported query handlers can be mixed with `default:*` and `service:*` handlers in the same chain.
+- Imported query handlers can be mixed with `default:*` and custom handlers in the same chain.
 - No `{ModelName}Service` is generated for pure pseudo-models.
 
 **Generated files (consuming module):**
@@ -1111,6 +1194,66 @@ const controllers = [
   new DashboardApiController(dashboardService, getQuizStatsQuery),
 ];
 ```
+
+#### Importing commands
+
+Command dependencies are injected into **both** controllers (for handler-chain dispatch) and services (for hand-written business logic).
+
+**Invocation site 1 — controller handler chain:**
+
+```yaml
+dependencies:
+  Blog:
+    commands: [publishPost]
+
+useCases:
+  Order:
+    complete:
+      input:
+        identifier: id
+      output:
+        from: Order
+      handlers:
+        - default:update
+        - publishPost           # dispatched via IPublishPostCommand.execute()
+```
+
+The controller emits `await this.publishPostCommand.execute(PublishPostInput.parse({ ...context.request.body, ...context.request.parameters }))`.
+
+**Invocation site 2 — service constructor injection:**
+
+Every real-model service in the consuming module receives all declared command ports in its constructor:
+
+```typescript
+@Injectable()
+export class OrderService {
+  constructor(
+    private orderStore: OrderStore,
+    private publishPostCommand: IPublishPostCommand  // blanket injection
+  ) {}
+  // Hand-written methods can call: await this.publishPostCommand.execute(...)
+}
+```
+
+**Generated files (consuming module):**
+
+```
+application/
+  ports/
+    PublishPostInterface.ts   # re-exports I*Command, *Input, *Output from Blog module
+```
+
+**DI wiring in `app.ts`:**
+
+```typescript
+const publishPostCommand = new PublishPostCommand(postService);
+const orderService = new OrderService(orderStore, publishPostCommand);
+const controllers = [
+  new OrderApiController(orderService, publishPostCommand),
+];
+```
+
+**Circular dependency warning:** if module A commands call B services, and B commands call A services, the generator's topological sort will detect the cycle and show the full dependency chain with a hint to restructure. Design cross-module commands to flow in one direction.
 
 ---
 
@@ -1155,9 +1298,12 @@ src/modules/<ModuleName>/
     dto/
       <ModelName><ActionName>.ts    # Input + Output DTOs (one file per use case)
     ports/
-      <QueryName>Interface.ts       # Port interface + DTOs (exports), or re-export (dependencies)
+      <QueryName>Interface.ts       # Port interface + DTOs (exports.queries), or re-export (dependencies)
+      <CommandName>Interface.ts     # Port interface + DTOs (exports.commands), or re-export (dependencies)
     queries/
       <QueryName>Query.ts           # Concrete query class (for exported queries only)
+    commands/
+      <CommandName>Command.ts       # Concrete command class (for exported commands only)
     services/
       <EntityName>Service.ts        # Service with business logic
   infrastructure/
