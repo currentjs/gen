@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.6] - 2026-08-21
+
+- cross-module communication (commands)
+
 ## [0.6.5] - 2026-07-27
 
 - rework readme – ai powered workflow
