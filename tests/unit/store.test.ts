@@ -525,3 +525,46 @@ describe('StoreGenerator — postgres, invoice store (datetime, value objects)',
     expect(invoiceStore).toContain('result.data[0].id');
   });
 });
+
+describe('StoreGenerator — search() and getInitial() methods (quiz-search fixture)', () => {
+  const searchGen = new StoreGenerator();
+  const config = loadFixture('quiz-search.yaml');
+  const result = searchGen.generateFromConfig(config);
+  const domainStore = getCode(result as Record<string, unknown>, 'Domain');
+  const tagStore = getCode(result as Record<string, unknown>, 'Tag');
+  const quizStore = getCode(result as Record<string, unknown>, 'Quiz');
+
+  it('generates search() method for entities with default:search use case', () => {
+    expect(domainStore).toContain('async search(query: string, limit: number = 20)');
+  });
+
+  it('search() uses LIKE on searchIn fields', () => {
+    expect(domainStore).toContain('LIKE :searchQuery');
+    // field names are backtick-quoted in MySQL; inside a template literal they appear escaped
+    expect(domainStore).toContain('name');
+  });
+
+  it('search() includes deletedAt IS NULL filter and LIMIT', () => {
+    expect(domainStore).toContain('deletedAt');
+    expect(domainStore).toContain('IS NULL');
+    expect(domainStore).toContain('LIMIT :limit');
+  });
+
+  it('search() returns empty array when no data', () => {
+    expect(domainStore).toContain('return [];');
+  });
+
+  it('generates getInitial() method for entities with default:searchableList use case', () => {
+    expect(tagStore).toContain('async getInitial(limit: number = 20)');
+    expect(tagStore).toContain('ORDER BY id DESC');
+  });
+
+  it('also generates search() for default:searchableList (delegates search to same method)', () => {
+    expect(tagStore).toContain('async search(query: string, limit: number = 20)');
+  });
+
+  it('entities without search use cases do NOT get search() or getInitial()', () => {
+    expect(quizStore).toNotContain('async search(');
+    expect(quizStore).toNotContain('async getInitial(');
+  });
+});

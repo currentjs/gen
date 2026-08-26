@@ -658,7 +658,29 @@ domain:
 | `unique` | `boolean` | `false` | Whether the field must be unique. |
 | `auto` | `boolean` | `false` | Whether a default value is generated automatically. |
 | `values` | `string[]` | -- | Valid values for `enum` type fields. |
+| `relates` | `RelatesConfig` | -- | **UI-only.** Marks a scalar ID field as a cross-module entity reference. Causes the template generator to render a searchable AJAX dropdown instead of a plain text input. Has **no effect** on the domain entity, store, service, or DTO layers. |
 
+**RelatesConfig** (optional, for cross-module searchable dropdowns):
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `entity` | `string` | -- | Name of the related entity (used for the placeholder text). |
+| `endpoint` | `string` | -- | Full API path for the search endpoint (e.g. `/api/domain/search`). The frontend widget calls `GET <endpoint>?query=<text>&limit=20`. |
+| `display` | `string` | `name` | Field name from the search result items to display as the label. |
+
+Example:
+```yaml
+fields:
+  domainId:
+    type: number
+    required: true
+    relates:
+      entity: Domain
+      endpoint: /api/domain/search
+      display: name   # optional, defaults to 'name'
+```
+
+> **Important:** The `relates` property is a UI hint only. The developer must separately add a `default:search` (or `default:searchableList`) use case and API endpoint to the target module's YAML. See [Search Handlers](#search-handlers) below.
 
 Do not include `id`, `ownerId`, or `deletedAt` fields -- these are added automatically.
 
@@ -822,6 +844,7 @@ input:
     default:
       field: <fieldName>
       order: asc | desc
+  searchIn: [<fieldName>, ...]
 ```
 
 | Field | Type | Default | Description |
@@ -847,6 +870,7 @@ input:
 | `sorting.allow` | `string[]` | -- | Fields that can be sorted on. |
 | `sorting.default.field` | `string` | -- | Default sort field. |
 | `sorting.default.order` | `"asc"` or `"desc"` | -- | Default sort order. |
+| `searchIn` | `string[]` | -- | **For `default:search` / `default:searchableList` handlers only.** List of entity field names to run SQL `LIKE` searches against. Baked into the generated store SQL at generation time. |
 
 ---
 
@@ -892,19 +916,140 @@ Handlers define the execution pipeline for a use case. They are processed in ord
 | `default:create` | Creates a new entity with input validation. |
 | `default:update` | Updates an existing entity by identifier. |
 | `default:delete` | Soft-deletes an entity (sets `deleted_at`). |
+| `default:search` | Text search — returns matching entities only when a non-empty `query` string is provided; returns an empty array otherwise. Requires `input.searchIn` to list the fields to search against. |
+| `default:searchableList` | Like `default:search`, but returns the first N entities (ordered by id DESC) when no query is provided. Useful for "type-to-search" dropdowns that still show options on focus. Requires `input.searchIn`. |
 
 **Custom handlers:**
 
-Custom handlers reference methods on the service class. Use the format `serviceName:methodName` or just `methodName`. The generator creates stub methods with TODO comments for custom handlers.
+Custom handlers reference methods on the module's own service class by their plain method name. The generator creates stub methods with TODO comments.
+
+There are only two handler formats:
+- `default:<name>` — a built-in handler (see the table above)
+- `methodName` — a method on the current module's service class
 
 Multiple handlers can be chained. The controller orchestrates the chain directly — each handler's result is passed as the first argument to the next:
 
 ```yaml
 handlers:
   - default:get
-  - serviceName:validateStatus
-  - serviceName:performAction
+  - validateStatus
+  - performAction
 ```
+
+---
+
+### Search Handlers
+
+The `default:search` and `default:searchableList` handlers enable text-based entity search. They are typically used to back AJAX search endpoints consumed by [searchable dropdown widgets](#searchable-select-widget-relates).
+
+#### default:search
+
+Returns matching entities when a non-empty `query` string is provided; returns an empty array otherwise.
+
+Requires `input.searchIn` — a list of field names to search across using SQL `LIKE`.
+
+**Generated service method:**
+```typescript
+async search(query: string, limit: number = 20): Promise<Domain[]> {
+  if (!query || query.trim() === '') return [];
+  return await this.domainStore.search(query, limit);
+}
+```
+
+**Generated store SQL:**
+```sql
+SELECT ... FROM `domain`
+WHERE (`name` LIKE :searchQuery OR `description` LIKE :searchQuery)
+  AND `deletedAt` IS NULL
+LIMIT :limit
+```
+
+**Response format:** `{ items: [...] }`
+
+**Example YAML (provider module):**
+```yaml
+useCases:
+  Domain:
+    search:
+      input:
+        searchIn: [name, description]
+      output:
+        from: Domain
+        pick: [id, name]
+      handlers: [default:search]
+
+api:
+  Domain:
+    prefix: /api/domain
+    endpoints:
+      - method: GET
+        path: /search
+        useCase: Domain:search
+```
+
+**Request:** `GET /api/domain/search?query=math&limit=20`
+**Response:**
+```json
+{ "items": [{ "id": 1, "name": "Mathematics" }] }
+```
+
+#### default:searchableList
+
+Like `default:search`, but returns the first N entities (ordered by `id DESC`) when no query is provided. This makes the dropdown immediately useful on focus without requiring any input.
+
+Requires `input.searchIn`.
+
+**Generated service method:**
+```typescript
+async searchableList(query?: string, limit: number = 20): Promise<Tag[]> {
+  if (query && query.trim() !== '') {
+    return await this.tagStore.search(query, limit);
+  }
+  return await this.tagStore.getInitial(limit);
+}
+```
+
+**Request without query:** `GET /api/tag/search?limit=20` → returns first 20 tags  
+**Request with query:** `GET /api/tag/search?query=js&limit=20` → returns matching tags
+
+---
+
+### Searchable Select Widget (`relates`)
+
+When a field has a `relates` config, the template generator renders a searchable AJAX dropdown instead of a plain text input. The dropdown uses the `cjs-searchable-select` CSS class and is powered by JavaScript in the generated `app.js`.
+
+**YAML configuration (consumer module):**
+```yaml
+fields:
+  domainId:
+    type: number
+    required: true
+    relates:
+      entity: Domain
+      endpoint: /api/domain/search
+      display: name   # optional, defaults to 'name'
+```
+
+**Generated HTML:**
+```html
+<div class="cjs-searchable-select"
+     data-search-url="/api/domain/search"
+     data-display-field="name"
+     data-name="domainId"
+     data-value="{{ formData.domainId || '' }}">
+  <input type="text" class="form-control" placeholder="Search Domain..." autocomplete="off">
+  <input type="hidden" name="domainId" value="{{ formData.domainId || '' }}">
+  <div class="cjs-searchable-select-results"></div>
+</div>
+```
+
+**Widget behaviour:**
+- On focus: loads an initial set of results (calls `endpoint?limit=20`)
+- On typing: debounced AJAX search (calls `endpoint?query=<text>&limit=20`)
+- On selection: sets the hidden input value (the entity ID) and shows the display text
+- In edit mode: pre-loads the current value's display text from the initial results
+
+**Important:** `relates` is a **UI-only** hint. It does not affect the domain entity, service, store, or DTO layers. The developer must add the search API endpoint to the target module separately.
 
 ---
 

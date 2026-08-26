@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { writeGeneratedFile } from '../utils/generationRegistry';
 import { colors } from '../utils/colors';
-import { ModuleConfig, AggregateConfig, AggregateFieldConfig, ValueObjectConfig, isValidModuleConfig, IdentifierType, idTsType } from '../types/configTypes';
+import { ModuleConfig, AggregateConfig, AggregateFieldConfig, ValueObjectConfig, UseCasesConfig, isValidModuleConfig, IdentifierType, idTsType } from '../types/configTypes';
 import { buildChildEntityMap, ChildEntityInfo } from '../utils/childEntityUtils';
 import { storeTemplates, storeFileTemplate } from './templates/storeTemplates';
 import { capitalize, mapRowType, isAggregateReference, parseFieldType, getReferencedValueObjects } from '../utils/typeUtils';
@@ -585,6 +585,71 @@ export class StoreGenerator {
     return `${getPaginated}\n\n${getAll}\n\n${count}`;
   }
 
+  /**
+   * Generate search() and optionally getInitial() methods for a model.
+   * Called when the model has at least one use case using default:search or default:searchableList.
+   * @param modelName Entity name
+   * @param fieldNamesStr SELECT field list (same as list methods)
+   * @param searchInFields Fields to LIKE-search against (from use case input.searchIn)
+   * @param hasSearchableList Whether to also generate getInitial() (for default:searchableList)
+   */
+  private generateSearchMethods(
+    modelName: string,
+    fieldNamesStr: string,
+    searchInFields: string[],
+    hasSearchableList: boolean
+  ): string {
+    if (searchInFields.length === 0) return '';
+
+    const tableRef = this.isPostgres()
+      ? '"${this.tableName}"'
+      : '\\`${this.tableName}\\`';
+
+    const deletedAtRef = this.quoteCol('deletedAt');
+
+    // Build LIKE clauses: each field uses a separately named param to avoid conflicts
+    const likeConditions = searchInFields
+      .map((f, i) => `${this.quoteCol(f)} LIKE :searchQuery${i > 0 ? i : ''}`)
+      .join(' OR ');
+    
+    // Single query param bound to all LIKE conditions via the same :searchQuery param
+    const likeSingleParam = searchInFields
+      .map(f => `${this.quoteCol(f)} LIKE :searchQuery`)
+      .join(' OR ');
+
+    const searchMethod = `
+  async search(query: string, limit: number = 20): Promise<${modelName}[]> {
+    const searchQuery = \`%\${query}%\`;
+    const result = await this.db.query(
+      \`SELECT ${fieldNamesStr} FROM ${tableRef} WHERE (${likeSingleParam}) AND ${deletedAtRef} IS NULL LIMIT :limit\`,
+      { searchQuery, limit: String(limit) }
+    );
+
+    if (result.success && result.data) {
+      return result.data.map((row: ${modelName}Row) => this.rowToModel(row));
+    }
+    return [];
+  }`;
+
+    if (!hasSearchableList) return searchMethod;
+
+    const getInitialMethod = `
+
+  async getInitial(limit: number = 20): Promise<${modelName}[]> {
+    const result = await this.db.query(
+      \`SELECT ${fieldNamesStr} FROM ${tableRef} WHERE ${deletedAtRef} IS NULL ORDER BY id DESC LIMIT :limit\`,
+      { limit: String(limit) }
+    );
+
+    if (result.success && result.data) {
+      return result.data.map((row: ${modelName}Row) => this.rowToModel(row));
+    }
+    return [];
+  }`;
+
+    return searchMethod + getInitialMethod;
+  }
+
   private generateGetByParentIdMethod(modelName: string, fields: [string, AggregateFieldConfig][], childInfo?: ChildEntityInfo): string {
     if (!childInfo) return '';
     const isUuid = this.identifiers === 'uuid';
@@ -783,7 +848,13 @@ export class StoreGenerator {
       : '@currentjs/provider-mysql';
   }
 
-  private generateStore(modelName: string, aggregateConfig: AggregateConfig, childInfo?: ChildEntityInfo): string {
+  private generateStore(
+    modelName: string,
+    aggregateConfig: AggregateConfig,
+    childInfo?: ChildEntityInfo,
+    searchInFields: string[] = [],
+    hasSearchableList: boolean = false
+  ): string {
     const tableName = modelName.toLowerCase();
     const fields = Object.entries(aggregateConfig.fields);
     
@@ -820,6 +891,7 @@ export class StoreGenerator {
       AGGREGATE_REF_IMPORTS: this.generateAggregateRefImports(modelName, fields),
       ID_HELPERS: this.generateIdHelpers(),
       LIST_METHODS: this.generateListMethods(modelName, fieldNamesStr, childInfo),
+      SEARCH_METHODS: this.generateSearchMethods(modelName, fieldNamesStr, searchInFields, hasSearchableList),
       GET_BY_PARENT_ID_METHOD: this.generateGetByParentIdMethod(modelName, fields, childInfo),
       GET_RESOURCE_OWNER_METHOD: this.generateGetResourceOwnerMethod(childInfo)
     };
@@ -868,12 +940,39 @@ export class StoreGenerator {
       });
     }
 
+    // Build a map of search config per model: { searchInFields, hasSearchableList }
+    const searchConfigMap = new Map<string, { searchInFields: string[]; hasSearchableList: boolean }>();
+    if (config.useCases) {
+      for (const [modelName, useCaseDefs] of Object.entries(config.useCases)) {
+        let searchInFields: string[] = [];
+        let hasSearchableList = false;
+        for (const ucDef of Object.values(useCaseDefs)) {
+          const hasSearch = ucDef.handlers.includes('default:search');
+          const hasSL = ucDef.handlers.includes('default:searchableList');
+          if ((hasSearch || hasSL) && ucDef.input?.searchIn && ucDef.input.searchIn.length > 0) {
+            searchInFields = ucDef.input.searchIn;
+          }
+          if (hasSL) hasSearchableList = true;
+        }
+        if (searchInFields.length > 0) {
+          searchConfigMap.set(modelName, { searchInFields, hasSearchableList });
+        }
+      }
+    }
+
     // Generate a store for each aggregate
     const childEntityMap = buildChildEntityMap(config);
     if (config.domain.aggregates) {
       Object.entries(config.domain.aggregates).forEach(([modelName, aggregateConfig]) => {
         const childInfo = childEntityMap.get(modelName);
-        result[modelName] = this.generateStore(modelName, aggregateConfig, childInfo);
+        const searchCfg = searchConfigMap.get(modelName);
+        result[modelName] = this.generateStore(
+          modelName,
+          aggregateConfig,
+          childInfo,
+          searchCfg?.searchInFields ?? [],
+          searchCfg?.hasSearchableList ?? false
+        );
       });
     }
 

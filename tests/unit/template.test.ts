@@ -330,4 +330,47 @@ describe('TemplateGenerator', () => {
       expect(code).toContain('"tags":"json"');
     });
   });
+
+  describe('Searchable select widget — relates field (quiz-search fixture)', () => {
+    const searchGen = new TemplateGenerator();
+    const config = loadFixture('quiz-search.yaml');
+    const result = searchGen.generateFromConfig(config);
+
+    it('create form for Quiz renders a cjs-searchable-select div for domainId', () => {
+      const code = getCode(result as Record<string, unknown>, 'quizCreate');
+      expect(code).toContain('cjs-searchable-select');
+    });
+
+    it('searchable select has data-search-url pointing to relates.endpoint', () => {
+      const code = getCode(result as Record<string, unknown>, 'quizCreate');
+      expect(code).toContain('data-search-url="/api/domain/search"');
+    });
+
+    it('searchable select has data-display-field from relates.display', () => {
+      const code = getCode(result as Record<string, unknown>, 'quizCreate');
+      expect(code).toContain('data-display-field="name"');
+    });
+
+    it('searchable select has data-name equal to the field name', () => {
+      const code = getCode(result as Record<string, unknown>, 'quizCreate');
+      expect(code).toContain('data-name="domainId"');
+    });
+
+    it('renders a hidden input with name="domainId"', () => {
+      const code = getCode(result as Record<string, unknown>, 'quizCreate');
+      expect(code).toContain('type="hidden"');
+      expect(code).toContain('name="domainId"');
+    });
+
+    it('update form also has the searchable select widget for domainId', () => {
+      const code = getCode(result as Record<string, unknown>, 'quizUpdate');
+      expect(code).toContain('cjs-searchable-select');
+      expect(code).toContain('data-search-url="/api/domain/search"');
+    });
+
+    it('field label is humanized (Domain, not domainId)', () => {
+      const code = getCode(result as Record<string, unknown>, 'quizCreate');
+      expect(code).toContain('>Domain');
+    });
+  });
 });

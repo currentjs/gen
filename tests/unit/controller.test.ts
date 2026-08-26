@@ -354,3 +354,39 @@ describe('ControllerGenerator — mixed default + imported command handler chain
     expect(apiCode).toContain('sendEmailCommand.execute(');
   });
 });
+
+describe('ControllerGenerator — search and searchableList endpoints (quiz-search fixture)', () => {
+  const searchGen = new ControllerGenerator();
+  const config = loadFixture('quiz-search.yaml');
+  const result = searchGen.generateFromConfig(config);
+  const domainApiCode = getCode(result as Record<string, unknown>, 'DomainApi');
+  const tagApiCode = getCode(result as Record<string, unknown>, 'TagApi');
+
+  it('generates a GET /search endpoint for default:search use case', () => {
+    expect(domainApiCode).toContain("@Get('/search')");
+  });
+
+  it('search endpoint parses query params (q and limit come from request.parameters)', () => {
+    expect(domainApiCode).toContain('DomainSearchInput.parse(context.request.parameters)');
+  });
+
+  it('search handler passes query and limit to service.search()', () => {
+    expect(domainApiCode).toContain('domainService.search(');
+    expect(domainApiCode).toContain('input.query || ""');
+    expect(domainApiCode).toContain('input.limit || 20');
+  });
+
+  it('search result is returned as { items: result }', () => {
+    expect(domainApiCode).toContain('return { items: result }');
+  });
+
+  it('generates a GET /search endpoint for default:searchableList use case', () => {
+    expect(tagApiCode).toContain("@Get('/search')");
+  });
+
+  it('searchableList handler passes query and limit to service.searchableList()', () => {
+    expect(tagApiCode).toContain('tagService.searchableList(');
+    expect(tagApiCode).toContain('input.query');
+    expect(tagApiCode).toContain('input.limit || 20');
+  });
+});

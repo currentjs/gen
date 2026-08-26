@@ -51,5 +51,7 @@ export function defaultHandlerArgs(
   if (action === 'create') return 'input';
   if (action === 'update') return 'input.id, input';
   if (action === 'delete') return 'input.id';
+  if (action === 'search') return 'input.query || "", input.limit || 20';
+  if (action === 'searchableList') return 'input.query, input.limit || 20';
   return 'input';
 }

@@ -63,8 +63,13 @@ export class ControllerGenerator {
     return roles.includes(AUTH_ROLES.OWNER);
   }
 
-  private getNeededHttpErrorImports(auths: (AuthConfig | undefined)[]): string[] {
+  private getNeededHttpErrorImports(auths: (AuthConfig | undefined)[], hasParseLogic: boolean = true): string[] {
     const needed = new Set<string>();
+
+    if (hasParseLogic) {
+      needed.add('BadRequestError');
+    }
+
     for (const auth of auths) {
       const roles = this.normalizeAuth(auth);
       if (roles.length === 0 || (roles.length === 1 && roles[0] === AUTH_ROLES.ALL)) continue;
@@ -311,6 +316,10 @@ export class ControllerGenerator {
           params = 'input.id, input';
         } else if (defaultAction === 'delete') {
           params = 'input.id';
+        } else if (defaultAction === 'search') {
+          params = 'input.query || "", input.limit || 20';
+        } else if (defaultAction === 'searchableList') {
+          params = 'input.query, input.limit || 20';
         } else {
           params = 'input';
         }
@@ -394,6 +403,8 @@ export class ControllerGenerator {
       parseLogic = '';
     } else if (action === 'list') {
       parseLogic = `const input = ${inputClass}.parse(context.request.parameters);`;
+    } else if (action === 'search' || action === 'searchableList') {
+      parseLogic = `const input = ${inputClass}.parse(context.request.parameters);`;
     } else if (action === 'get' || action === 'delete') {
       parseLogic = `const input = ${inputClass}.parse({ id: context.request.parameters.id });`;
     } else if (action === 'create') {
@@ -426,6 +437,8 @@ export class ControllerGenerator {
       outputTransform = `return result;`;
     } else if (isVoidOutput || action === 'delete') {
       outputTransform = `return result;`;
+    } else if (action === 'search' || action === 'searchableList') {
+      outputTransform = `return { items: result };`;
     } else {
       outputTransform = `return ${outputClass}.from(result);`;
     }
@@ -442,9 +455,20 @@ export class ControllerGenerator {
       handlerChain = `    // TODO: implement ${action} handler for ${model}`;
     }
 
-    const parseLine = parseLogic ? `    ${parseLogic}` : '';
+    let parseBlock = '';
+    if (parseLogic) {
+      const parseExpr = parseLogic.replace('const input = ', '').replace(/;$/, '');
+      parseBlock = `
+    let input: any;
+    try {
+      input = ${parseExpr};
+    } catch (e: any) {
+      throw new BadRequestError(e.message || 'Invalid request');
+    }`;
+    }
+
     const method = `  @${decorator}('${endpoint.path}')
-  async ${methodName}(context: IContext): Promise<any> {${authLine}${parseLine ? `\n${parseLine}` : ''}${preMutationOwnerCheck}
+  async ${methodName}(context: IContext): Promise<any> {${authLine}${parseBlock}${preMutationOwnerCheck}
 ${handlerChain}${postFetchOwnerCheck}
     ${outputTransform}
   }`;
@@ -541,10 +565,18 @@ ${handlerChain}${postFetchOwnerCheck}
           handlerChain = `    const result = await this.${serviceVar}.${action}(${callArg});`;
         }
 
+        const parseExpr = parseLogic.replace('const input = ', '').replace(/;$/, '');
+        const parseBlock = `
+    let input: any;
+    try {
+      input = ${parseExpr};
+    } catch (e: any) {
+      throw new BadRequestError(e.message || 'Invalid request');
+    }`;
+
         const methodCode = `${renderDecorator}
   @${decorator}('${page.path}')
-  async ${methodName}(context: IContext): Promise<any> {${authLine}
-    ${parseLogic}
+  async ${methodName}(context: IContext): Promise<any> {${authLine}${parseBlock}
 ${handlerChain}${postFetchOwnerCheck}${loadChildCode}
     return ${returnExpr};
   }`;

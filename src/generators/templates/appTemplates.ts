@@ -43,6 +43,7 @@ export const mainViewTemplateTailwind = loadTemplate('mainViewTemplateTailwind')
 export const errorTemplate = loadTemplate('errorTemplate');
 export const errorTemplateTailwind = loadTemplate('errorTemplateTailwind');
 export const frontendScriptTemplate = loadTemplate('frontendScriptTemplate');
+export const appCssTemplate = loadTemplate('appCssTemplate');
 export const translationsTemplate = loadTemplate('translationsTemplate');
 export const systemTsTemplate = loadTemplate('systemTsTemplate');
 export const envTemplate = loadTemplate('envTemplate');
@@ -69,6 +70,7 @@ export const DEFAULT_FILES = {
   ERROR_BOOTSTRAP: 'error_bootstrap.html',
   ERROR_TAILWIND: 'error_tailwind.html',
   FRONTEND_SCRIPT: 'app.js',
+  APP_CSS: 'app.css',
   TRANSLATIONS: 'translations.json',
   SYSTEM_TS: 'system.ts',
   ENV: '.env',

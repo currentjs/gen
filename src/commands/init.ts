@@ -10,6 +10,7 @@ import {
   errorTemplate,
   errorTemplateTailwind,
   frontendScriptTemplate,
+  appCssTemplate,
   translationsTemplate,
   systemTsTemplate,
   envTemplate,
@@ -54,6 +55,7 @@ export function handleInit(rawName?: string): void {
   writeFileIfMissing(path.join(templatesDir, DEFAULT_FILES.ERROR_TAILWIND), errorTemplateTailwind);
 
   writeFileIfMissing(path.join(webDir, DEFAULT_FILES.FRONTEND_SCRIPT), frontendScriptTemplate);
+  writeFileIfMissing(path.join(webDir, DEFAULT_FILES.APP_CSS), appCssTemplate);
   writeFileIfMissing(path.join(webDir, DEFAULT_FILES.TRANSLATIONS), translationsTemplate);
 
   writeFileIfMissing(path.join(targetRoot, DEFAULT_FILES.AGENTS_MD), agentsMdTemplate);

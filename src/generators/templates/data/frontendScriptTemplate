@@ -728,11 +728,131 @@ window.AppConfig = {
     submitForm(form, strategy, options);
   }
 
+  // ===== SEARCHABLE SELECT WIDGET =====
+
+  /**
+   * Fetch search results from the given URL.
+   * @param {string} url - Base search endpoint
+   * @param {string} query - Search query string
+   * @param {number} limit - Max results to return
+   * @returns {Promise<Array>} Array of result objects
+   */
+  async function fetchSearchResults(url, query, limit = 20) {
+    try {
+      const params = new URLSearchParams({ limit: String(limit) });
+      if (query) params.set('query', query);
+      const headers = buildAuthHeaders();
+      const res = await fetch(`${url}?${params}`, { headers });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data.items) ? data.items : (Array.isArray(data) ? data : []);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Render dropdown results inside a searchable select widget.
+   */
+  function renderSearchDropdown(container, items, displayField) {
+    const results = container.querySelector('.cjs-searchable-select-results');
+    if (!results) return;
+    results.innerHTML = '';
+    if (!items || items.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'cjs-result-empty';
+      empty.textContent = 'No results found';
+      results.appendChild(empty);
+      return;
+    }
+    items.forEach(item => {
+      const el = document.createElement('div');
+      el.className = 'cjs-result-item';
+      el.textContent = item[displayField] ?? item.name ?? String(item.id);
+      el.addEventListener('mousedown', e => {
+        e.preventDefault();
+        selectSearchItem(container, item, displayField);
+      });
+      results.appendChild(el);
+    });
+  }
+
+  /**
+   * Select an item in the searchable select widget.
+   */
+  function selectSearchItem(container, item, displayField) {
+    const textInput = container.querySelector('input[type="text"]');
+    const hiddenInput = container.querySelector('input[type="hidden"]');
+    const results = container.querySelector('.cjs-searchable-select-results');
+    if (textInput) textInput.value = item[displayField] ?? item.name ?? String(item.id);
+    if (hiddenInput) hiddenInput.value = item.id ?? '';
+    if (results) results.innerHTML = '';
+  }
+
+  /**
+   * Initialize all `.cjs-searchable-select` widgets on the current page.
+   */
+  function initSearchableSelects() {
+    const widgets = document.querySelectorAll('.cjs-searchable-select');
+    widgets.forEach(container => {
+      // Avoid double-init
+      if (container.dataset.cjsInit) return;
+      container.dataset.cjsInit = '1';
+
+      const searchUrl = container.dataset.searchUrl;
+      const displayField = container.dataset.displayField || 'name';
+      const currentValue = container.dataset.value;
+      const textInput = container.querySelector('input[type="text"]');
+
+      if (!searchUrl || !textInput) return;
+
+      // In edit mode: if there is already a value set, load its display text
+      if (currentValue) {
+        fetchSearchResults(searchUrl, '', 100).then(items => {
+          const match = items.find(i => String(i.id) === String(currentValue));
+          if (match && textInput) {
+            textInput.value = match[displayField] ?? match.name ?? String(match.id);
+          }
+        });
+      }
+
+      // Debounced search on text input
+      let searchTimer = null;
+      textInput.addEventListener('input', () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(async () => {
+          const query = textInput.value.trim();
+          const items = await fetchSearchResults(searchUrl, query);
+          renderSearchDropdown(container, items, displayField);
+        }, 300);
+      });
+
+      // Show initial results on focus
+      textInput.addEventListener('focus', async () => {
+        if (textInput.value.trim() === '') {
+          const items = await fetchSearchResults(searchUrl, '');
+          renderSearchDropdown(container, items, displayField);
+        }
+      });
+
+      // Close dropdown when clicking outside
+      document.addEventListener('click', e => {
+        if (!container.contains(e.target)) {
+          const results = container.querySelector('.cjs-searchable-select-results');
+          if (results) results.innerHTML = '';
+        }
+      });
+    });
+  }
+
   // Set up event handlers on page load
   document.addEventListener('DOMContentLoaded', function() {
     // Initialize event listeners
     initializeEventListeners();
     
+    // Initialize searchable select widgets
+    initSearchableSelects();
+
     // Handle browser back/forward buttons
     window.addEventListener('popstate', function(event) {
       // Reload the page content for the current URL
@@ -770,6 +890,10 @@ window.AppConfig = {
       $: getElementSafely,
       debounce,
       initializeEventListeners,
+    },
+    search: {
+      init: initSearchableSelects,
+      fetchResults: fetchSearchResults,
     },
   };
 })();
