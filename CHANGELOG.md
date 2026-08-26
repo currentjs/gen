@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.7] - 2026-08-26
+
+- search & searchableList default handlers & support in template
+
 ## [0.6.6] - 2026-08-21
 
 - cross-module communication (commands)
