@@ -60,6 +60,8 @@ currentjs commit
 
 To add custom (non-CRUD) behavior: define a method in the service, reference it in the module YAML as a handler, regenerate, and commit.
 
+For **text search** endpoints (e.g. for searchable dropdowns): use the `default:search` or `default:searchableList` built-in handlers with `input.searchIn` listing the fields to search. Pair with a `relates` config on the referencing field to auto-generate an AJAX searchable dropdown widget in HTML forms.
+
 <details>
 <summary>Alternative: interactive wizard</summary>
 

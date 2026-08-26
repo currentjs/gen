@@ -34,6 +34,19 @@ export interface ValueObjectConfig {
   fields: Record<string, FieldDefinition | { type: string; values: string[] }>;
 }
 
+/**
+ * Cross-module entity relationship hint (UI-only, does not affect domain/store/service layers).
+ * When set on a field, the template generator renders a searchable dropdown instead of a plain input.
+ */
+export interface RelatesConfig {
+  /** Name of the related entity (e.g. 'Domain') */
+  entity: string;
+  /** API endpoint to search the related entity (e.g. '/api/domain/search') */
+  endpoint: string;
+  /** Field name to display in the dropdown, defaults to 'name' */
+  display?: string;
+}
+
 export interface AggregateFieldConfig {
   type: string;
   required?: boolean;
@@ -45,6 +58,12 @@ export interface AggregateFieldConfig {
     max?: number;
     pattern?: string;
   };
+  /**
+   * UI-only hint: marks this scalar ID field as a reference to a related entity.
+   * Causes the template generator to render a searchable AJAX dropdown.
+   * Does NOT affect domain entity, store, service, or DTO generation.
+   */
+  relates?: RelatesConfig;
 }
 
 export interface AggregateConfig {
@@ -101,6 +120,12 @@ export interface UseCaseInputConfig {
   filters?: Record<string, FilterFieldConfig>;
   sorting?: SortingConfig;
   parentId?: string;
+  /**
+   * For `default:search` and `default:searchableList` handlers.
+   * Specifies which entity fields to run a LIKE search against.
+   * Baked into the generated store SQL at generation time (not passed at runtime).
+   */
+  searchIn?: string[];
 }
 
 export interface UseCaseOutputInclude {

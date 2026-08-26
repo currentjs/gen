@@ -32,7 +32,7 @@ export class {{ENTITY_NAME}}Store {
   }
 
 {{LIST_METHODS}}
-
+{{SEARCH_METHODS}}
   async getById(id: {{ID_TYPE}}): Promise<{{ENTITY_NAME}} | null> {
     const result = await this.db.query(
       \`SELECT {{FIELD_NAMES}} FROM {{Q}}\${this.tableName}{{Q}} WHERE {{WHERE_ID_EXPR}} AND {{Q}}deletedAt{{Q}} IS NULL\`,

@@ -45,6 +45,9 @@ export class ServiceGenerator {
         return '{ success: boolean; message: string }';
       case 'list':
         return `{ items: ${modelName}[]; total: number; page: number; limit: number }`;
+      case 'search':
+      case 'searchableList':
+        return `${modelName}[]`;
       default:
         return modelName;
     }
@@ -64,6 +67,8 @@ export class ServiceGenerator {
         useCaseReturnType = '{ success: boolean; message: string }';
       } else if (actionName === 'list') {
         useCaseReturnType = `{ items: ${modelName}[]; total: number; page: number; limit: number }`;
+      } else if (actionName === 'search' || actionName === 'searchableList') {
+        useCaseReturnType = `${modelName}[]`;
       } else {
         useCaseReturnType = modelName;
       }
@@ -328,6 +333,22 @@ ${setterCalls}
   }`;
   }
 
+  private generateSearchHandler(modelName: string, storeName: string): string {
+    return `  async search(query: string, limit: number = 20): Promise<${modelName}[]> {
+    if (!query || query.trim() === '') return [];
+    return await this.${storeName}.search(query, limit);
+  }`;
+  }
+
+  private generateSearchableListHandler(modelName: string, storeName: string): string {
+    return `  async searchableList(query?: string, limit: number = 20): Promise<${modelName}[]> {
+    if (query && query.trim() !== '') {
+      return await this.${storeName}.search(query, limit);
+    }
+    return await this.${storeName}.getInitial(limit);
+  }`;
+  }
+
   private generateDefaultHandlerMethod(
     modelName: string,
     actionName: string,
@@ -355,6 +376,10 @@ ${setterCalls}
         return this.generateUpdateHandler(modelName, storeName, aggregateConfig, inputType, dtoFields);
       case 'delete':
         return this.generateDeleteHandler(modelName, storeName);
+      case 'search':
+        return this.generateSearchHandler(modelName, storeName);
+      case 'searchableList':
+        return this.generateSearchableListHandler(modelName, storeName);
       default:
         return `  async ${actionName}(input: ${inputType}): Promise<${modelName}> {
     // TODO: Implement default ${actionName} handler
@@ -449,7 +474,8 @@ ${setterCalls}
         const inputType = this.deriveInputType(contexts);
         const dtoFields = this.computeDtoFieldsForHandler(contexts, aggregateConfig, childInfo);
 
-        if (actionName !== 'list' && actionName !== 'get' && actionName !== 'delete') {
+        if (actionName !== 'list' && actionName !== 'get' && actionName !== 'delete'
+            && actionName !== 'search' && actionName !== 'searchableList') {
           contexts.forEach(c => dtoTypes.add(c.inputDtoType));
         }
 
@@ -601,9 +627,10 @@ ${methods.join('\n\n')}
       }
 
       for (let i = 0; i < commandConfig.handlers.length; i++) {
-        const handler = commandConfig.handlers[i];
-        if (handler.startsWith('default:')) continue; // covered by regular use cases
-        if (existingHandlers.has(handler)) continue;   // already generated
+        const rawHandler = commandConfig.handlers[i];
+        if (rawHandler.startsWith('default:')) continue;
+        const handler = rawHandler;
+        if (existingHandlers.has(handler)) continue;
 
         // Determine the previous handler's return type (for the result param)
         const prevHandler = commandConfig.handlers[i - 1];

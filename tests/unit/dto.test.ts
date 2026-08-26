@@ -195,3 +195,69 @@ describe('DtoGenerator — identifier types', () => {
     });
   });
 });
+
+describe('DtoGenerator — search and searchableList DTOs (quiz-search fixture)', () => {
+  const dtoGen = new DtoGenerator();
+  const config = loadFixture('quiz-search.yaml');
+  const result = dtoGen.generateFromConfig(config);
+
+  describe('default:search input DTO (Domain:search)', () => {
+    const searchInput = getCode(result as Record<string, unknown>, 'DomainSearch');
+
+    it('generates DomainSearchInput class', () => {
+      expect(searchInput).toContain('class DomainSearchInput');
+    });
+
+    it('has required query: string field', () => {
+      expect(searchInput).toContain('readonly query: string');
+    });
+
+    it('has optional limit?: number field', () => {
+      expect(searchInput).toContain('readonly limit?: number');
+    });
+
+    it('validates that query is a string', () => {
+      expect(searchInput).toContain("typeof b.query !== 'string'");
+    });
+  });
+
+  describe('default:search output DTO (Domain:search)', () => {
+    const searchOutput = getCode(result as Record<string, unknown>, 'DomainSearch');
+
+    it('generates DomainSearchOutput wrapping items array', () => {
+      expect(searchOutput).toContain('class DomainSearchOutput');
+      expect(searchOutput).toContain('readonly items: DomainSearchOutputItem[]');
+    });
+
+    it('generates DomainSearchOutputItem with picked fields (id, name)', () => {
+      expect(searchOutput).toContain('class DomainSearchOutputItem');
+      expect(searchOutput).toContain('readonly id: number');
+      expect(searchOutput).toContain('readonly name: string');
+    });
+  });
+
+  describe('default:searchableList input DTO (Tag:searchableList)', () => {
+    const slInput = getCode(result as Record<string, unknown>, 'TagSearchableList');
+
+    it('generates TagSearchableListInput class', () => {
+      expect(slInput).toContain('class TagSearchableListInput');
+    });
+
+    it('query is optional for searchableList', () => {
+      expect(slInput).toContain('readonly query?: string');
+    });
+
+    it('has optional limit?: number field', () => {
+      expect(slInput).toContain('readonly limit?: number');
+    });
+  });
+
+  describe('default:searchableList output DTO (Tag:searchableList)', () => {
+    const slOutput = getCode(result as Record<string, unknown>, 'TagSearchableList');
+
+    it('generates TagSearchableListOutput wrapping items array', () => {
+      expect(slOutput).toContain('class TagSearchableListOutput');
+      expect(slOutput).toContain('readonly items: TagSearchableListOutputItem[]');
+    });
+  });
+});

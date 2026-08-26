@@ -75,11 +75,14 @@ export class DtoGenerator {
     actionName: string,
     inputConfig: UseCaseInputConfig | undefined,
     aggregateConfig: AggregateConfig,
-    childInfo?: ChildEntityInfo
+    childInfo?: ChildEntityInfo,
+    handlers: string[] = []
   ): string {
     const className = `${modelName}${capitalize(actionName)}Input`;
+    const isSearchAction = handlers.includes('default:search') || handlers.includes('default:searchableList');
+    const isSearchableList = handlers.includes('default:searchableList');
     
-    if (!inputConfig) {
+    if (!inputConfig && !isSearchAction) {
       return `export class ${className} {
   private constructor() {}
 
@@ -95,8 +98,27 @@ export class DtoGenerator {
     const validationChecks: string[] = [];
     const fieldTransforms: string[] = [];
 
+    // Handle search/searchableList fields (query + limit)
+    if (isSearchAction) {
+      const queryOptional = isSearchableList ? '?' : '';
+      fieldDeclarations.push(`  readonly query${queryOptional}: string;`);
+      constructorParams.push(`query${queryOptional}: string`);
+      constructorAssignments.push(`    this.query = query;`);
+      if (!isSearchableList) {
+        validationChecks.push(`    if (typeof b.query !== 'string') {
+      throw new Error('query is required');
+    }`);
+      }
+      fieldTransforms.push(`      query: b.query as string | undefined`);
+
+      fieldDeclarations.push(`  readonly limit?: number;`);
+      constructorParams.push(`limit?: number`);
+      constructorAssignments.push(`    this.limit = limit;`);
+      fieldTransforms.push(`      limit: typeof b.limit === 'string' ? parseInt(b.limit, 10) : (b.limit as number | undefined)`);
+    }
+
     // Handle identifier (for get, update, delete)
-    if (inputConfig.identifier) {
+    if (inputConfig?.identifier) {
       const fieldName = inputConfig.identifier;
       const idTs = idTsType(this.identifiers);
       const idTransform = this.identifiers === 'numeric'
@@ -112,7 +134,7 @@ export class DtoGenerator {
     }
 
     // Handle pagination
-    if (inputConfig.pagination) {
+    if (inputConfig?.pagination) {
       fieldDeclarations.push(`  readonly page: number;`);
       fieldDeclarations.push(`  readonly limit: number;`);
       constructorParams.push(`page: number`);
@@ -135,7 +157,7 @@ export class DtoGenerator {
     }
 
     // Handle fields from aggregate (pick/omit/add)
-    if (inputConfig.from) {
+    if (inputConfig?.from) {
       const aggregateFields = Object.entries(aggregateConfig.fields);
       let fieldsToInclude = aggregateFields;
 
@@ -192,7 +214,7 @@ export class DtoGenerator {
     }
 
     // Handle filters
-    if (inputConfig.filters) {
+    if (inputConfig?.filters) {
       Object.entries(inputConfig.filters).forEach(([filterName, filterConfig]) => {
         const tsType = this.mapType(filterConfig.type);
         const isRequired = !filterConfig.optional;
@@ -210,7 +232,7 @@ export class DtoGenerator {
     }
 
     // Handle sorting
-    if (inputConfig.sorting) {
+    if (inputConfig?.sorting) {
       fieldDeclarations.push(`  readonly sortBy?: string;`);
       fieldDeclarations.push(`  readonly sortOrder?: 'asc' | 'desc';`);
       constructorParams.push(`sortBy?: string`);
@@ -263,7 +285,8 @@ ${transformsStr}
     actionName: string,
     outputConfig: UseCaseOutputConfig | 'void',
     aggregateConfig: AggregateConfig,
-    allAggregates: Map<string, AggregateConfig>
+    allAggregates: Map<string, AggregateConfig>,
+    handlers: string[] = []
   ): string {
     const className = `${modelName}${capitalize(actionName)}Output`;
 
@@ -400,8 +423,9 @@ export class ${className} {
 }`;
     }
 
-    // List action without pagination: still wrap items in a list container
-    if (actionName === 'list') {
+    // Search/searchableList actions: same structure as non-paginated list (items array, no total/page)
+    const isSearchAction = handlers.includes('default:search') || handlers.includes('default:searchableList');
+    if (isSearchAction || actionName === 'list') {
       return `export class ${className}Item {
 ${fieldsStr}
 
@@ -529,13 +553,16 @@ ${mappingsStr}
       const childInfo = childEntityMap.get(modelName);
 
       Object.entries(useCases).forEach(([actionName, useCaseConfig]) => {
+        const handlers = useCaseConfig.handlers || [];
+
         // Generate Input DTO
         const inputDto = this.generateInputDto(
           modelName,
           actionName,
           useCaseConfig.input,
           aggregateConfig,
-          childInfo
+          childInfo,
+          handlers
         );
 
         // Generate Output DTO
@@ -544,7 +571,8 @@ ${mappingsStr}
           actionName,
           useCaseConfig.output || 'void',
           aggregateConfig,
-          this.availableAggregates
+          this.availableAggregates,
+          handlers
         );
 
         // Collect required imports

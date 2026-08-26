@@ -179,3 +179,24 @@ describe('DomainLayerGenerator — identifier types', () => {
     });
   });
 });
+
+describe('DomainLayerGenerator — relates is UI-only, not in entity (quiz-search fixture)', () => {
+  const gen = new DomainLayerGenerator();
+  const config = loadFixture('quiz-search.yaml');
+  const result = gen.generateFromConfig(config);
+  const quizEntity = getCode(result as Record<string, unknown>, 'Quiz');
+
+  it('Quiz entity has domainId as a plain number field', () => {
+    expect(quizEntity).toContain('domainId');
+  });
+
+  it('Quiz entity does NOT reference relates config (no searchUrl, no endpoint)', () => {
+    expect(quizEntity).toNotContain('searchUrl');
+    expect(quizEntity).toNotContain('endpoint');
+    expect(quizEntity).toNotContain('relates');
+  });
+
+  it('Quiz entity does NOT import Domain entity (relates is UI-only)', () => {
+    expect(quizEntity).toNotContain("import { Domain }");
+  });
+});

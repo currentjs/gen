@@ -296,4 +296,37 @@ describe('ServiceGenerator — imported command handlers excluded from service s
     // native default:get handler should still produce get
     expect(orderService).toContain('async get(');
   });
+
+  describe('default:search and default:searchableList handlers', () => {
+    const searchGen = new ServiceGenerator();
+    const searchConfig = loadFixture('quiz-search.yaml');
+    const searchResult = searchGen.generateFromConfig(searchConfig);
+    const domainService = getCode(searchResult as Record<string, unknown>, 'Domain');
+    const tagService = getCode(searchResult as Record<string, unknown>, 'Tag');
+
+    it('generates search() method for default:search handler', () => {
+      expect(domainService).toContain('async search(query: string, limit: number = 20)');
+      expect(domainService).toContain("if (!query || query.trim() === '') return []");
+      expect(domainService).toContain('await this.domainStore.search(query, limit)');
+    });
+
+    it('search() return type is Model[]', () => {
+      expect(domainService).toContain('Promise<Domain[]>');
+    });
+
+    it('does not import search-specific DTO into service (no SearchInput DTO needed)', () => {
+      expect(domainService).toNotContain("import { DomainSearchInput }");
+    });
+
+    it('generates searchableList() method for default:searchableList handler', () => {
+      expect(tagService).toContain('async searchableList(query?: string, limit: number = 20)');
+      expect(tagService).toContain("if (query && query.trim() !== '')");
+      expect(tagService).toContain('await this.tagStore.search(query, limit)');
+      expect(tagService).toContain('await this.tagStore.getInitial(limit)');
+    });
+
+    it('searchableList() return type is Model[]', () => {
+      expect(tagService).toContain('Promise<Tag[]>');
+    });
+  });
 });

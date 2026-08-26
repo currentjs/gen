@@ -1,0 +1,250 @@
+# Fixture: Searchable field support
+# - Domain module provides search use case (default:search) with searchIn fields
+# - Quiz module has a domainId field with `relates` config pointing to the Domain search endpoint
+# - Also demonstrates default:searchableList on a Tag entity
+
+domain:
+  aggregates:
+    Domain:
+      root: true
+      fields:
+        name:
+          type: string
+          required: true
+        description:
+          type: string
+          required: false
+    Quiz:
+      root: true
+      fields:
+        title:
+          type: string
+          required: true
+        domainId:
+          type: number
+          required: true
+          relates:
+            entity: Domain
+            endpoint: /api/domain/search
+            display: name
+    Tag:
+      root: true
+      fields:
+        label:
+          type: string
+          required: true
+
+useCases:
+  Domain:
+    search:
+      input:
+        searchIn: [name, description]
+      output:
+        from: Domain
+        pick: [id, name]
+      handlers: [default:search]
+    list:
+      input:
+        pagination:
+          type: offset
+          defaults:
+            limit: 20
+            maxLimit: 100
+      output:
+        from: Domain
+        pagination: true
+      handlers: [default:list]
+    get:
+      input:
+        identifier: id
+      output:
+        from: Domain
+      handlers: [default:get]
+    create:
+      input:
+        from: Domain
+      output:
+        from: Domain
+      handlers: [default:create]
+    update:
+      input:
+        from: Domain
+        identifier: id
+        partial: true
+      output:
+        from: Domain
+      handlers: [default:update]
+    delete:
+      input:
+        identifier: id
+      output: void
+      handlers: [default:delete]
+  Quiz:
+    list:
+      input:
+        pagination:
+          type: offset
+          defaults:
+            limit: 20
+            maxLimit: 100
+      output:
+        from: Quiz
+        pagination: true
+      handlers: [default:list]
+    get:
+      input:
+        identifier: id
+      output:
+        from: Quiz
+      handlers: [default:get]
+    create:
+      input:
+        from: Quiz
+      output:
+        from: Quiz
+      handlers: [default:create]
+    update:
+      input:
+        from: Quiz
+        identifier: id
+        partial: true
+      output:
+        from: Quiz
+      handlers: [default:update]
+    delete:
+      input:
+        identifier: id
+      output: void
+      handlers: [default:delete]
+  Tag:
+    searchableList:
+      input:
+        searchIn: [label]
+      output:
+        from: Tag
+        pick: [id, label]
+      handlers: [default:searchableList]
+    list:
+      input:
+        pagination:
+          type: offset
+          defaults:
+            limit: 20
+            maxLimit: 100
+      output:
+        from: Tag
+        pagination: true
+      handlers: [default:list]
+    get:
+      input:
+        identifier: id
+      output:
+        from: Tag
+      handlers: [default:get]
+    create:
+      input:
+        from: Tag
+      output:
+        from: Tag
+      handlers: [default:create]
+    update:
+      input:
+        from: Tag
+        identifier: id
+        partial: true
+      output:
+        from: Tag
+      handlers: [default:update]
+    delete:
+      input:
+        identifier: id
+      output: void
+      handlers: [default:delete]
+
+api:
+  Domain:
+    prefix: /api/domain
+    endpoints:
+      - method: GET
+        path: /search
+        useCase: Domain:search
+      - method: GET
+        path: /
+        useCase: Domain:list
+      - method: GET
+        path: /:id
+        useCase: Domain:get
+      - method: POST
+        path: /
+        useCase: Domain:create
+      - method: PUT
+        path: /:id
+        useCase: Domain:update
+      - method: DELETE
+        path: /:id
+        useCase: Domain:delete
+  Quiz:
+    prefix: /api/quiz
+    endpoints:
+      - method: GET
+        path: /
+        useCase: Quiz:list
+      - method: GET
+        path: /:id
+        useCase: Quiz:get
+      - method: POST
+        path: /
+        useCase: Quiz:create
+      - method: PUT
+        path: /:id
+        useCase: Quiz:update
+      - method: DELETE
+        path: /:id
+        useCase: Quiz:delete
+  Tag:
+    prefix: /api/tag
+    endpoints:
+      - method: GET
+        path: /search
+        useCase: Tag:searchableList
+      - method: GET
+        path: /
+        useCase: Tag:list
+      - method: GET
+        path: /:id
+        useCase: Tag:get
+      - method: POST
+        path: /
+        useCase: Tag:create
+      - method: PUT
+        path: /:id
+        useCase: Tag:update
+      - method: DELETE
+        path: /:id
+        useCase: Tag:delete
+
+web:
+  Quiz:
+    prefix: /quiz
+    pages:
+      - path: /
+        useCase: Quiz:list
+        view: quizList
+      - path: /:id
+        useCase: Quiz:get
+        view: quizDetail
+      - path: /create
+        method: GET
+        view: quizCreate
+      - path: /create
+        method: POST
+        useCase: Quiz:create
+      - path: /:id/edit
+        method: GET
+        useCase: Quiz:get
+        view: quizUpdate
+      - path: /:id/edit
+        method: POST
+        useCase: Quiz:update
+
+dependencies: {}

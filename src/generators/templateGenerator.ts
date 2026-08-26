@@ -542,10 +542,40 @@ ${subFieldGroups}
   </div>`;
   }
 
+  private renderSearchableSelectField(name: string, config: any, isEdit: boolean, cls: StylingClasses): string {
+    const relates = config.relates;
+    const displayField = relates.display || 'name';
+    const entityLabel = relates.entity;
+    const rawLabel = name.replace(/Id$/, '').replace(/([A-Z])/g, ' $1').trim();
+    const label = capitalize(rawLabel);
+    const required = config.required ? 'required' : '';
+    const value = isEdit ? `{{ formData.${name} || '' }}` : '';
+
+    return `  <div class="${cls.mb3}">
+    <label class="${cls.formLabel}">${label}${config.required ? ' *' : ''}</label>
+    <div class="cjs-searchable-select"
+         data-search-url="${relates.endpoint}"
+         data-display-field="${displayField}"
+         data-name="${name}"
+         data-value="${value}">
+      <input type="text" class="${cls.formControl}"
+             placeholder="Search ${entityLabel}..." autocomplete="off">
+      <input type="hidden" name="${name}"
+             value="${value}" ${required}>
+      <div class="cjs-searchable-select-results"></div>
+    </div>
+  </div>`;
+  }
+
   private renderFormField(name: string, config: any, enumValues: string[] = [], isEdit = false, cls: StylingClasses): string {
     const required = config.required ? 'required' : '';
     const label = capitalize(name);
     const fieldType = (config.type || 'string') as string;
+
+    // Check for relates (cross-module entity reference) -- render searchable select widget
+    if (config.relates) {
+      return this.renderSearchableSelectField(name, config, isEdit, cls);
+    }
 
     const parsed = parseFieldType(fieldType);
 

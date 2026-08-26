@@ -26,6 +26,8 @@
 | WebSocket support                 | router      | later                  | L    | Router-level only for now                                                        |
 | Queue handling                    | gen         | later                  | XL   | Extend beyond api/web to support message queues (* may require a new package)    |
 | ✅ Installing modules/providers    | gen         | 0.6.4                  | M    | `current install module/provider` – installs from registry with version tracking |
+| ✅ cross-module com: commands      | gen         | 0.6.6                  | L    |                                                                                  |
+| ✅ search & searchableList         | gen         | 0.6.6                  | M    | add new default handlers & support them in the template                          |
 
 ---
 
